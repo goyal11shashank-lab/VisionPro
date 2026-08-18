@@ -1,4 +1,3 @@
-import { fileURLToPath } from 'url';
 import { pool, db } from './index.js';
 import { permissions, roles, rolePermissions } from './schema.js';
 import { eq } from 'drizzle-orm';
@@ -333,7 +332,7 @@ export async function ensureMigrationsRun(): Promise<void> {
 }
 
 // Standalone execution support via `npm run db:migrate`
-if (process.argv[1] === fileURLToPath(import.meta.url)) {
+if (typeof process !== 'undefined' && process.argv && process.argv[1] && process.argv[1].endsWith('migrate.ts')) {
   runMigrations()
     .then((res) => {
       console.log(res.message);

@@ -305,7 +305,7 @@ export async function seedInitialDatabase() {
 }
 
 // Standalone execution support via `npm run db:seed`
-if (process.argv[1] === import.meta.url) {
+if (typeof process !== 'undefined' && process.argv && process.argv[1] && process.argv[1].endsWith('seed.ts')) {
   seedInitialDatabase()
     .then((res) => {
       console.log('Seed success:', res);
