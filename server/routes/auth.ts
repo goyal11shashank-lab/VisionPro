@@ -263,9 +263,13 @@ router.post('/bootstrap-admin', async (req: Request, res: Response): Promise<voi
  * Production authentication endpoint with identifier resolution & audit logging
  */
 router.post('/login', async (req: Request, res: Response): Promise<void> => {
+  console.log('[LOGIN_DEBUG_START] Processing authentication request');
+  console.log('[LOGIN_REQUEST_RECEIVED] Body fields present:', Object.keys(req.body || {}));
+  
   try {
     const dbStatus = await checkDatabaseConnection();
     if (!dbStatus.connected) {
+      console.warn('[LOGIN_DEBUG] Database offline/unavailable during login attempt');
       res.status(503).json({
         error: 'DATABASE_UNAVAILABLE',
         message: 'Database connection unavailable. Please check the server configuration.',
@@ -277,6 +281,7 @@ router.post('/login', async (req: Request, res: Response): Promise<void> => {
 
     const parseResult = loginSchema.safeParse(req.body);
     if (!parseResult.success) {
+      console.warn('[LOGIN_DEBUG] Validation failure:', parseResult.error.issues[0]?.message);
       res.status(400).json({
         error: 'VALIDATION_ERROR',
         message: parseResult.error.issues[0]?.message || 'Invalid input',
@@ -287,6 +292,7 @@ router.post('/login', async (req: Request, res: Response): Promise<void> => {
     const { identifier, password, businessId } = parseResult.data;
 
     // 1. Find user by username, email, or mobile
+    console.log('[USER_LOOKUP_STARTED] Searching for identifier (trimmed)');
     const [userRecord] = await db
       .select()
       .from(users)
@@ -300,6 +306,7 @@ router.post('/login', async (req: Request, res: Response): Promise<void> => {
       .limit(1);
 
     if (!userRecord) {
+      console.log('[USER_NOT_FOUND] No record matched the provided identifier');
       // Record failed audit log attempt if possible
       try {
         await recordAuditLog({
@@ -312,15 +319,20 @@ router.post('/login', async (req: Request, res: Response): Promise<void> => {
         });
       } catch {}
 
+      console.log('[LOGIN_RESPONSE_SENT] HTTP 401 INVALID_CREDENTIALS');
       res.status(401).json({
+        success: false,
         error: 'INVALID_CREDENTIALS',
         message: 'Invalid username/email/mobile or password.',
       });
       return;
     }
 
+    console.log(`[USER_FOUND] User ID: ${userRecord.id}, Status: ${userRecord.status}, IsSuperAdmin: ${userRecord.isSuperAdmin}`);
+
     // 2. Verify account status
     if (userRecord.status !== 'ACTIVE') {
+      console.warn(`[LOGIN_BLOCKED] User account status is ${userRecord.status}`);
       await recordAuditLog({
         userId: userRecord.id,
         action: 'LOGIN_BLOCKED',
@@ -332,6 +344,7 @@ router.post('/login', async (req: Request, res: Response): Promise<void> => {
       });
 
       res.status(403).json({
+        success: false,
         error: 'ACCOUNT_NOT_ACTIVE',
         message: `Account is ${userRecord.status.toLowerCase()}. Please contact your system administrator.`,
       });
@@ -339,8 +352,10 @@ router.post('/login', async (req: Request, res: Response): Promise<void> => {
     }
 
     // 3. Verify password
+    console.log('[PASSWORD_VERIFICATION_STARTED] Comparing password hash');
     const isPasswordValid = await verifyPassword(password, userRecord.passwordHash);
     if (!isPasswordValid) {
+      console.log('[PASSWORD_VERIFICATION_FAILED] Password hash did not match');
       await recordAuditLog({
         userId: userRecord.id,
         action: 'LOGIN_FAILED',
@@ -351,14 +366,19 @@ router.post('/login', async (req: Request, res: Response): Promise<void> => {
         req,
       });
 
+      console.log('[LOGIN_RESPONSE_SENT] HTTP 401 INVALID_CREDENTIALS');
       res.status(401).json({
+        success: false,
         error: 'INVALID_CREDENTIALS',
         message: 'Invalid username/email/mobile or password.',
       });
       return;
     }
 
+    console.log('[PASSWORD_VERIFICATION_SUCCESS] Password authenticated successfully');
+
     // 4. Retrieve Accessible Businesses
+    console.log('[ROLE_LOOKUP_STARTED] Fetching business access and user roles');
     const accessibleBiz = await db
       .select({
         businessId: userBusinessAccess.businessId,
@@ -393,6 +413,7 @@ router.post('/login', async (req: Request, res: Response): Promise<void> => {
     await db.update(users).set({ lastLoginAt: new Date() }).where(eq(users.id, userRecord.id));
 
     // 6. Generate JWT Auth Token
+    console.log('[SESSION_CREATION_STARTED] Generating signed JWT token');
     const token = generateAuthToken({
       userId: userRecord.id,
       username: userRecord.username,
@@ -400,6 +421,7 @@ router.post('/login', async (req: Request, res: Response): Promise<void> => {
       isSuperAdmin: userRecord.isSuperAdmin,
       businessId: currentBusinessId,
     });
+    console.log('[SESSION_CREATED] Token created successfully');
 
     // 7. Record Login Audit Log
     await recordAuditLog({
@@ -439,6 +461,9 @@ router.post('/login', async (req: Request, res: Response): Promise<void> => {
       }
     }
 
+    console.log(`[ROLE_LOOKUP_SUCCESS] Roles count: ${rolesList.length}, Permissions count: ${permsList.length}`);
+    console.log('[LOGIN_RESPONSE_SENT] HTTP 200 SUCCESS - Token returned in payload');
+
     res.json({
       success: true,
       token,
@@ -472,6 +497,7 @@ router.post('/login', async (req: Request, res: Response): Promise<void> => {
   } catch (error: any) {
     console.error('[Login API Error]', error);
     res.status(500).json({
+      success: false,
       error: 'INTERNAL_SERVER_ERROR',
       message: error.message || 'An error occurred during authentication',
     });

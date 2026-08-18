@@ -69,6 +69,7 @@ export const LoginPage: React.FC = () => {
 
   const handleLoginSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
+    console.log('[LOGIN_UI_SUBMIT] User clicked login submit');
     if (!identifier || !password) {
       setError('Please provide username/email/mobile and password.');
       return;
@@ -77,8 +78,12 @@ export const LoginPage: React.FC = () => {
     setError(null);
     setIsSubmitting(true);
     try {
+      console.log('[LOGIN_API_REQUEST_SENT] Initiating POST /api/auth/login');
       await login(identifier, password);
+      console.log('[LOGIN_API_SUCCESS] Login returned successfully, user state updating');
+      console.log('[DASHBOARD_REDIRECT_STARTED] Transitioning to authenticated dashboard view');
     } catch (err: any) {
+      console.warn('[LOGIN_API_FAILURE] Login failed:', err.message, 'Status:', err.status);
       setError(err.message || 'Login failed. Please check your credentials.');
     } finally {
       setIsSubmitting(false);

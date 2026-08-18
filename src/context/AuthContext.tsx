@@ -41,8 +41,11 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       return;
     }
 
+    console.log('[SESSION_CHECK_STARTED] Found stored token in localStorage, verifying session via GET /api/auth/me');
     try {
       const data = await apiRequest('/api/auth/me');
+      console.log('[SESSION_CHECK_RESPONSE] /api/auth/me returned 200 OK');
+      console.log(`[AUTHENTICATED_USER_RECEIVED] User: ${data.user?.username}, Role count: ${data.roles?.length}`);
       setUser(data.user);
       setCurrentBusiness(data.currentBusiness);
       setAccessibleBusinesses(data.accessibleBusinesses || []);
@@ -52,7 +55,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         setStoredBusinessId(data.currentBusiness.id);
       }
     } catch (err: any) {
-      console.warn('[AuthContext] Session expired or invalid token:', err.message);
+      console.warn('[SESSION_CHECK_FAILED] Session expired or invalid token:', err.message);
       removeStoredToken();
       setUser(null);
       setCurrentBusiness(null);
@@ -68,18 +71,22 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   const login = async (identifier: string, password: string, businessId?: string) => {
     setIsLoading(true);
     try {
+      console.log('[LOGIN_API_REQUEST_SENT] Fetching /api/auth/login');
       const res = await apiRequest('/api/auth/login', {
         method: 'POST',
         body: JSON.stringify({ identifier, password, businessId }),
       });
+      console.log('[LOGIN_API_RESPONSE_RECEIVED] Status 200, Token present in payload:', !!res.token);
 
       if (res.token) {
         setStoredToken(res.token);
+        console.log('[BROWSER_AUTHENTICATION_STORED] Saved auth token in localStorage (optical_erp_token)');
       }
       if (res.currentBusiness?.id) {
         setStoredBusinessId(res.currentBusiness.id);
       }
 
+      console.log(`[AUTHENTICATED_USER_RECEIVED] User: ${res.user?.username} (${res.user?.fullName})`);
       setUser(res.user);
       setCurrentBusiness(res.currentBusiness);
       setAccessibleBusinesses(res.accessibleBusinesses || []);
