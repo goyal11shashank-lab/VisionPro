@@ -131,70 +131,81 @@ router.post('/bootstrap-admin', async (req: Request, res: Response): Promise<voi
       state,
     } = parseResult.data;
 
-    // 3. Create First Business Record
-    const [newBiz] = await db.insert(businesses).values({
-      name: businessName.trim(),
-      tradeName: tradeName?.trim() || businessName.trim(),
-      gstin: gstin?.trim().toUpperCase() || null,
-      email: email.trim().toLowerCase(),
-      phone: mobile?.trim() || null,
-      city: city?.trim() || 'Headquarters',
-      state: state?.trim() || 'Central',
-      currency: 'INR',
-      financialYearStart: '04-01',
-      status: 'ACTIVE',
-    }).returning();
-
-    // 4. Hash secure password
+    // Hash secure password
     const passwordHash = await hashPassword(password);
 
-    // 5. Insert initial Super Admin into users table
-    const [superAdminUser] = await db.insert(users).values({
-      username: username.trim().toLowerCase(),
-      email: email.trim().toLowerCase(),
-      mobile: mobile?.trim() || null,
-      fullName: fullName.trim(),
-      passwordHash,
-      status: 'ACTIVE',
-      isSuperAdmin: true,
-      lastLoginAt: new Date(),
-    }).returning();
+    // Execute atomic transaction for all bootstrap steps (Business, User, Access, Role, Audit)
+    const result = await db.transaction(async (tx) => {
+      // 1. Create First Business Record
+      const [newBiz] = await tx.insert(businesses).values({
+        name: businessName.trim(),
+        tradeName: tradeName?.trim() || businessName.trim(),
+        gstin: gstin?.trim().toUpperCase() || null,
+        email: email.trim().toLowerCase(),
+        phone: mobile?.trim() || null,
+        city: city?.trim() || 'Headquarters',
+        state: state?.trim() || 'Central',
+        currency: 'INR',
+        financialYearStart: '04-01',
+        status: 'ACTIVE',
+      }).returning();
 
-    // 6. Grant Super Admin default access to the initial business
-    await db.insert(userBusinessAccess).values({
-      userId: superAdminUser.id,
-      businessId: newBiz.id,
-      isDefault: true,
-    });
+      // 2. Insert initial Super Admin into users table
+      const [superAdminUser] = await tx.insert(users).values({
+        username: username.trim().toLowerCase(),
+        email: email.trim().toLowerCase(),
+        mobile: mobile?.trim() || null,
+        fullName: fullName.trim(),
+        passwordHash,
+        status: 'ACTIVE',
+        isSuperAdmin: true,
+        lastLoginAt: new Date(),
+      }).returning();
 
-    // 7. Find or assign SUPER_ADMIN system role
-    const [superAdminRole] = await db.select().from(roles).where(eq(roles.code, 'SUPER_ADMIN')).limit(1);
-    if (superAdminRole) {
-      await db.insert(userRoles).values({
+      // 3. Grant Super Admin default access to the initial business
+      await tx.insert(userBusinessAccess).values({
         userId: superAdminUser.id,
         businessId: newBiz.id,
-        roleId: superAdminRole.id,
+        isDefault: true,
       });
-    }
 
-    // 8. Record audit log of system bootstrap
-    await db.insert(auditLogs).values({
-      businessId: newBiz.id,
-      userId: superAdminUser.id,
-      action: 'INITIAL_BOOTSTRAP_SUPER_ADMIN',
-      module: 'AUTH',
-      entityType: 'SystemBootstrap',
-      entityId: superAdminUser.id,
-      newValue: {
-        username: superAdminUser.username,
-        email: superAdminUser.email,
-        businessName: newBiz.name,
-      },
-      ipAddress: req.ip,
-      userAgent: req.headers['user-agent'] || undefined,
+      // 4. Find or assign SUPER_ADMIN system role
+      const [superAdminRole] = await tx.select().from(roles).where(eq(roles.code, 'SUPER_ADMIN')).limit(1);
+      if (superAdminRole) {
+        await tx.insert(userRoles).values({
+          userId: superAdminUser.id,
+          businessId: newBiz.id,
+          roleId: superAdminRole.id,
+        });
+      }
+
+      // 5. Record audit log of system bootstrap
+      await tx.insert(auditLogs).values({
+        businessId: newBiz.id,
+        userId: superAdminUser.id,
+        action: 'SUPER_ADMIN_CREATED',
+        module: 'AUTH',
+        entityType: 'SystemBootstrap',
+        entityId: superAdminUser.id,
+        newValue: {
+          username: superAdminUser.username,
+          email: superAdminUser.email,
+          businessName: newBiz.name,
+        },
+        ipAddress: req.ip,
+        userAgent: req.headers['user-agent'] || undefined,
+      });
+
+      return {
+        newBiz,
+        superAdminUser,
+        superAdminRole,
+      };
     });
 
-    // 9. Generate JWT Auth Token
+    const { newBiz, superAdminUser, superAdminRole } = result;
+
+    // Generate JWT Auth Token
     const token = generateAuthToken({
       userId: superAdminUser.id,
       username: superAdminUser.username,
@@ -203,7 +214,7 @@ router.post('/bootstrap-admin', async (req: Request, res: Response): Promise<voi
       businessId: newBiz.id,
     });
 
-    // 10. Fetch all permissions for Super Admin
+    // Fetch all permissions for Super Admin
     const allPerms = await db.select().from(permissions);
     const permsList = allPerms.map(p => p.code);
 
