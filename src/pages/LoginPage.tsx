@@ -11,6 +11,7 @@ export const LoginPage: React.FC = () => {
   const [needsBootstrap, setNeedsBootstrap] = useState<boolean>(false);
   const [databaseConnected, setDatabaseConnected] = useState<boolean>(true);
   const [dbErrorMessage, setDbErrorMessage] = useState<string | null>(null);
+  const [dbTip, setDbTip] = useState<string | null>(null);
 
   // Standard Login State
   const [identifier, setIdentifier] = useState<string>('');
@@ -44,16 +45,19 @@ export const LoginPage: React.FC = () => {
   const checkBootstrapStatus = async () => {
     setIsCheckingBootstrap(true);
     setDbErrorMessage(null);
+    setDbTip(null);
     try {
       const data = await apiRequest('/api/auth/bootstrap-status');
       setDatabaseConnected(data.databaseConnected);
       setNeedsBootstrap(data.needsBootstrap);
       if (!data.databaseConnected) {
         setDbErrorMessage(data.error || 'Database connection unavailable. Please check the server configuration.');
+        setDbTip(data.tip || null);
       }
     } catch (err: any) {
       setDatabaseConnected(false);
       setDbErrorMessage('Database connection unavailable. Please check the server configuration.');
+      setDbTip('Verify NETLIFY_DB_URL or DATABASE_URL in your Netlify site settings.');
     } finally {
       setIsCheckingBootstrap(false);
     }
@@ -144,11 +148,16 @@ export const LoginPage: React.FC = () => {
           <div className="p-4 rounded-2xl bg-red-950/80 border border-red-800 text-red-200 text-sm shadow-xl space-y-3">
             <div className="flex items-start gap-3">
               <AlertCircle className="w-5 h-5 text-red-400 shrink-0 mt-0.5" />
-              <div className="space-y-1">
+              <div className="space-y-1.5 flex-1">
                 <h4 className="font-semibold text-white">Database Connection Notice</h4>
-                <p className="text-xs text-red-300">
+                <p className="text-xs text-red-300 leading-relaxed">
                   {dbErrorMessage || 'Database connection unavailable. Please check the server configuration.'}
                 </p>
+                {dbTip && (
+                  <div className="mt-2 p-2.5 rounded-lg bg-red-900/50 border border-red-800/60 text-[11px] text-red-200 font-mono">
+                    💡 Tip: {dbTip}
+                  </div>
+                )}
               </div>
             </div>
             <div className="pt-1 flex justify-end">
@@ -156,7 +165,7 @@ export const LoginPage: React.FC = () => {
                 type="button"
                 onClick={checkBootstrapStatus}
                 disabled={isCheckingBootstrap}
-                className="px-3 py-1.5 rounded-lg bg-red-900 hover:bg-red-800 text-xs font-medium text-white transition-colors flex items-center gap-1.5"
+                className="px-3.5 py-1.5 rounded-lg bg-red-900 hover:bg-red-800 text-xs font-medium text-white transition-colors flex items-center gap-1.5 shadow-xs"
               >
                 <RefreshCw className={`w-3.5 h-3.5 ${isCheckingBootstrap ? 'animate-spin' : ''}`} />
                 <span>Retry Connection</span>

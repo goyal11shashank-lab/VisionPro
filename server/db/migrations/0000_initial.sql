@@ -32,7 +32,7 @@ CREATE TABLE IF NOT EXISTS "users" (
   "username" VARCHAR(100) NOT NULL UNIQUE,
   "email" VARCHAR(255) UNIQUE,
   "mobile" VARCHAR(20) UNIQUE,
-  "fullName" VARCHAR(255) NOT NULL,
+  "full_name" VARCHAR(255) NOT NULL,
   "password_hash" TEXT NOT NULL,
   "status" VARCHAR(20) NOT NULL DEFAULT 'ACTIVE',
   "is_super_admin" BOOLEAN NOT NULL DEFAULT FALSE,

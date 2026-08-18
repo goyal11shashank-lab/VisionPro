@@ -42,7 +42,8 @@ router.get('/bootstrap-status', async (req: Request, res: Response): Promise<voi
         needsBootstrap: false,
         databaseConnected: false,
         provider: dbStatus.provider,
-        error: 'Database connection unavailable. Please check the server configuration.',
+        error: dbStatus.error || 'Database connection unavailable. Please check the server configuration.',
+        tip: dbStatus.tip,
       });
       return;
     }
@@ -68,7 +69,8 @@ router.get('/bootstrap-status', async (req: Request, res: Response): Promise<voi
     res.status(200).json({
       needsBootstrap: false,
       databaseConnected: false,
-      error: 'Database connection unavailable. Please check the server configuration.',
+      error: error?.message || 'Database initialization error. Please verify PostgreSQL connection.',
+      tip: 'Check server logs for database migration details.',
     });
   }
 });

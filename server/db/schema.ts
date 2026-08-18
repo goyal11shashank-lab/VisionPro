@@ -39,7 +39,7 @@ export const users = pgTable('users', {
   username: varchar('username', { length: 100 }).notNull().unique(),
   email: varchar('email', { length: 255 }).unique(),
   mobile: varchar('mobile', { length: 20 }).unique(),
-  fullName: varchar('fullName', { length: 255 }).notNull(),
+  fullName: varchar('full_name', { length: 255 }).notNull(),
   passwordHash: text('password_hash').notNull(),
   status: varchar('status', { length: 20 }).default('ACTIVE').notNull(), // ACTIVE, INACTIVE, LOCKED
   isSuperAdmin: boolean('is_super_admin').default(false).notNull(),
