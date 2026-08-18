@@ -1,10 +1,11 @@
 import { Router, Request, Response } from 'express';
-import { db } from '../db/index.js';
-import { users, userBusinessAccess, businesses, userRoles, roles, rolePermissions, permissions } from '../db/schema.js';
+import { db, checkDatabaseConnection } from '../db/index.js';
+import { users, userBusinessAccess, businesses, userRoles, roles, rolePermissions, permissions, auditLogs } from '../db/schema.js';
 import { verifyPassword, hashPassword } from '../auth/password.js';
 import { generateAuthToken } from '../auth/jwt.js';
 import { authenticateToken } from '../middleware/auth.js';
 import { recordAuditLog } from '../services/auditService.js';
+import { ensureMigrationsRun } from '../db/migrate.js';
 import { eq, or, and } from 'drizzle-orm';
 import { z } from 'zod';
 
@@ -16,12 +17,251 @@ const loginSchema = z.object({
   businessId: z.string().optional(),
 });
 
+const bootstrapSchema = z.object({
+  fullName: z.string().min(2, 'Full Name is required'),
+  username: z.string().min(3, 'Username must be at least 3 characters'),
+  email: z.string().email('Valid email is required'),
+  mobile: z.string().optional(),
+  password: z.string().min(8, 'Password must be at least 8 characters long'),
+  businessName: z.string().min(2, 'Initial Business Name is required'),
+  tradeName: z.string().optional(),
+  gstin: z.string().optional(),
+  city: z.string().optional(),
+  state: z.string().optional(),
+});
+
+/**
+ * GET /api/auth/bootstrap-status
+ * Inspects whether the system requires initial Super Admin setup.
+ */
+router.get('/bootstrap-status', async (req: Request, res: Response): Promise<void> => {
+  try {
+    const dbStatus = await checkDatabaseConnection();
+    if (!dbStatus.connected) {
+      res.status(200).json({
+        needsBootstrap: false,
+        databaseConnected: false,
+        provider: dbStatus.provider,
+        error: 'Database connection unavailable. Please check the server configuration.',
+      });
+      return;
+    }
+
+    await ensureMigrationsRun();
+
+    // Check if any Super Admin exists in the database
+    const superAdmins = await db
+      .select({ id: users.id })
+      .from(users)
+      .where(eq(users.isSuperAdmin, true))
+      .limit(1);
+
+    const hasSuperAdmin = superAdmins.length > 0;
+
+    res.json({
+      needsBootstrap: !hasSuperAdmin,
+      databaseConnected: true,
+      provider: dbStatus.provider,
+    });
+  } catch (error: any) {
+    console.error('[Bootstrap Status Error]', error);
+    res.status(200).json({
+      needsBootstrap: false,
+      databaseConnected: false,
+      error: 'Database connection unavailable. Please check the server configuration.',
+    });
+  }
+});
+
+/**
+ * POST /api/auth/bootstrap-admin
+ * Secure First-Admin Bootstrap Mechanism.
+ * Strictly allowed only when ZERO Super Admins exist in PostgreSQL database.
+ */
+router.post('/bootstrap-admin', async (req: Request, res: Response): Promise<void> => {
+  try {
+    const dbStatus = await checkDatabaseConnection();
+    if (!dbStatus.connected) {
+      res.status(503).json({
+        error: 'DATABASE_UNAVAILABLE',
+        message: 'Database connection unavailable. Please check the server configuration.',
+      });
+      return;
+    }
+
+    await ensureMigrationsRun();
+
+    // 1. Guard: Check if a Super Admin already exists
+    const existingSuperAdmins = await db
+      .select({ id: users.id })
+      .from(users)
+      .where(eq(users.isSuperAdmin, true))
+      .limit(1);
+
+    if (existingSuperAdmins.length > 0) {
+      res.status(403).json({
+        error: 'BOOTSTRAP_ALREADY_COMPLETED',
+        message: 'System bootstrap has already been completed. A Super Admin already exists.',
+      });
+      return;
+    }
+
+    // 2. Validate input payload
+    const parseResult = bootstrapSchema.safeParse(req.body);
+    if (!parseResult.success) {
+      res.status(400).json({
+        error: 'VALIDATION_ERROR',
+        message: parseResult.error.issues[0]?.message || 'Invalid setup data',
+      });
+      return;
+    }
+
+    const {
+      fullName,
+      username,
+      email,
+      mobile,
+      password,
+      businessName,
+      tradeName,
+      gstin,
+      city,
+      state,
+    } = parseResult.data;
+
+    // 3. Create First Business Record
+    const [newBiz] = await db.insert(businesses).values({
+      name: businessName.trim(),
+      tradeName: tradeName?.trim() || businessName.trim(),
+      gstin: gstin?.trim().toUpperCase() || null,
+      email: email.trim().toLowerCase(),
+      phone: mobile?.trim() || null,
+      city: city?.trim() || 'Headquarters',
+      state: state?.trim() || 'Central',
+      currency: 'INR',
+      financialYearStart: '04-01',
+      status: 'ACTIVE',
+    }).returning();
+
+    // 4. Hash secure password
+    const passwordHash = await hashPassword(password);
+
+    // 5. Insert initial Super Admin into users table
+    const [superAdminUser] = await db.insert(users).values({
+      username: username.trim().toLowerCase(),
+      email: email.trim().toLowerCase(),
+      mobile: mobile?.trim() || null,
+      fullName: fullName.trim(),
+      passwordHash,
+      status: 'ACTIVE',
+      isSuperAdmin: true,
+      lastLoginAt: new Date(),
+    }).returning();
+
+    // 6. Grant Super Admin default access to the initial business
+    await db.insert(userBusinessAccess).values({
+      userId: superAdminUser.id,
+      businessId: newBiz.id,
+      isDefault: true,
+    });
+
+    // 7. Find or assign SUPER_ADMIN system role
+    const [superAdminRole] = await db.select().from(roles).where(eq(roles.code, 'SUPER_ADMIN')).limit(1);
+    if (superAdminRole) {
+      await db.insert(userRoles).values({
+        userId: superAdminUser.id,
+        businessId: newBiz.id,
+        roleId: superAdminRole.id,
+      });
+    }
+
+    // 8. Record audit log of system bootstrap
+    await db.insert(auditLogs).values({
+      businessId: newBiz.id,
+      userId: superAdminUser.id,
+      action: 'INITIAL_BOOTSTRAP_SUPER_ADMIN',
+      module: 'AUTH',
+      entityType: 'SystemBootstrap',
+      entityId: superAdminUser.id,
+      newValue: {
+        username: superAdminUser.username,
+        email: superAdminUser.email,
+        businessName: newBiz.name,
+      },
+      ipAddress: req.ip,
+      userAgent: req.headers['user-agent'] || undefined,
+    });
+
+    // 9. Generate JWT Auth Token
+    const token = generateAuthToken({
+      userId: superAdminUser.id,
+      username: superAdminUser.username,
+      email: superAdminUser.email,
+      isSuperAdmin: true,
+      businessId: newBiz.id,
+    });
+
+    // 10. Fetch all permissions for Super Admin
+    const allPerms = await db.select().from(permissions);
+    const permsList = allPerms.map(p => p.code);
+
+    res.json({
+      success: true,
+      message: 'Super Administrator bootstrapped successfully.',
+      token,
+      user: {
+        id: superAdminUser.id,
+        username: superAdminUser.username,
+        email: superAdminUser.email,
+        mobile: superAdminUser.mobile,
+        fullName: superAdminUser.fullName,
+        isSuperAdmin: true,
+        status: superAdminUser.status,
+      },
+      currentBusiness: {
+        id: newBiz.id,
+        name: newBiz.name,
+        tradeName: newBiz.tradeName,
+        gstin: newBiz.gstin,
+        currency: newBiz.currency,
+        status: newBiz.status,
+      },
+      accessibleBusinesses: [{
+        id: newBiz.id,
+        name: newBiz.name,
+        tradeName: newBiz.tradeName,
+        gstin: newBiz.gstin,
+        isDefault: true,
+      }],
+      roles: superAdminRole ? [{ id: superAdminRole.id, name: superAdminRole.name, code: superAdminRole.code }] : [],
+      permissions: permsList,
+    });
+  } catch (error: any) {
+    console.error('[Bootstrap Admin Error]', error);
+    res.status(500).json({
+      error: 'BOOTSTRAP_FAILED',
+      message: error.message || 'Database connection unavailable. Please check the server configuration.',
+    });
+  }
+});
+
 /**
  * POST /api/auth/login
  * Production authentication endpoint with identifier resolution & audit logging
  */
 router.post('/login', async (req: Request, res: Response): Promise<void> => {
   try {
+    const dbStatus = await checkDatabaseConnection();
+    if (!dbStatus.connected) {
+      res.status(503).json({
+        error: 'DATABASE_UNAVAILABLE',
+        message: 'Database connection unavailable. Please check the server configuration.',
+      });
+      return;
+    }
+
+    await ensureMigrationsRun();
+
     const parseResult = loginSchema.safeParse(req.body);
     if (!parseResult.success) {
       res.status(400).json({
@@ -39,23 +279,25 @@ router.post('/login', async (req: Request, res: Response): Promise<void> => {
       .from(users)
       .where(
         or(
-          eq(users.username, identifier),
-          eq(users.email, identifier),
-          eq(users.mobile, identifier)
+          eq(users.username, identifier.trim().toLowerCase()),
+          eq(users.email, identifier.trim().toLowerCase()),
+          eq(users.mobile, identifier.trim())
         )
       )
       .limit(1);
 
     if (!userRecord) {
-      // Record failed audit log attempt
-      await recordAuditLog({
-        action: 'LOGIN_FAILED',
-        module: 'AUTH',
-        entityType: 'User',
-        entityId: identifier,
-        newValue: { reason: 'User not found' },
-        req,
-      });
+      // Record failed audit log attempt if possible
+      try {
+        await recordAuditLog({
+          action: 'LOGIN_FAILED',
+          module: 'AUTH',
+          entityType: 'User',
+          entityId: identifier,
+          newValue: { reason: 'User not found' },
+          req,
+        });
+      } catch {}
 
       res.status(401).json({
         error: 'INVALID_CREDENTIALS',

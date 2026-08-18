@@ -11,6 +11,7 @@ interface AuthContextType {
   isAuthenticated: boolean;
   isLoading: boolean;
   login: (identifier: string, password: string, businessId?: string) => Promise<void>;
+  bootstrapAdmin: (data: any) => Promise<void>;
   logout: () => Promise<void>;
   switchBusiness: (businessId: string) => Promise<void>;
   refreshUser: () => Promise<void>;
@@ -89,6 +90,31 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     }
   };
 
+  const bootstrapAdmin = async (data: any) => {
+    setIsLoading(true);
+    try {
+      const res = await apiRequest('/api/auth/bootstrap-admin', {
+        method: 'POST',
+        body: JSON.stringify(data),
+      });
+
+      if (res.token) {
+        setStoredToken(res.token);
+      }
+      if (res.currentBusiness?.id) {
+        setStoredBusinessId(res.currentBusiness.id);
+      }
+
+      setUser(res.user);
+      setCurrentBusiness(res.currentBusiness);
+      setAccessibleBusinesses(res.accessibleBusinesses || []);
+      setRoles(res.roles || []);
+      setPermissions(res.permissions || []);
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
   const logout = async () => {
     try {
       await apiRequest('/api/auth/logout', { method: 'POST' });
@@ -143,6 +169,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     isAuthenticated: !!user,
     isLoading,
     login,
+    bootstrapAdmin,
     logout,
     switchBusiness,
     refreshUser: fetchCurrentUser,

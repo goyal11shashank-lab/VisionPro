@@ -34,7 +34,7 @@ router.get('/', async (req: Request, res: Response): Promise<void> => {
     version: '1.0.0',
     timestamp: new Date().toISOString(),
     database: {
-      provider: 'PostgreSQL',
+      provider: dbStatus.provider || 'Netlify Database (PostgreSQL)',
       connected: dbStatus.connected,
       version: dbStatus.version,
       error: dbStatus.error,

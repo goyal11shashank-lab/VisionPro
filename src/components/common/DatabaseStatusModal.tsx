@@ -87,12 +87,12 @@ export const DatabaseStatusModal: React.FC<Props> = ({ isOpen, onClose }) => {
                   )}
                   <div>
                     <h4 className="font-semibold text-sm">
-                      {health.database.connected ? 'PostgreSQL Active & Synced' : 'Database Connection Pending'}
+                      {health.database.connected ? 'Netlify Database Active & Synced' : 'Database Connection Pending'}
                     </h4>
                     <p className="text-xs opacity-80 mt-0.5">
                       {health.database.connected
                         ? `Connected with ${health.database.tablesCount} verified relational tables in PostgreSQL.`
-                        : health.database.error || 'Please configure DATABASE_URL in environment settings.'}
+                        : health.database.error || 'Database connection unavailable. Please check the server configuration.'}
                     </p>
                   </div>
                 </div>

@@ -277,7 +277,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
             </div>
             <div className="flex items-center justify-between">
               <span className="text-white/40">Database</span>
-              <span className="text-slate-300">PostgreSQL</span>
+              <span className="text-slate-300">Netlify Database</span>
             </div>
           </div>
 
