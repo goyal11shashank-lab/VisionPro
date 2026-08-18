@@ -1,0 +1,6 @@
+{
+  "name": "Optical Billing & Accounting System",
+  "description": "Production-ready web-based Optical Billing, Inventory and Accounting Management System with multi-business architecture, PostgreSQL Drizzle ORM, role-based access control, and audit logs.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
