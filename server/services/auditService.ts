@@ -14,6 +14,29 @@ export interface RecordAuditParams {
   req?: Request;
 }
 
+function sanitizeAuditData(data: any): any {
+  if (!data) return data;
+  if (typeof data !== 'object') return data;
+  
+  if (Array.isArray(data)) {
+    return data.map(item => sanitizeAuditData(item));
+  }
+  
+  const sanitized: Record<string, any> = {};
+  const sensitiveKeys = ['password', 'passwordhash', 'password_hash', 'token', 'secret', 'jwt', 'auth', 'authorization', 'accesstoken', 'refreshtoken'];
+  
+  for (const [key, value] of Object.entries(data)) {
+    if (sensitiveKeys.some(s => key.toLowerCase().includes(s))) {
+      sanitized[key] = '[REDACTED]';
+    } else if (typeof value === 'object' && value !== null) {
+      sanitized[key] = sanitizeAuditData(value);
+    } else {
+      sanitized[key] = value;
+    }
+  }
+  return sanitized;
+}
+
 export async function recordAuditLog(params: RecordAuditParams) {
   try {
     let ipAddress: string | undefined;
@@ -25,6 +48,9 @@ export async function recordAuditLog(params: RecordAuditParams) {
       userAgent = params.req.headers['user-agent'];
     }
 
+    const cleanPrevious = sanitizeAuditData(params.previousValue);
+    const cleanNew = sanitizeAuditData(params.newValue);
+
     const [log] = await db.insert(auditLogs).values({
       businessId: params.businessId || null,
       userId: params.userId || null,
@@ -32,8 +58,8 @@ export async function recordAuditLog(params: RecordAuditParams) {
       module: params.module,
       entityType: params.entityType,
       entityId: params.entityId || null,
-      previousValue: params.previousValue ? JSON.stringify(params.previousValue) : null,
-      newValue: params.newValue ? JSON.stringify(params.newValue) : null,
+      previousValue: cleanPrevious ? JSON.stringify(cleanPrevious) : null,
+      newValue: cleanNew ? JSON.stringify(cleanNew) : null,
       ipAddress: ipAddress || null,
       userAgent: userAgent || null,
     }).returning();
@@ -43,5 +69,11 @@ export async function recordAuditLog(params: RecordAuditParams) {
     console.error('[Audit Service Error] Failed to write audit log:', error);
     // Audit logging should not crash the main transaction if DB allows, but we log the error
     return null;
+  }
+}
+
+export class AuditService {
+  static async log(params: RecordAuditParams) {
+    return recordAuditLog(params);
   }
 }

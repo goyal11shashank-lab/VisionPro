@@ -6,6 +6,17 @@ import roleRoutes from './routes/roles.js';
 import auditRoutes from './routes/audit.js';
 import dashboardRoutes from './routes/dashboard.js';
 import healthRoutes from './routes/health.js';
+import opticalMasterRoutes from './routes/opticalMaster.js';
+import partyRoutes from './routes/parties.js';
+import purchaseRoutes from './routes/purchases.js';
+import inventoryRoutes from './routes/inventory.js';
+import salesRoutes from './routes/sales.js';
+import salesReturnRoutes from './routes/salesReturns.js';
+import purchaseReturnRoutes from './routes/purchaseReturns.js';
+import paymentRoutes from './routes/payments.js';
+import importExportRoutes from './routes/importExport.js';
+import searchRoutes from './routes/search.js';
+import reportRoutes from './routes/reports.js';
 
 export function createExpressApp() {
   const app = express();
@@ -34,6 +45,18 @@ export function createExpressApp() {
   app.use('/api/audit-logs', auditRoutes);
   app.use('/api/dashboard', dashboardRoutes);
   app.use('/api/health', healthRoutes);
+  app.use('/api/optical-master', opticalMasterRoutes);
+  app.use('/api/parties', partyRoutes);
+  app.use('/api/purchases/returns', purchaseReturnRoutes);
+  app.use('/api/purchases', purchaseRoutes);
+  app.use('/api/inventory', inventoryRoutes);
+  app.use('/api/sales/returns', salesReturnRoutes);
+  app.use('/api/sales', salesRoutes);
+  app.use('/api/payments', paymentRoutes);
+  app.use('/api/imports', importExportRoutes);
+  app.use('/api/exports', importExportRoutes);
+  app.use('/api/search', searchRoutes);
+  app.use('/api/reports', reportRoutes);
 
   // Global Error Handler
   app.use((err: any, req: Request, res: Response, next: NextFunction) => {

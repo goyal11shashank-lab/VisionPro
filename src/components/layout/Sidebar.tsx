@@ -64,12 +64,13 @@ export const Sidebar: React.FC<SidebarProps> = ({
   const { user, currentBusiness, logout, hasPermission } = useAuth();
 
   const [openSections, setOpenSections] = useState<Record<string, boolean>>({
-    Sales: true,
+    'Master Data': true,
+    Sales: false,
     Purchase: false,
     Inventory: false,
     Parties: false,
     Accounts: false,
-    Administration: true,
+    Administration: false,
   });
 
   const toggleSection = (section: string) => {
@@ -78,55 +79,76 @@ export const Sidebar: React.FC<SidebarProps> = ({
 
   const sections: NavSection[] = [
     {
+      title: 'Master Data',
+      icon: Layers,
+      items: [
+        { id: 'master-categories', label: 'Categories', icon: Layers, path: '/master/categories', permission: 'master:view' },
+        { id: 'master-bases', label: 'Bases & Compatibility', icon: Boxes, path: '/master/bases', permission: 'master:view' },
+        { id: 'master-coatings', label: 'Coatings', icon: Sparkles, path: '/master/coatings', permission: 'master:view' },
+        { id: 'master-primary-items', label: 'Primary Items', icon: BookOpen, path: '/master/primary-items', permission: 'master:view' },
+        { id: 'master-unique-items', label: 'Unique Items', icon: QrCode, path: '/master/unique-items', permission: 'master:view' },
+        { id: 'master-batches', label: 'Optical Batches & Powers', icon: Barcode, path: '/master/batches', permission: 'master:view' },
+      ],
+    },
+    {
       title: 'Sales',
       icon: ShoppingCart,
       items: [
-        { id: 'sales-orders', label: 'Sales Orders', icon: ShoppingCart, path: '/sales/orders', isUpcoming: true },
-        { id: 'sales-invoices', label: 'Sales Invoices', icon: Receipt, path: '/sales/invoices', isUpcoming: true },
-        { id: 'sales-returns', label: 'Sales Returns', icon: RotateCcw, path: '/sales/returns', isUpcoming: true },
+        { id: 'sales-orders', label: 'Sales Orders', icon: ShoppingCart, path: '/sales/orders', permission: 'sales:view' },
+        { id: 'sales-invoices', label: 'Sales Invoices', icon: Receipt, path: '/sales/invoices', permission: 'sales:view' },
+        { id: 'sales-returns', label: 'Sales Returns', icon: RotateCcw, path: '/sales/returns', permission: 'sales:view' },
+        { id: 'sales-ledger', label: 'Customer Ledger', icon: BookOpen, path: '/sales/customer-ledger', permission: 'sales:view' },
       ],
     },
     {
       title: 'Purchase',
       icon: Truck,
       items: [
-        { id: 'purchase-invoices', label: 'Purchase Invoices', icon: FileSpreadsheet, path: '/purchase/invoices', isUpcoming: true },
-        { id: 'purchase-returns', label: 'Purchase Returns', icon: RotateCcw, path: '/purchase/returns', isUpcoming: true },
+        { id: 'purchase-invoices', label: 'Purchase Invoices', icon: FileSpreadsheet, path: '/purchase/invoices', permission: 'purchase:view' },
+        { id: 'purchase-returns', label: 'Purchase Returns', icon: RotateCcw, path: '/purchase/returns', permission: 'purchase:view' },
+        { id: 'purchase-lots', label: 'Purchase Lots & Costing', icon: Layers, path: '/purchase/lots', permission: 'purchase:view' },
       ],
     },
     {
       title: 'Inventory',
       icon: Boxes,
       items: [
-        { id: 'inventory-stock', label: 'Stock Register', icon: Boxes, path: '/inventory/stock', isUpcoming: true },
-        { id: 'inventory-batches', label: 'Optical Batches', icon: Layers, path: '/inventory/batches', isUpcoming: true },
-        { id: 'inventory-barcode', label: 'Barcode Management', icon: QrCode, path: '/inventory/barcode', isUpcoming: true },
-        { id: 'inventory-adjust', label: 'Stock Adjustment', icon: SlidersHorizontal, path: '/inventory/adjustment', isUpcoming: true },
+        { id: 'inventory-stock', label: 'Inventory Stock Matrix', icon: Boxes, path: '/reports/inventory', permission: 'inventory:view' },
+        { id: 'inventory-stock-ledger', label: 'Stock Movement Ledger', icon: Layers, path: '/reports/stock-ledger', permission: 'inventory:view' },
+        { id: 'inventory-batches', label: 'Optical Batches & Barcodes', icon: Barcode, path: '/master/batches', permission: 'master:view' },
       ],
     },
     {
       title: 'Parties',
       icon: Users,
       items: [
-        { id: 'parties-customers', label: 'Customers & Rx', icon: Users, path: '/parties/customers', isUpcoming: true },
-        { id: 'parties-suppliers', label: 'Suppliers', icon: Building2, path: '/parties/suppliers', isUpcoming: true },
-        { id: 'parties-ledger', label: 'Party Ledger', icon: BookOpen, path: '/parties/ledger', isUpcoming: true },
+        { id: 'parties-all', label: 'Party Master', icon: Users, path: '/parties', permission: 'parties:view' },
+        { id: 'parties-suppliers', label: 'Suppliers', icon: Building2, path: '/parties/suppliers', permission: 'parties:view' },
+        { id: 'parties-customers', label: 'Customers', icon: Users, path: '/parties/customers', permission: 'parties:view' },
+        { id: 'parties-ledger', label: 'Supplier Ledger', icon: BookOpen, path: '/parties/ledger', permission: 'parties:view' },
       ],
     },
     {
       title: 'Accounts',
       icon: CreditCard,
       items: [
-        { id: 'accounts-receipts', label: 'Receipts', icon: ArrowDownLeft, path: '/accounts/receipts', isUpcoming: true },
-        { id: 'accounts-payments', label: 'Payments', icon: ArrowUpRight, path: '/accounts/payments', isUpcoming: true },
-        { id: 'accounts-outstanding', label: 'Outstanding Aging', icon: Clock, path: '/accounts/outstanding', isUpcoming: true },
+        { id: 'accounts-receipts', label: 'Receipts', icon: ArrowDownLeft, path: '/accounts/receipts', permission: 'payment.receipt.view' },
+        { id: 'accounts-payments', label: 'Payments', icon: ArrowUpRight, path: '/accounts/payments', permission: 'payment.supplier.view' },
+        { id: 'accounts-outstanding', label: 'Outstanding Aging', icon: Clock, path: '/accounts/outstanding', permission: 'accounts:view' },
       ],
     },
     {
-      title: 'Reports',
+      title: 'Reports & Analytics',
       icon: BarChart3,
       items: [
-        { id: 'reports-center', label: 'Reports & Analytics', icon: BarChart3, path: '/reports', isUpcoming: true },
+        { id: 'reports-inventory', label: 'Stock Matrix Report', icon: Boxes, path: '/reports/inventory', permission: 'reports:view' },
+        { id: 'reports-stock-ledger', label: 'Stock Ledger Register', icon: Layers, path: '/reports/stock-ledger', permission: 'reports:view' },
+        { id: 'reports-sales', label: 'Sales Register & Returns', icon: Receipt, path: '/reports/sales', permission: 'reports:view' },
+        { id: 'reports-purchases', label: 'Purchase Register & Returns', icon: Truck, path: '/reports/purchases', permission: 'reports:view' },
+        { id: 'reports-outstanding', label: 'Outstanding Aging Report', icon: Clock, path: '/reports/outstanding', permission: 'reports:view' },
+        { id: 'reports-party-statement', label: 'Party Statement (Ledger)', icon: BookOpen, path: '/reports/party-statement', permission: 'reports:view' },
+        { id: 'reports-payments', label: 'Payment & Receipt Register', icon: CreditCard, path: '/reports/payments', permission: 'reports:view' },
+        { id: 'reports-analytics', label: 'Product & Power Analytics', icon: BarChart3, path: '/reports/analytics', permission: 'reports:view' },
       ],
     },
     {

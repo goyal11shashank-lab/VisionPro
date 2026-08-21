@@ -10,6 +10,11 @@
     "db:generate": "drizzle-kit generate",
     "db:migrate": "tsx server/db/migrate.ts",
     "db:seed": "tsx server/db/seed.ts",
+    "test:phase3": "tsx server/tests/phase3StockOperations.test.ts",
+    "test:phase4": "tsx server/tests/phase4SalesEngine.test.ts",
+    "test:phase5": "tsx server/tests/phase5ReturnsEngine.test.ts",
+    "test:phase7": "tsx server/tests/phase7ImportExport.test.ts",
+    "test:phase10": "tsx server/tests/phase10ProductionAcceptance.test.ts",
     "preview": "vite preview",
     "clean": "rm -rf dist server.js",
     "lint": "tsc --noEmit"
@@ -20,6 +25,7 @@
     "@tailwindcss/vite": "^4.1.14",
     "@types/bcryptjs": "^3.0.0",
     "@types/jsonwebtoken": "^9.0.10",
+    "@types/multer": "^2.2.0",
     "@types/pg": "^8.23.1",
     "@vitejs/plugin-react": "^5.0.4",
     "bcryptjs": "^3.0.3",
@@ -30,11 +36,13 @@
     "jsonwebtoken": "^9.0.3",
     "lucide-react": "^0.546.0",
     "motion": "^12.23.24",
+    "multer": "^2.2.0",
     "pg": "^8.23.0",
     "react": "^19.0.1",
     "react-dom": "^19.0.1",
     "serverless-http": "^4.0.0",
     "vite": "^6.2.3",
+    "xlsx": "^0.18.5",
     "zod": "^4.4.3"
   },
   "devDependencies": {

@@ -1,5 +1,5 @@
 import { Router, Request, Response } from 'express';
-import { db, checkDatabaseConnection } from '../db/index.js';
+import { db, pool, checkDatabaseConnection, resolveDatabaseConfig } from '../db/index.js';
 import { users, userBusinessAccess, businesses, userRoles, roles, rolePermissions, permissions, auditLogs } from '../db/schema.js';
 import { verifyPassword, hashPassword } from '../auth/password.js';
 import { generateAuthToken } from '../auth/jwt.js';
@@ -10,6 +10,23 @@ import { eq, or, and } from 'drizzle-orm';
 import { z } from 'zod';
 
 const router = Router();
+
+function safeError(error: any) {
+  if (!error) return { message: 'Unknown error' };
+  const cause = error.cause || {};
+  return {
+    name: error.name || 'Error',
+    message: error.message || String(error),
+    code: error.code || cause.code,
+    detail: error.detail || cause.detail,
+    hint: error.hint || cause.hint,
+    table: error.table || cause.table,
+    column: error.column || cause.column,
+    constraint: error.constraint || cause.constraint,
+    position: error.position || cause.position,
+    causeMessage: cause.message || undefined,
+  };
+}
 
 const loginSchema = z.object({
   identifier: z.string().min(1, 'Username, Email or Mobile is required'),
@@ -263,26 +280,35 @@ router.post('/bootstrap-admin', async (req: Request, res: Response): Promise<voi
  * Production authentication endpoint with identifier resolution & audit logging
  */
 router.post('/login', async (req: Request, res: Response): Promise<void> => {
-  console.log('[LOGIN_DEBUG_START] Processing authentication request');
-  console.log('[LOGIN_REQUEST_RECEIVED] Body fields present:', Object.keys(req.body || {}));
-  
   try {
     const dbStatus = await checkDatabaseConnection();
     if (!dbStatus.connected) {
-      console.warn('[LOGIN_DEBUG] Database offline/unavailable during login attempt');
+      console.warn('[LOGIN_ERROR_DATABASE_UNAVAILABLE] Database offline/unavailable during login attempt');
       res.status(503).json({
+        success: false,
         error: 'DATABASE_UNAVAILABLE',
         message: 'Database connection unavailable. Please check the server configuration.',
       });
       return;
     }
 
-    await ensureMigrationsRun();
-
-    const parseResult = loginSchema.safeParse(req.body);
-    if (!parseResult.success) {
-      console.warn('[LOGIN_DEBUG] Validation failure:', parseResult.error.issues[0]?.message);
+    // 1. Request Body Parsing
+    let parseResult: ReturnType<typeof loginSchema.safeParse>;
+    try {
+      parseResult = loginSchema.safeParse(req.body);
+    } catch (parseError: any) {
+      console.error('[LOGIN_ERROR_REQUEST_PARSING]', safeError(parseError));
       res.status(400).json({
+        success: false,
+        error: 'VALIDATION_ERROR',
+        message: 'Failed to parse request body',
+      });
+      return;
+    }
+
+    if (!parseResult.success) {
+      res.status(400).json({
+        success: false,
         error: 'VALIDATION_ERROR',
         message: parseResult.error.issues[0]?.message || 'Invalid input',
       });
@@ -291,23 +317,69 @@ router.post('/login', async (req: Request, res: Response): Promise<void> => {
 
     const { identifier, password, businessId } = parseResult.data;
 
-    // 1. Find user by username, email, or mobile
-    console.log('[USER_LOOKUP_STARTED] Searching for identifier (trimmed)');
-    const [userRecord] = await db
-      .select()
-      .from(users)
-      .where(
-        or(
-          eq(users.username, identifier.trim().toLowerCase()),
-          eq(users.email, identifier.trim().toLowerCase()),
-          eq(users.mobile, identifier.trim())
+    // 2. Database User Lookup
+    let userRecord: typeof users.$inferSelect | undefined;
+    try {
+      const rows = await db
+        .select()
+        .from(users)
+        .where(
+          or(
+            eq(users.username, identifier.trim().toLowerCase()),
+            eq(users.email, identifier.trim().toLowerCase()),
+            eq(users.mobile, identifier.trim())
+          )
         )
-      )
-      .limit(1);
+        .limit(1);
+      userRecord = rows[0];
+    } catch (dbError: any) {
+      const errInfo = safeError(dbError);
+      console.error('[LOGIN_USER_LOOKUP_ERROR]', errInfo);
+
+      // Resilient fallback: Query via raw SQL in case of transient schema or column naming differences
+      try {
+        const rawRes = await pool.query(
+          `SELECT * FROM users 
+           WHERE LOWER(username) = LOWER($1) 
+              OR LOWER(email) = LOWER($1) 
+              OR mobile = $1 
+           LIMIT 1`,
+          [identifier.trim()]
+        );
+        if (rawRes.rows.length > 0) {
+          const row = rawRes.rows[0];
+          userRecord = {
+            id: row.id,
+            username: row.username,
+            email: row.email,
+            mobile: row.mobile,
+            fullName: row.full_name ?? row.fullName ?? row.fullname ?? '',
+            passwordHash: row.password_hash ?? row.passwordHash ?? row.password ?? '',
+            status: row.status ?? 'ACTIVE',
+            isSuperAdmin: row.is_super_admin ?? row.isSuperAdmin ?? row.issuperadmin ?? false,
+            lastLoginAt: row.last_login_at ?? row.lastLoginAt ?? null,
+            createdAt: row.created_at ?? row.createdAt ?? new Date(),
+            updatedAt: row.updated_at ?? row.updatedAt ?? new Date(),
+            createdBy: row.created_by ?? row.createdBy ?? null,
+          };
+        }
+      } catch (fallbackErr: any) {
+        console.error('[LOGIN_USER_LOOKUP_RAW_FALLBACK_FAILED]', safeError(fallbackErr));
+      }
+
+      if (!userRecord) {
+        res.status(500).json({
+          success: false,
+          error: 'DATABASE_QUERY_ERROR',
+          message: 'Database query failed during user lookup',
+          details: errInfo,
+        });
+        return;
+      }
+    }
 
     if (!userRecord) {
-      console.log('[USER_NOT_FOUND] No record matched the provided identifier');
-      // Record failed audit log attempt if possible
+      // Record failed audit log attempt without failing the response
       try {
         await recordAuditLog({
           action: 'LOGIN_FAILED',
@@ -317,9 +389,10 @@ router.post('/login', async (req: Request, res: Response): Promise<void> => {
           newValue: { reason: 'User not found' },
           req,
         });
-      } catch {}
+      } catch (auditErr: any) {
+        console.warn('[LOGIN_ERROR_AUDIT] Failed to record login failed audit log:', safeError(auditErr).message);
+      }
 
-      console.log('[LOGIN_RESPONSE_SENT] HTTP 401 INVALID_CREDENTIALS');
       res.status(401).json({
         success: false,
         error: 'INVALID_CREDENTIALS',
@@ -328,20 +401,21 @@ router.post('/login', async (req: Request, res: Response): Promise<void> => {
       return;
     }
 
-    console.log(`[USER_FOUND] User ID: ${userRecord.id}, Status: ${userRecord.status}, IsSuperAdmin: ${userRecord.isSuperAdmin}`);
-
-    // 2. Verify account status
+    // Account Status Verification
     if (userRecord.status !== 'ACTIVE') {
-      console.warn(`[LOGIN_BLOCKED] User account status is ${userRecord.status}`);
-      await recordAuditLog({
-        userId: userRecord.id,
-        action: 'LOGIN_BLOCKED',
-        module: 'AUTH',
-        entityType: 'User',
-        entityId: userRecord.id,
-        newValue: { status: userRecord.status },
-        req,
-      });
+      try {
+        await recordAuditLog({
+          userId: userRecord.id,
+          action: 'LOGIN_BLOCKED',
+          module: 'AUTH',
+          entityType: 'User',
+          entityId: userRecord.id,
+          newValue: { status: userRecord.status },
+          req,
+        });
+      } catch (auditErr: any) {
+        console.warn('[LOGIN_ERROR_AUDIT] Failed to record login blocked audit log:', safeError(auditErr).message);
+      }
 
       res.status(403).json({
         success: false,
@@ -351,22 +425,36 @@ router.post('/login', async (req: Request, res: Response): Promise<void> => {
       return;
     }
 
-    // 3. Verify password
-    console.log('[PASSWORD_VERIFICATION_STARTED] Comparing password hash');
-    const isPasswordValid = await verifyPassword(password, userRecord.passwordHash);
-    if (!isPasswordValid) {
-      console.log('[PASSWORD_VERIFICATION_FAILED] Password hash did not match');
-      await recordAuditLog({
-        userId: userRecord.id,
-        action: 'LOGIN_FAILED',
-        module: 'AUTH',
-        entityType: 'User',
-        entityId: userRecord.id,
-        newValue: { reason: 'Invalid password' },
-        req,
+    // 3. Password Verification
+    let isPasswordValid = false;
+    try {
+      isPasswordValid = await verifyPassword(password, userRecord.passwordHash);
+    } catch (pwdError: any) {
+      console.error('[LOGIN_ERROR_PASSWORD_VERIFY]', safeError(pwdError));
+      res.status(500).json({
+        success: false,
+        error: 'PASSWORD_VERIFY_ERROR',
+        message: 'Failed to verify password credentials',
+        details: safeError(pwdError),
       });
+      return;
+    }
 
-      console.log('[LOGIN_RESPONSE_SENT] HTTP 401 INVALID_CREDENTIALS');
+    if (!isPasswordValid) {
+      try {
+        await recordAuditLog({
+          userId: userRecord.id,
+          action: 'LOGIN_FAILED',
+          module: 'AUTH',
+          entityType: 'User',
+          entityId: userRecord.id,
+          newValue: { reason: 'Invalid password' },
+          req,
+        });
+      } catch (auditErr: any) {
+        console.warn('[LOGIN_ERROR_AUDIT] Failed to record login failure audit log:', safeError(auditErr).message);
+      }
+
       res.status(401).json({
         success: false,
         error: 'INVALID_CREDENTIALS',
@@ -375,95 +463,122 @@ router.post('/login', async (req: Request, res: Response): Promise<void> => {
       return;
     }
 
-    console.log('[PASSWORD_VERIFICATION_SUCCESS] Password authenticated successfully');
+    // 4. Role & Business Lookup
+    let accessibleBiz: any[] = [];
+    let selectedBusiness: any = null;
+    let rolesList: any[] = [];
+    let permsList: string[] = [];
 
-    // 4. Retrieve Accessible Businesses
-    console.log('[ROLE_LOOKUP_STARTED] Fetching business access and user roles');
-    const accessibleBiz = await db
-      .select({
-        businessId: userBusinessAccess.businessId,
-        isDefault: userBusinessAccess.isDefault,
-        business: businesses,
-      })
-      .from(userBusinessAccess)
-      .innerJoin(businesses, eq(userBusinessAccess.businessId, businesses.id))
-      .where(eq(userBusinessAccess.userId, userRecord.id));
+    try {
+      accessibleBiz = await db
+        .select({
+          businessId: userBusinessAccess.businessId,
+          isDefault: userBusinessAccess.isDefault,
+          business: businesses,
+        })
+        .from(userBusinessAccess)
+        .innerJoin(businesses, eq(userBusinessAccess.businessId, businesses.id))
+        .where(eq(userBusinessAccess.userId, userRecord.id));
 
-    let selectedBusiness = accessibleBiz.find(b => b.businessId === businessId)?.business;
+      selectedBusiness = accessibleBiz.find(b => b.businessId === businessId)?.business;
 
-    if (!selectedBusiness) {
-      if (userRecord.isSuperAdmin) {
-        if (businessId) {
-          const [found] = await db.select().from(businesses).where(eq(businesses.id, businessId)).limit(1);
-          selectedBusiness = found;
+      if (!selectedBusiness) {
+        if (userRecord.isSuperAdmin) {
+          if (businessId) {
+            const [found] = await db.select().from(businesses).where(eq(businesses.id, businessId)).limit(1);
+            selectedBusiness = found;
+          }
+          if (!selectedBusiness) {
+            const [first] = await db.select().from(businesses).where(eq(businesses.status, 'ACTIVE')).limit(1);
+            selectedBusiness = first;
+          }
+        } else {
+          const defaultAccess = accessibleBiz.find(b => b.isDefault) || accessibleBiz[0];
+          selectedBusiness = defaultAccess?.business;
         }
-        if (!selectedBusiness) {
-          const [first] = await db.select().from(businesses).where(eq(businesses.status, 'ACTIVE')).limit(1);
-          selectedBusiness = first;
-        }
-      } else {
-        const defaultAccess = accessibleBiz.find(b => b.isDefault) || accessibleBiz[0];
-        selectedBusiness = defaultAccess?.business;
       }
+
+      const currentBusinessId = selectedBusiness?.id || null;
+
+      if (currentBusinessId) {
+        const userRoleRecs = await db
+          .select({ role: roles })
+          .from(userRoles)
+          .innerJoin(roles, eq(userRoles.roleId, roles.id))
+          .where(eq(userRoles.userId, userRecord.id));
+
+        rolesList = userRoleRecs.map(r => ({ id: r.role.id, name: r.role.name, code: r.role.code }));
+
+        if (userRecord.isSuperAdmin) {
+          const allPerms = await db.select().from(permissions);
+          permsList = allPerms.map(p => p.code);
+        } else if (rolesList.length > 0) {
+          const rolePerms = await db
+            .select({ code: permissions.code })
+            .from(rolePermissions)
+            .innerJoin(permissions, eq(rolePermissions.permissionId, permissions.id))
+            .where(eq(rolePermissions.roleId, rolesList[0].id));
+          permsList = Array.from(new Set(rolePerms.map(p => p.code)));
+        }
+      }
+    } catch (roleError: any) {
+      console.error('[LOGIN_ERROR_ROLE_LOOKUP]', safeError(roleError));
+      res.status(500).json({
+        success: false,
+        error: 'ROLE_LOOKUP_ERROR',
+        message: 'Failed to retrieve user roles or business access',
+        details: safeError(roleError),
+      });
+      return;
     }
 
     const currentBusinessId = selectedBusiness?.id || null;
 
-    // 5. Update last login timestamp
-    await db.update(users).set({ lastLoginAt: new Date() }).where(eq(users.id, userRecord.id));
-
-    // 6. Generate JWT Auth Token
-    console.log('[SESSION_CREATION_STARTED] Generating signed JWT token');
-    const token = generateAuthToken({
-      userId: userRecord.id,
-      username: userRecord.username,
-      email: userRecord.email,
-      isSuperAdmin: userRecord.isSuperAdmin,
-      businessId: currentBusinessId,
-    });
-    console.log('[SESSION_CREATED] Token created successfully');
-
-    // 7. Record Login Audit Log
-    await recordAuditLog({
-      businessId: currentBusinessId,
-      userId: userRecord.id,
-      action: 'LOGIN_SUCCESS',
-      module: 'AUTH',
-      entityType: 'Session',
-      entityId: userRecord.id,
-      newValue: { businessName: selectedBusiness?.name },
-      req,
-    });
-
-    // 8. Fetch user roles & permissions for current business
-    let rolesList: any[] = [];
-    let permsList: string[] = [];
-
-    if (currentBusinessId) {
-      const userRoleRecs = await db
-        .select({ role: roles })
-        .from(userRoles)
-        .innerJoin(roles, eq(userRoles.roleId, roles.id))
-        .where(eq(userRoles.userId, userRecord.id));
-
-      rolesList = userRoleRecs.map(r => ({ id: r.role.id, name: r.role.name, code: r.role.code }));
-
-      if (userRecord.isSuperAdmin) {
-        const allPerms = await db.select().from(permissions);
-        permsList = allPerms.map(p => p.code);
-      } else if (rolesList.length > 0) {
-        const rolePerms = await db
-          .select({ code: permissions.code })
-          .from(rolePermissions)
-          .innerJoin(permissions, eq(rolePermissions.permissionId, permissions.id))
-          .where(eq(rolePermissions.roleId, rolesList[0].id));
-        permsList = Array.from(new Set(rolePerms.map(p => p.code)));
-      }
+    // Update last login timestamp (non-blocking if fails)
+    try {
+      await db.update(users).set({ lastLoginAt: new Date() }).where(eq(users.id, userRecord.id));
+    } catch (updateErr: any) {
+      console.warn('[LOGIN_WARN] Failed to update lastLoginAt:', safeError(updateErr).message);
     }
 
-    console.log(`[ROLE_LOOKUP_SUCCESS] Roles count: ${rolesList.length}, Permissions count: ${permsList.length}`);
-    console.log('[LOGIN_RESPONSE_SENT] HTTP 200 SUCCESS - Token returned in payload');
+    // 5. JWT Generation
+    let token = '';
+    try {
+      token = generateAuthToken({
+        userId: userRecord.id,
+        username: userRecord.username,
+        email: userRecord.email,
+        isSuperAdmin: userRecord.isSuperAdmin,
+        businessId: currentBusinessId,
+      });
+    } catch (jwtError: any) {
+      console.error('[LOGIN_ERROR_JWT_CREATION]', safeError(jwtError));
+      res.status(500).json({
+        success: false,
+        error: 'JWT_CREATION_ERROR',
+        message: 'Failed to generate authentication token',
+        details: safeError(jwtError),
+      });
+      return;
+    }
 
+    // 6. Audit Logging (Isolated)
+    try {
+      await recordAuditLog({
+        businessId: currentBusinessId,
+        userId: userRecord.id,
+        action: 'LOGIN_SUCCESS',
+        module: 'AUTH',
+        entityType: 'Session',
+        entityId: userRecord.id,
+        newValue: { businessName: selectedBusiness?.name },
+        req,
+      });
+    } catch (auditErr: any) {
+      console.warn('[LOGIN_ERROR_AUDIT] Failed to record login audit log:', safeError(auditErr).message);
+    }
+
+    // 7. Response Creation
     res.json({
       success: true,
       token,
@@ -495,11 +610,13 @@ router.post('/login', async (req: Request, res: Response): Promise<void> => {
       permissions: permsList,
     });
   } catch (error: any) {
-    console.error('[Login API Error]', error);
+    const errObj = safeError(error);
+    console.error('[LOGIN_FATAL_ERROR]', errObj);
     res.status(500).json({
       success: false,
       error: 'INTERNAL_SERVER_ERROR',
-      message: error.message || 'An error occurred during authentication',
+      message: errObj.message || 'An error occurred during authentication',
+      details: errObj,
     });
   }
 });

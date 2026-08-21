@@ -1,10 +1,19 @@
 import { db, pool } from './index.js';
-import { businesses, users, roles, permissions, rolePermissions, userBusinessAccess, userRoles, auditLogs } from './schema.js';
+import {
+  businesses, users, roles, permissions, rolePermissions, userBusinessAccess, userRoles, auditLogs,
+  categories, coatings, bases, baseCategories, primaryItems, uniqueItems
+} from './schema.js';
 import { hashPassword } from '../auth/password.js';
-import { eq } from 'drizzle-orm';
+import { eq, and } from 'drizzle-orm';
 import { runMigrations } from './migrate.js';
 
 export const SYSTEM_PERMISSIONS = [
+  // Master Data Module
+  { module: 'master', action: 'view', code: 'master:view', description: 'View optical categories, bases, coatings, items, and batches' },
+  { module: 'master', action: 'create', code: 'master:create', description: 'Create optical categories, bases, coatings, items, and batches' },
+  { module: 'master', action: 'edit', code: 'master:edit', description: 'Edit optical master data properties' },
+  { module: 'master', action: 'delete', code: 'master:delete', description: 'Archive or remove unreferenced master entities' },
+
   // Sales Module
   { module: 'sales', action: 'view', code: 'sales:view', description: 'View sales orders, invoices, and returns' },
   { module: 'sales', action: 'create', code: 'sales:create', description: 'Create new sales orders and invoices' },
@@ -14,6 +23,10 @@ export const SYSTEM_PERMISSIONS = [
   { module: 'sales', action: 'approve', code: 'sales:approve', description: 'Approve special discounts or credit limits' },
   { module: 'sales', action: 'export', code: 'sales:export', description: 'Export sales registers and reports' },
   { module: 'sales', action: 'edit_sale_price', code: 'sales:edit_sale_price', description: 'Override default sales price on items' },
+  { module: 'sales', action: 'return_view', code: 'sales:return:view', description: 'View sales return credit notes' },
+  { module: 'sales', action: 'return_create', code: 'sales:return:create', description: 'Create sales return credit notes' },
+  { module: 'sales', action: 'return_post', code: 'sales:return:post', description: 'Post sales return and restore original batch stock' },
+  { module: 'sales', action: 'return_cancel', code: 'sales:return:cancel', description: 'Cancel sales return document' },
 
   // Purchase Module
   { module: 'purchase', action: 'view', code: 'purchase:view', description: 'View purchase orders, inward bills and returns' },
@@ -21,6 +34,10 @@ export const SYSTEM_PERMISSIONS = [
   { module: 'purchase', action: 'edit', code: 'purchase:edit', description: 'Edit purchase records before posting' },
   { module: 'purchase', action: 'delete', code: 'purchase:delete', description: 'Delete draft purchase entries' },
   { module: 'purchase', action: 'cancel', code: 'purchase:cancel', description: 'Cancel approved purchase documents' },
+  { module: 'purchase', action: 'return_view', code: 'purchase:return:view', description: 'View purchase return debit notes' },
+  { module: 'purchase', action: 'return_create', code: 'purchase:return:create', description: 'Create purchase return debit notes' },
+  { module: 'purchase', action: 'return_post', code: 'purchase:return:post', description: 'Post purchase return and reduce stock & lot' },
+  { module: 'purchase', action: 'return_cancel', code: 'purchase:return:cancel', description: 'Cancel purchase return document' },
   { module: 'purchase', action: 'approve', code: 'purchase:approve', description: 'Approve vendor inward stock' },
   { module: 'purchase', action: 'view_purchase_price', code: 'purchase:view_purchase_price', description: 'View supplier landed cost and purchase rates' },
   { module: 'purchase', action: 'export', code: 'purchase:export', description: 'Export purchase registers' },
@@ -52,12 +69,42 @@ export const SYSTEM_PERMISSIONS = [
   // Reports Module
   { module: 'reports', action: 'view', code: 'reports:view', description: 'Access optical business intelligence and analytical reports' },
   { module: 'reports', action: 'export', code: 'reports:export', description: 'Download GST GSTR-1 / GSTR-3B audit summaries' },
+  { module: 'reports', action: 'dashboard_view', code: 'report.dashboard.view', description: 'View executive operational KPI dashboard' },
+  { module: 'reports', action: 'dashboard_view', code: 'reports:dashboard:view', description: 'View executive operational KPI dashboard (colon notation)' },
+  { module: 'reports', action: 'inventory_view', code: 'report.inventory.view', description: 'View comprehensive inventory & optical stock reports' },
+  { module: 'reports', action: 'inventory_view', code: 'reports:inventory', description: 'View comprehensive inventory & optical stock reports (colon notation)' },
+  { module: 'reports', action: 'stock_ledger_view', code: 'report.stock_ledger.view', description: 'View chronological batch stock ledger journal reports' },
+  { module: 'reports', action: 'stock_ledger_view', code: 'reports:stock_ledger', description: 'View chronological batch stock ledger journal reports (colon notation)' },
+  { module: 'reports', action: 'purchase_view', code: 'report.purchase.view', description: 'View supplier purchase register and detailed lot reports' },
+  { module: 'reports', action: 'purchase_view', code: 'reports:purchase', description: 'View supplier purchase register and detailed lot reports (colon notation)' },
+  { module: 'reports', action: 'sales_view', code: 'report.sales.view', description: 'View customer sales register and item/power reports' },
+  { module: 'reports', action: 'sales_view', code: 'reports:sales', description: 'View customer sales register and item/power reports (colon notation)' },
+  { module: 'reports', action: 'outstanding_view', code: 'report.outstanding.view', description: 'View customer and supplier outstanding aging reports' },
+  { module: 'reports', action: 'outstanding_view', code: 'reports:outstanding', description: 'View customer and supplier outstanding aging reports (colon notation)' },
+  { module: 'reports', action: 'payment_view', code: 'report.payment.view', description: 'View payment register and mode summary reports' },
+  { module: 'reports', action: 'payment_view', code: 'reports:payment', description: 'View payment register and mode summary reports (colon notation)' },
+  { module: 'reports', action: 'party_statement_view', code: 'report.party_statement.view', description: 'View individual party running balance statements' },
+  { module: 'reports', action: 'party_statement_view', code: 'reports:party_statement', description: 'View individual party running balance statements (colon notation)' },
 
   // Administration Module
   { module: 'admin', action: 'manage_users', code: 'admin:manage_users', description: 'Create, update, lock, and assign roles to users' },
   { module: 'admin', action: 'manage_roles', code: 'admin:manage_roles', description: 'Configure custom roles and permission assignments' },
   { module: 'admin', action: 'manage_settings', code: 'admin:manage_settings', description: 'Configure business GST, invoice prefixes, and barcode settings' },
   { module: 'admin', action: 'view_audit_logs', code: 'admin:view_audit_logs', description: 'Inspect audit trails of all system modifications' },
+
+  // Phase 7: Bulk Data & Import Permissions
+  { module: 'import', action: 'view', code: 'import:view', description: 'View bulk import history and templates' },
+  { module: 'import', action: 'view', code: 'import.view', description: 'View bulk import history and templates (dot notation)' },
+  { module: 'import', action: 'party', code: 'import:party', description: 'Bulk import customer and supplier directories' },
+  { module: 'import', action: 'party', code: 'import.party', description: 'Bulk import customer and supplier directories (dot notation)' },
+  { module: 'import', action: 'purchase', code: 'import:purchase', description: 'Bulk import supplier purchase invoices' },
+  { module: 'import', action: 'purchase', code: 'import.purchase', description: 'Bulk import supplier purchase invoices (dot notation)' },
+  { module: 'import', action: 'sales_order', code: 'import:sales_order', description: 'Bulk import customer sales orders' },
+  { module: 'import', action: 'sales_order', code: 'import.sales_order', description: 'Bulk import customer sales orders (dot notation)' },
+  { module: 'import', action: 'sales_invoice', code: 'import:sales_invoice', description: 'Bulk import customer sales invoices' },
+  { module: 'import', action: 'sales_invoice', code: 'import.sales_invoice', description: 'Bulk import customer sales invoices (dot notation)' },
+  { module: 'import', action: 'opening_stock', code: 'import:opening_stock', description: 'Bulk import initial optical batch opening stock balances' },
+  { module: 'import', action: 'opening_stock', code: 'import.opening_stock', description: 'Bulk import initial optical batch opening stock balances (dot notation)' },
 ];
 
 export const SYSTEM_ROLES = [
@@ -116,7 +163,7 @@ export async function seedInitialDatabase() {
   for (const perm of SYSTEM_PERMISSIONS) {
     const existing = await db.select().from(permissions).where(eq(permissions.code, perm.code)).limit(1);
     if (existing.length === 0) {
-      await db.insert(permissions).values(perm);
+      await db.insert(permissions).values(perm).onConflictDoNothing();
     }
   }
   const allPermissions = await db.select().from(permissions);
@@ -127,7 +174,7 @@ export async function seedInitialDatabase() {
   for (const roleData of SYSTEM_ROLES) {
     const existing = await db.select().from(roles).where(eq(roles.code, roleData.code)).limit(1);
     if (existing.length === 0) {
-      await db.insert(roles).values(roleData);
+      await db.insert(roles).values(roleData).onConflictDoNothing();
     }
   }
   const allRoles = await db.select().from(roles);
@@ -135,6 +182,12 @@ export async function seedInitialDatabase() {
 
   // 4. Map Permissions to Roles
   console.log('[Database Seed] Mapping role-permission policies...');
+  const existingRolePerms = await db.select({
+    roleId: rolePermissions.roleId,
+    permissionId: rolePermissions.permissionId,
+  }).from(rolePermissions);
+  const existingRolePermSet = new Set(existingRolePerms.map(rp => `${rp.roleId}_${rp.permissionId}`));
+
   for (const role of allRoles) {
     let allowedCodes: string[] = [];
     if (role.code === 'SUPER_ADMIN') {
@@ -156,15 +209,13 @@ export async function seedInitialDatabase() {
     for (const code of allowedCodes) {
       const permId = permissionMap.get(code);
       if (permId) {
-        const existingRp = await db.select().from(rolePermissions)
-          .where(eq(rolePermissions.roleId, role.id))
-          .limit(100);
-        const hasPerm = existingRp.some(rp => rp.permissionId === permId);
-        if (!hasPerm) {
+        const key = `${role.id}_${permId}`;
+        if (!existingRolePermSet.has(key)) {
           await db.insert(rolePermissions).values({
             roleId: role.id,
             permissionId: permId,
-          });
+          }).onConflictDoNothing();
+          existingRolePermSet.add(key);
         }
       }
     }
@@ -253,33 +304,209 @@ export async function seedInitialDatabase() {
 
     // Connect user to default business access
     const existingAccess = (await db.select().from(userBusinessAccess)
-      .where(eq(userBusinessAccess.userId, userRecord.id))
-      .limit(10))[0];
+      .where(and(
+        eq(userBusinessAccess.userId, userRecord.id),
+        eq(userBusinessAccess.businessId, defaultBusiness.id)
+      ))
+      .limit(1))[0];
     if (!existingAccess) {
       await db.insert(userBusinessAccess).values({
         userId: userRecord.id,
         businessId: defaultBusiness.id,
         isDefault: true,
-      });
+      }).onConflictDoNothing();
     }
 
     // Assign Role in default business
     const roleId = roleMap.get(u.roleCode);
     if (roleId) {
       const existingUserRole = (await db.select().from(userRoles)
-        .where(eq(userRoles.userId, userRecord.id))
-        .limit(10))[0];
+        .where(and(
+          eq(userRoles.userId, userRecord.id),
+          eq(userRoles.businessId, defaultBusiness.id),
+          eq(userRoles.roleId, roleId)
+        ))
+        .limit(1))[0];
       if (!existingUserRole) {
         await db.insert(userRoles).values({
           userId: userRecord.id,
           businessId: defaultBusiness.id,
           roleId,
-        });
+        }).onConflictDoNothing();
       }
     }
   }
 
-  // 7. Record System Initialization Audit Log
+  // 7. Seed Optical Categories (SV, KT, PROG)
+  console.log('[Database Seed] Seeding optical categories (SV, KT, PROG)...');
+  const standardCategories = [
+    { name: 'Single Vision', code: 'SV', description: 'Single vision distance, reading or computer optical lenses.' },
+    { name: 'Kryptok Bifocal', code: 'KT', description: 'Traditional fused round-top bifocal optical lenses with reading segment.' },
+    { name: 'Progressive Lens', code: 'PROG', description: 'No-line multifocal lenses with smooth progression from distance to near.' },
+  ];
+
+  for (const cat of standardCategories) {
+    const existing = (await db.select().from(categories).where(and(eq(categories.businessId, defaultBusiness.id), eq(categories.code, cat.code))).limit(1))[0];
+    if (!existing) {
+      await db.insert(categories).values({
+        businessId: defaultBusiness.id,
+        name: cat.name,
+        code: cat.code,
+        description: cat.description,
+        status: 'ACTIVE',
+      }).onConflictDoNothing();
+    }
+  }
+  const allCategories = await db.select().from(categories).where(eq(categories.businessId, defaultBusiness.id));
+  const categoryMap = new Map(allCategories.map(c => [c.code, c.id]));
+
+  // 8. Seed Coatings Master
+  console.log('[Database Seed] Seeding optical coatings...');
+  const standardCoatings = [
+    { name: 'Hard Coat', code: 'HC', description: 'Scratch-resistant hard coating' },
+    { name: 'Hard Multi-Coat / Anti-Reflective', code: 'HMC', description: 'Anti-reflective green/blue reflection reduction coating' },
+    { name: 'Blue Cut Green', code: 'BCG', description: 'Blue light protection with green reflection reflex' },
+    { name: 'Blue Cut Blue', code: 'BCB', description: 'Blue light protection with blue reflection reflex' },
+    { name: 'Blue Cut Diamond', code: 'BCD', description: 'Ultra-tough hydrophobic oleophobic blue cut coating' },
+    { name: 'Blue Cut Magnet / Satin', code: 'BCM', description: 'Enhanced contrast anti-glare blue cut filter' },
+    { name: 'Blue Cut Low Residual Blue', code: 'BCLRB', description: 'Low reflection residual blue cut coating' },
+    { name: 'PhotoGrey Hard Coat', code: 'PGHC', description: 'Fast transitions photochromic grey hard coat' },
+    { name: 'Blue Cut PhotoGrey Hard Coat', code: 'BCPGHC', description: 'Dual protection blue light block + photochromic grey' },
+    { name: 'Polycarbonate Blue Cut Green', code: 'PCBCG', description: 'Impact-resistant polycarbonate index 1.59 + blue cut green' },
+    { name: 'Polycarbonate Blue Cut Blue', code: 'PCBCB', description: 'Impact-resistant polycarbonate index 1.59 + blue cut blue' },
+    { name: 'Polycarbonate Blue Cut Diamond', code: 'PCBCD', description: 'Impact-resistant polycarbonate + diamond blue shield' },
+  ];
+
+  for (const c of standardCoatings) {
+    const existing = (await db.select().from(coatings).where(and(eq(coatings.businessId, defaultBusiness.id), eq(coatings.code, c.code))).limit(1))[0];
+    if (!existing) {
+      await db.insert(coatings).values({
+        businessId: defaultBusiness.id,
+        name: c.name,
+        code: c.code,
+        description: c.description,
+        status: 'ACTIVE',
+      }).onConflictDoNothing();
+    }
+  }
+  const allCoatings = await db.select().from(coatings).where(eq(coatings.businessId, defaultBusiness.id));
+  const coatingMap = new Map(allCoatings.map(c => [c.code, c.id]));
+
+  // 9. Seed Bases Master
+  console.log('[Database Seed] Seeding optical bases...');
+  const standardBases = [
+    { name: 'Clear Hard Coat', code: 'HC', family: 'CLEAR', coatingCode: 'HC', description: 'Standard Clear Hard Coated lens base', compatibleCats: ['SV', 'KT', 'PROG'] },
+    { name: 'Clear Hard Multi-Coat', code: 'HMC', family: 'CLEAR', coatingCode: 'HMC', description: 'Clear Anti-Reflective lens base', compatibleCats: ['SV', 'KT', 'PROG'] },
+    { name: 'Blue Cut Green', code: 'BCG', family: 'BLUE CUT', coatingCode: 'BCG', description: 'Blue filter with green reflex', compatibleCats: ['SV', 'KT', 'PROG'] },
+    { name: 'Blue Cut Blue', code: 'BCB', family: 'BLUE CUT', coatingCode: 'BCB', description: 'Blue filter with blue reflex', compatibleCats: ['SV', 'KT', 'PROG'] },
+    { name: 'Blue Cut Diamond', code: 'BCD', family: 'BLUE CUT', coatingCode: 'BCD', description: 'Blue filter diamond grade', compatibleCats: ['SV', 'KT', 'PROG'] },
+    { name: 'Blue Cut Magnet', code: 'BCM', family: 'BLUE CUT', coatingCode: 'BCM', description: 'Blue filter satin finish', compatibleCats: ['SV', 'KT', 'PROG'] },
+    { name: 'Blue Cut Low Residual Blue', code: 'BCLRB', family: 'BLUE CUT', coatingCode: 'BCLRB', description: 'Blue filter low residual reflex', compatibleCats: ['SV', 'KT', 'PROG'] },
+    { name: 'PhotoGrey Hard Coat', code: 'PGHC', family: 'PHOTOGREY', coatingCode: 'PGHC', description: 'Photochromic grey base', compatibleCats: ['SV', 'KT', 'PROG'] },
+    { name: 'Blue Cut PhotoGrey Hard Coat', code: 'BCPGHC', family: 'BLUE CUT PHOTOGREY', coatingCode: 'BCPGHC', description: 'Dual blue light + photochromic grey', compatibleCats: ['SV', 'KT', 'PROG'] },
+    { name: 'Polycarbonate Blue Cut Green', code: 'PCBCG', family: 'POLY BLUE CUT', coatingCode: 'PCBCG', description: 'Polycarbonate impact resistant blue green', compatibleCats: ['SV', 'KT', 'PROG'] },
+    { name: 'Polycarbonate Blue Cut Blue', code: 'PCBCB', family: 'POLY BLUE CUT', coatingCode: 'PCBCB', description: 'Polycarbonate impact resistant blue blue', compatibleCats: ['SV', 'KT', 'PROG'] },
+    { name: 'Polycarbonate Blue Cut Diamond', code: 'PCBCD', family: 'POLY BLUE CUT', coatingCode: 'PCBCD', description: 'Polycarbonate impact resistant diamond', compatibleCats: ['SV', 'KT', 'PROG'] },
+  ];
+
+  for (const b of standardBases) {
+    let baseRecord = (await db.select().from(bases).where(and(eq(bases.businessId, defaultBusiness.id), eq(bases.code, b.code))).limit(1))[0];
+    if (!baseRecord) {
+      const [newBase] = await db.insert(bases).values({
+        businessId: defaultBusiness.id,
+        name: b.name,
+        code: b.code,
+        family: b.family,
+        coatingId: coatingMap.get(b.coatingCode) || null,
+        description: b.description,
+        status: 'ACTIVE',
+      }).returning();
+      baseRecord = newBase;
+    }
+
+    // Seed Base Category Compatibility
+    for (const catCode of b.compatibleCats) {
+      const catId = categoryMap.get(catCode);
+      if (catId && baseRecord) {
+        const existingBc = (await db.select().from(baseCategories).where(and(
+          eq(baseCategories.businessId, defaultBusiness.id),
+          eq(baseCategories.baseId, baseRecord.id),
+          eq(baseCategories.categoryId, catId)
+        )).limit(1))[0];
+        if (!existingBc) {
+          await db.insert(baseCategories).values({
+            businessId: defaultBusiness.id,
+            baseId: baseRecord.id,
+            categoryId: catId,
+          }).onConflictDoNothing();
+        }
+      }
+    }
+  }
+
+  // 10. Seed Sample Primary Items & Unique Items
+  console.log('[Database Seed] Seeding sample primary items and unique items...');
+  const samplePrimaryItems = [
+    { code: 'HC_SV', name: 'HC SV (1.56 Hard Coat Single Vision)', catCode: 'SV', baseCode: 'HC', coatingCode: 'HC' },
+    { code: 'BCG_SV', name: 'BCG SV (1.56 Blue Cut Green Single Vision)', catCode: 'SV', baseCode: 'BCG', coatingCode: 'BCG' },
+    { code: 'BCB_SV', name: 'BCB SV (1.56 Blue Cut Blue Single Vision)', catCode: 'SV', baseCode: 'BCB', coatingCode: 'BCB' },
+    { code: 'PGHC_SV', name: 'PG HC SV (PhotoGrey Hard Coat Single Vision)', catCode: 'SV', baseCode: 'PGHC', coatingCode: 'PGHC' },
+    { code: 'PGHC_KT', name: 'PG HC KT (PhotoGrey Hard Coat Kryptok Bifocal)', catCode: 'KT', baseCode: 'PGHC', coatingCode: 'PGHC' },
+    { code: 'PGHC_PROG', name: 'PG HC PROG (PhotoGrey Hard Coat Progressive Lens)', catCode: 'PROG', baseCode: 'PGHC', coatingCode: 'PGHC' },
+  ];
+
+  const allBases = await db.select().from(bases).where(eq(bases.businessId, defaultBusiness.id));
+  const baseMap = new Map(allBases.map(b => [b.code, b.id]));
+
+  for (const pItem of samplePrimaryItems) {
+    const catId = categoryMap.get(pItem.catCode);
+    const baseId = baseMap.get(pItem.baseCode);
+    const coatingId = coatingMap.get(pItem.coatingCode);
+
+    if (catId && baseId) {
+      let primaryRecord = (await db.select().from(primaryItems).where(and(
+        eq(primaryItems.businessId, defaultBusiness.id),
+        eq(primaryItems.code, pItem.code)
+      )).limit(1))[0];
+
+      if (!primaryRecord) {
+        const [createdP] = await db.insert(primaryItems).values({
+          businessId: defaultBusiness.id,
+          categoryId: catId,
+          baseId,
+          coatingId: coatingId || null,
+          name: pItem.name,
+          code: pItem.code,
+          status: 'ACTIVE',
+        }).returning();
+        primaryRecord = createdP;
+      }
+
+      // Ensure at least one default Unique Item exists under this Primary Item
+      if (primaryRecord) {
+        const uniqueItemCode = `${pItem.code}_STD`;
+        const existingU = (await db.select().from(uniqueItems).where(and(
+          eq(uniqueItems.businessId, defaultBusiness.id),
+          eq(uniqueItems.code, uniqueItemCode)
+        )).limit(1))[0];
+
+        if (!existingU) {
+          await db.insert(uniqueItems).values({
+            businessId: defaultBusiness.id,
+            primaryItemId: primaryRecord.id,
+            name: `${pItem.name} - Standard White Box`,
+            code: uniqueItemCode,
+            purchaseRate: '120.00',
+            lastPurchasePrice: '120.00',
+            mrp: '350.00',
+            status: 'ACTIVE',
+          }).onConflictDoNothing();
+        }
+      }
+    }
+  }
+
+  // 11. Record System Initialization Audit Log
   const existingAudit = (await db.select().from(auditLogs).limit(1))[0];
   if (!existingAudit) {
     await db.insert(auditLogs).values({
@@ -289,7 +516,7 @@ export async function seedInitialDatabase() {
       entityType: 'SystemBootstrap',
       entityId: defaultBusiness.id,
       newValue: {
-        message: 'System initialization, RBAC tables, standard permissions and default business established.',
+        message: 'System initialization, RBAC tables, standard permissions, Optical Master Hierarchy, and default business established.',
         version: '1.0.0',
         businessName: defaultBusiness.name,
       },

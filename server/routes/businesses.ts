@@ -4,7 +4,7 @@ import { businesses, userBusinessAccess, userRoles, roles } from '../db/schema.j
 import { authenticateToken } from '../middleware/auth.js';
 import { requirePermission, requireSuperAdmin } from '../middleware/permission.js';
 import { recordAuditLog } from '../services/auditService.js';
-import { eq } from 'drizzle-orm';
+import { eq, and } from 'drizzle-orm';
 import { z } from 'zod';
 
 const router = Router();
@@ -50,11 +50,62 @@ router.get('/', authenticateToken, async (req: Request, res: Response): Promise<
 });
 
 /**
+ * GET /api/businesses/settings
+ * Retrieve operational settings for the current authenticated business.
+ */
+router.get('/settings', authenticateToken, async (req: Request, res: Response): Promise<void> => {
+  try {
+    const { BusinessSettingsService } = await import('../services/businessSettingsService.js');
+    const settings = await BusinessSettingsService.getSettings(req.user!.currentBusinessId);
+    res.json(settings);
+  } catch (err: any) {
+    res.status(500).json({ error: err.message || 'Failed to fetch business settings' });
+  }
+});
+
+/**
+ * PUT /api/businesses/settings
+ * Update operational settings (e.g. low stock threshold) for the current business.
+ */
+router.put(
+  '/settings',
+  authenticateToken,
+  requirePermission('admin:manage_settings'),
+  async (req: Request, res: Response): Promise<void> => {
+    try {
+      const { BusinessSettingsService } = await import('../services/businessSettingsService.js');
+      const { lowStockThreshold, config } = req.body;
+      const updated = await BusinessSettingsService.updateSettings(req.user!.currentBusinessId, {
+        lowStockThreshold: lowStockThreshold !== undefined ? Number(lowStockThreshold) : undefined,
+        config,
+      });
+      res.json({ success: true, settings: updated });
+    } catch (err: any) {
+      res.status(500).json({ error: err.message || 'Failed to update business settings' });
+    }
+  }
+);
+
+/**
  * GET /api/businesses/:id
  * Retrieve specific business details
  */
 router.get('/:id', authenticateToken, async (req: Request, res: Response): Promise<void> => {
   try {
+    // Non-superadmin can only query businesses they have access to
+    if (!req.user?.isSuperAdmin) {
+      const [access] = await db
+        .select()
+        .from(userBusinessAccess)
+        .where(and(eq(userBusinessAccess.userId, req.user!.id), eq(userBusinessAccess.businessId, req.params.id)))
+        .limit(1);
+
+      if (!access) {
+        res.status(403).json({ error: 'Access denied to this business' });
+        return;
+      }
+    }
+
     const [biz] = await db.select().from(businesses).where(eq(businesses.id, req.params.id)).limit(1);
     if (!biz) {
       res.status(404).json({ error: 'Business not found' });
@@ -72,6 +123,12 @@ router.get('/:id', authenticateToken, async (req: Request, res: Response): Promi
  */
 router.put('/:id', authenticateToken, requirePermission('admin:manage_settings'), async (req: Request, res: Response): Promise<void> => {
   try {
+    // Non-superadmin can only update their own active business
+    if (!req.user?.isSuperAdmin && req.user?.currentBusinessId !== req.params.id) {
+      res.status(403).json({ error: 'Cannot modify other business profiles' });
+      return;
+    }
+
     const parseResult = updateBusinessSchema.safeParse(req.body);
     if (!parseResult.success) {
       res.status(400).json({ error: parseResult.error.issues[0]?.message || 'Invalid input data' });

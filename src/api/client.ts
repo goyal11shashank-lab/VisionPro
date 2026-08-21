@@ -22,6 +22,19 @@ export function setStoredBusinessId(bizId: string): void {
   localStorage.setItem(BIZ_KEY, bizId);
 }
 
+export function getAuthHeaders(): Record<string, string> {
+  const token = getStoredToken();
+  const bizId = getStoredBusinessId();
+  const headers: Record<string, string> = {};
+  if (token) {
+    headers['Authorization'] = `Bearer ${token}`;
+  }
+  if (bizId) {
+    headers['X-Business-Id'] = bizId;
+  }
+  return headers;
+}
+
 export async function apiRequest<T = any>(
   endpoint: string,
   options: RequestInit = {}

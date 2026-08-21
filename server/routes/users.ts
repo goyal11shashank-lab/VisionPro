@@ -183,6 +183,19 @@ router.put('/:id/status', authenticateToken, requirePermission('admin:manage_use
       return;
     }
 
+    if (!req.user!.isSuperAdmin) {
+      const [userAccess] = await db
+        .select()
+        .from(userBusinessAccess)
+        .where(and(eq(userBusinessAccess.userId, targetUser.id), eq(userBusinessAccess.businessId, req.user!.currentBusinessId)))
+        .limit(1);
+
+      if (!userAccess) {
+        res.status(403).json({ error: 'Access denied: Target user does not belong to your business' });
+        return;
+      }
+    }
+
     if (targetUser.id === req.user!.id && status !== 'ACTIVE') {
       res.status(400).json({ error: 'You cannot deactivate your own user account.' });
       return;
@@ -228,6 +241,19 @@ router.post('/:id/reset-password', authenticateToken, requirePermission('admin:m
     if (!targetUser) {
       res.status(404).json({ error: 'User not found' });
       return;
+    }
+
+    if (!req.user!.isSuperAdmin) {
+      const [userAccess] = await db
+        .select()
+        .from(userBusinessAccess)
+        .where(and(eq(userBusinessAccess.userId, targetUser.id), eq(userBusinessAccess.businessId, req.user!.currentBusinessId)))
+        .limit(1);
+
+      if (!userAccess) {
+        res.status(403).json({ error: 'Access denied: Target user does not belong to your business' });
+        return;
+      }
     }
 
     const passwordHash = await hashPassword(newPassword);

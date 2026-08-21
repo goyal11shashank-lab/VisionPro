@@ -9,9 +9,11 @@ import {
   Check,
   CheckCircle2,
   AlertCircle,
+  Search,
 } from 'lucide-react';
 import { useAuth } from '../../context/AuthContext.js';
 import { DatabaseStatusModal } from '../common/DatabaseStatusModal.js';
+import { GlobalSearchModal } from '../search/GlobalSearchModal.js';
 
 interface HeaderProps {
   onToggleMobileSidebar: () => void;
@@ -27,6 +29,7 @@ export const Header: React.FC<HeaderProps> = ({
   const { user, currentBusiness, accessibleBusinesses, switchBusiness } = useAuth();
   const [isBizDropdownOpen, setIsBizDropdownOpen] = useState<boolean>(false);
   const [isDbModalOpen, setIsDbModalOpen] = useState<boolean>(false);
+  const [isSearchOpen, setIsSearchOpen] = useState<boolean>(false);
   const [isSwitching, setIsSwitching] = useState<boolean>(false);
 
   const handleSelectBusiness = async (bizId: string) => {
@@ -73,6 +76,20 @@ export const Header: React.FC<HeaderProps> = ({
 
         {/* Right Section: Multi-Business Switcher, DB Status, User Avatar */}
         <div className="flex items-center gap-3">
+          {/* Global Search Bar Button */}
+          <button
+            id="global-search-trigger"
+            onClick={() => setIsSearchOpen(true)}
+            className="flex items-center gap-2 px-3 py-1.5 rounded-lg border border-slate-200 bg-slate-50 hover:bg-slate-100 text-xs text-slate-500 hover:text-slate-700 transition-colors shadow-2xs"
+            title="Global Quick Search (Ctrl+K)"
+          >
+            <Search className="w-3.5 h-3.5 text-blue-600" />
+            <span className="hidden md:inline font-medium">Search Barcodes, Invoices, Parties...</span>
+            <kbd className="hidden sm:inline-block px-1.5 py-0.5 text-[10px] font-semibold text-slate-400 bg-white border border-slate-200 rounded-md">
+              ⌘K
+            </kbd>
+          </button>
+
           {/* Multi-Business Switcher Dropdown */}
           <div className="relative">
             <button
@@ -151,6 +168,13 @@ export const Header: React.FC<HeaderProps> = ({
       <DatabaseStatusModal
         isOpen={isDbModalOpen}
         onClose={() => setIsDbModalOpen(false)}
+      />
+
+      {/* Global Quick Search Palette Modal */}
+      <GlobalSearchModal
+        isOpen={isSearchOpen}
+        onClose={() => setIsSearchOpen(false)}
+        onNavigate={onNavigate}
       />
     </>
   );

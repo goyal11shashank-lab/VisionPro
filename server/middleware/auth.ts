@@ -1,6 +1,6 @@
 import { Request, Response, NextFunction } from 'express';
 import { verifyAuthToken, AuthJwtPayload } from '../auth/jwt.js';
-import { db } from '../db/index.js';
+import { db, pool } from '../db/index.js';
 import { users, userBusinessAccess, businesses, userRoles, roles, rolePermissions, permissions } from '../db/schema.js';
 import { eq, and } from 'drizzle-orm';
 
@@ -48,7 +48,34 @@ export async function authenticateToken(req: Request, res: Response, next: NextF
     const payload = verifyAuthToken(token);
 
     // 1. Fetch user from database to verify active status
-    const [userRecord] = await db.select().from(users).where(eq(users.id, payload.userId)).limit(1);
+    let userRecord: typeof users.$inferSelect | undefined;
+    try {
+      const rows = await db.select().from(users).where(eq(users.id, payload.userId)).limit(1);
+      userRecord = rows[0];
+    } catch (err: any) {
+      try {
+        const rawRes = await pool.query('SELECT * FROM users WHERE id = $1 LIMIT 1', [payload.userId]);
+        if (rawRes.rows.length > 0) {
+          const row = rawRes.rows[0];
+          userRecord = {
+            id: row.id,
+            username: row.username,
+            email: row.email,
+            mobile: row.mobile,
+            fullName: row.full_name ?? row.fullName ?? row.fullname ?? '',
+            passwordHash: row.password_hash ?? row.passwordHash ?? row.password ?? '',
+            status: row.status ?? 'ACTIVE',
+            isSuperAdmin: row.is_super_admin ?? row.isSuperAdmin ?? row.issuperadmin ?? false,
+            lastLoginAt: row.last_login_at ?? row.lastLoginAt ?? null,
+            createdAt: row.created_at ?? row.createdAt ?? new Date(),
+            updatedAt: row.updated_at ?? row.updatedAt ?? new Date(),
+            createdBy: row.created_by ?? row.createdBy ?? null,
+          };
+        }
+      } catch (rawErr) {
+        console.error('[AUTH_TOKEN_RAW_USER_LOOKUP_FAILED]', rawErr);
+      }
+    }
 
     if (!userRecord || userRecord.status !== 'ACTIVE') {
       res.status(401).json({

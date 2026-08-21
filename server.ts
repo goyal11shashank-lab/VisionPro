@@ -15,21 +15,6 @@ async function startServer() {
   const app = createExpressApp();
   const PORT = 3000;
 
-  // Check database and seed on startup if PostgreSQL is reachable
-  const dbHealth = await checkDatabaseConnection();
-  if (dbHealth.connected) {
-    console.log('[Database] PostgreSQL connected successfully:', dbHealth.version);
-    try {
-      await seedInitialDatabase();
-      console.log('[Database] Schema bootstrap and initial seeding verified.');
-    } catch (e: any) {
-      console.warn('[Database] Initial auto-seed warning (may already be initialized):', e.message);
-    }
-  } else {
-    console.warn('[Database Notice] PostgreSQL is currently offline or DATABASE_URL not yet connected. Error:', dbHealth.error);
-    console.warn('[Database Notice] Configure DATABASE_URL in environment or settings to connect to Netlify Database / PostgreSQL.');
-  }
-
   // Vite middleware for development vs static dist serving in production
   if (process.env.NODE_ENV !== 'production') {
     const { createServer: createViteServer } = await import('vite');
@@ -46,8 +31,29 @@ async function startServer() {
     });
   }
 
+  // Listen on port 3000 immediately so dev server is responsive right away
   app.listen(PORT, '0.0.0.0', () => {
     console.log(`[Optical ERP] Server running at http://0.0.0.0:${PORT}`);
+
+    // Asynchronously verify DB and run seed in background without blocking server listen
+    checkDatabaseConnection()
+      .then(async (dbHealth) => {
+        if (dbHealth.connected) {
+          console.log('[Database] PostgreSQL connected successfully:', dbHealth.version);
+          try {
+            await seedInitialDatabase();
+            console.log('[Database] Schema bootstrap and initial seeding verified.');
+          } catch (e: any) {
+            console.warn('[Database] Initial auto-seed warning (may already be initialized):', e.message);
+          }
+        } else {
+          console.warn('[Database Notice] PostgreSQL is currently offline or DATABASE_URL not yet connected. Error:', dbHealth.error);
+          console.warn('[Database Notice] Configure DATABASE_URL in environment or settings to connect to Netlify Database / PostgreSQL.');
+        }
+      })
+      .catch((err) => {
+        console.error('[Database Startup Check Error]', err);
+      });
   });
 }
 

@@ -8,6 +8,25 @@ import { RolesPage } from './pages/admin/RolesPage.js';
 import { BusinessSettingsPage } from './pages/admin/BusinessSettingsPage.js';
 import { AuditLogsPage } from './pages/admin/AuditLogsPage.js';
 import { ModulePlaceholderPage } from './pages/admin/ModulePlaceholderPage.js';
+import { CategoriesPage } from './pages/master/CategoriesPage.js';
+import { CoatingsPage } from './pages/master/CoatingsPage.js';
+import { BasesPage } from './pages/master/BasesPage.js';
+import { PrimaryItemsPage } from './pages/master/PrimaryItemsPage.js';
+import { UniqueItemsPage } from './pages/master/UniqueItemsPage.js';
+import { OpticalBatchesPage } from './pages/master/OpticalBatchesPage.js';
+import { PartiesPage } from './pages/parties/PartiesPage.js';
+import { PurchaseInvoicesPage } from './pages/purchases/PurchaseInvoicesPage.js';
+import { PurchaseLotsPage } from './pages/purchases/PurchaseLotsPage.js';
+import { SupplierLedgerPage } from './pages/parties/SupplierLedgerPage.js';
+import { CustomerLedgerPage } from './pages/parties/CustomerLedgerPage.js';
+import { SalesOrdersPage } from './pages/sales/SalesOrdersPage.js';
+import { SalesInvoicesPage } from './pages/sales/SalesInvoicesPage.js';
+import { SalesReturnsPage } from './pages/sales/SalesReturnsPage.js';
+import { PurchaseReturnsPage } from './pages/purchases/PurchaseReturnsPage.js';
+import { CustomerReceiptsPage } from './pages/accounts/CustomerReceiptsPage.js';
+import { SupplierPaymentsPage } from './pages/accounts/SupplierPaymentsPage.js';
+import { OutstandingAgingPage } from './pages/accounts/OutstandingAgingPage.js';
+import { ReportsCenterPage } from './pages/reports/ReportsCenterPage.js';
 import { RefreshCw, ShieldCheck } from 'lucide-react';
 
 const AppContent: React.FC = () => {
@@ -49,24 +68,74 @@ const AppContent: React.FC = () => {
         return 'Barcode Format & Labeling';
       case '/admin/audit-logs':
         return 'Immutable Audit Trail';
+      case '/master/categories':
+        return 'Optical Categories Master';
+      case '/master/bases':
+        return 'Optical Bases & Compatibility';
+      case '/master/coatings':
+        return 'Optical Coatings Master';
+      case '/master/primary-items':
+        return 'Primary Items Master';
+      case '/master/unique-items':
+        return 'Unique Items & Commercial SKUs';
+      case '/master/batches':
+        return 'Optical Batches & Permanent Barcodes';
       case '/sales/pos':
         return 'Optical POS & Billing';
       case '/sales/prescriptions':
         return 'Prescriptions (Rx) Management';
       case '/sales/orders':
         return 'Sales Invoices & Orders';
+      case '/sales/returns':
+        return 'Sales Returns & Credit Notes';
       case '/purchases/orders':
-        return 'Purchase Orders & Bills';
+      case '/purchases/invoices':
+      case '/purchase/invoices':
+        return 'Purchase Invoices & Bills';
+      case '/purchase/returns':
+      case '/purchases/returns':
+        return 'Purchase Returns & Debit Notes';
+      case '/purchase/lots':
+      case '/purchases/lots':
+        return 'Purchase Lots & Costing';
       case '/inventory/frames':
         return 'Frames & Sunglasses Catalog';
       case '/inventory/lenses':
         return 'Ophthalmic & Contact Lenses';
+      case '/parties':
+        return 'Party Master Directory';
       case '/parties/customers':
-        return 'Customer Master & History';
+        return 'Customer Master Directory';
       case '/parties/suppliers':
-        return 'Suppliers & Vendors';
+        return 'Supplier & Vendor Directory';
+      case '/parties/ledger':
+      case '/parties/supplier-ledger':
+        return 'Supplier & Party Ledger';
+      case '/accounts/receipts':
+        return 'Customer Receipts & Advances';
+      case '/accounts/payments':
+        return 'Supplier Payments & Advances';
+      case '/accounts/outstanding':
+        return 'Outstanding Aging & Party Statements';
       case '/accounts/ledgers':
         return 'Accounting & Financial Ledgers';
+      case '/reports':
+      case '/reports/inventory':
+        return 'Inventory Stock Matrix Report';
+      case '/reports/stock-ledger':
+        return 'Stock Movement Ledger Register';
+      case '/reports/sales':
+        return 'Sales Invoices & Returns Register';
+      case '/reports/purchases':
+        return 'Purchase Invoices & Debit Notes Register';
+      case '/reports/outstanding':
+        return 'Outstanding Aging & Credit Limits';
+      case '/reports/party-statement':
+        return 'Party Statement (Ledger)';
+      case '/reports/payments':
+        return 'Payments & Receipts Register';
+      case '/reports/analytics':
+        return 'Product & Optical Power Analytics';
       default:
         return 'Optical Billing & Management';
     }
@@ -90,24 +159,30 @@ const AppContent: React.FC = () => {
       case '/admin/audit-logs':
         return <AuditLogsPage />;
 
+      // Master Data Submodules
+      case '/master/categories':
+        return <CategoriesPage />;
+      case '/master/bases':
+        return <BasesPage />;
+      case '/master/coatings':
+        return <CoatingsPage />;
+      case '/master/primary-items':
+        return <PrimaryItemsPage />;
+      case '/master/unique-items':
+        return <UniqueItemsPage />;
+      case '/master/batches':
+        return <OpticalBatchesPage />;
+
       // Sales Submodules
-      case '/sales/pos':
       case '/sales/orders':
-        return (
-          <ModulePlaceholderPage
-            moduleName="Sales & POS Billing"
-            moduleKey="sales"
-            description="Complete optical billing engine supporting barcode scanning, mixed prescription orders, discount approvals, multi-payment receipts, and GST invoices."
-            roadmapItems={[
-              'Fast Barcode Scanning & SKU Search',
-              'Prescription (Rx) & Optometrist Tagging',
-              'Itemized CGST, SGST & IGST Calculation',
-              'Thermal & A4 GST Invoice PDF Generation',
-              'Real-Time Stock Depletion on Final Invoice',
-              'Advance Payments & Balance Ledger Tracking',
-            ]}
-          />
-        );
+        return <SalesOrdersPage />;
+      case '/sales/invoices':
+      case '/sales/pos':
+        return <SalesInvoicesPage />;
+      case '/sales/returns':
+        return <SalesReturnsPage />;
+      case '/sales/customer-ledger':
+        return <CustomerLedgerPage />;
 
       case '/sales/prescriptions':
         return (
@@ -128,77 +203,63 @@ const AppContent: React.FC = () => {
 
       // Purchase Submodules
       case '/purchases/orders':
-        return (
-          <ModulePlaceholderPage
-            moduleName="Purchase & Vendor Bills"
-            moduleKey="purchase"
-            description="Procurement workflow for frame distributors and lens manufacturers with Inward Goods Receipt Notes (GRN) and automated cost calculation."
-            roadmapItems={[
-              'Purchase Order (PO) Drafting & Vendor Sending',
-              'Goods Receipt Note (GRN) Verification with Batching',
-              'Input Tax Credit (ITC) GST Breakdown',
-              'Supplier Credit Terms & Due Date Tracking',
-              'Weighted Average Cost (WAC) Stock Valuation',
-              'Supplier Return with Debit Note Generation',
-            ]}
-          />
-        );
+      case '/purchases/invoices':
+      case '/purchase/invoices':
+        return <PurchaseInvoicesPage />;
+
+      case '/purchases/returns':
+      case '/purchase/returns':
+        return <PurchaseReturnsPage />;
+
+      case '/purchases/lots':
+      case '/purchase/lots':
+        return <PurchaseLotsPage />;
 
       // Inventory Submodules
+      case '/inventory/stock':
       case '/inventory/frames':
       case '/inventory/lenses':
-        return (
-          <ModulePlaceholderPage
-            moduleName="Optical Inventory & Stock Control"
-            moduleKey="inventory"
-            description="Precision inventory management for spectacle frames, ophthalmic uncut & finished lenses, contact lenses, and sunglasses with serial barcode tracking."
-            roadmapItems={[
-              'Barcode Generation & 50x25 Thermal Label Printing',
-              'Brand, Model, Color, Eye Size & Bridge Dimensions',
-              'Power Grid Matrix for Single Vision, Bifocal & Progressive Lenses',
-              'Batch/Lot Expiry Tracking for Contact Lens Solutions',
-              'Minimum Reorder Alerts & Negative Stock Prevention',
-              'Inter-Branch Stock Transfer with Gate Pass',
-            ]}
-          />
-        );
+        return <ReportsCenterPage initialTab="inventory" />;
 
       // Parties Submodules
-      case '/parties/customers':
+      case '/parties':
+        return <PartiesPage initialType="ALL" />;
       case '/parties/suppliers':
-        return (
-          <ModulePlaceholderPage
-            moduleName="Party Master & Customer Ledgers"
-            moduleKey="parties"
-            description="Centralized directory for patients, retail customers, suppliers, and ophthalmologists with running balances and contact history."
-            roadmapItems={[
-              'Customer Profile with Eye Clinic History',
-              'Supplier Master with GSTIN & Bank Verification',
-              'Doctor / Referral Commission Management',
-              'Detailed Statement of Account & Outstanding Aging',
-              'Payment Reminders via SMS & WhatsApp API',
-              'Credit Limit Enforcement during Invoice Creation',
-            ]}
-          />
-        );
+        return <PartiesPage initialType="SUPPLIER" />;
+      case '/parties/customers':
+        return <PartiesPage initialType="CUSTOMER" />;
+      case '/parties/ledger':
+      case '/parties/supplier-ledger':
+        return <SupplierLedgerPage />;
 
       // Accounts Submodules
+      case '/accounts/receipts':
+        return <CustomerReceiptsPage />;
+      case '/accounts/payments':
+        return <SupplierPaymentsPage />;
+      case '/accounts/outstanding':
+        return <OutstandingAgingPage onNavigate={setCurrentPath} />;
       case '/accounts/ledgers':
-        return (
-          <ModulePlaceholderPage
-            moduleName="Double-Entry Financial Accounting"
-            moduleKey="accounts"
-            description="Automatic chart of accounts synchronization with Sales, Purchases, Cash/Bank payments, and GST returns (GSTR-1, GSTR-3B)."
-            roadmapItems={[
-              'Automated Journal Entry on Invoice Finalization',
-              'Cash Book & Multi-Bank Account Reconciliation',
-              'GST Returns Export (GSTR-1 JSON, GSTR-3B Summary)',
-              'Profit & Loss Statement (P&L) with Real COGS',
-              'Balance Sheet & Trial Balance',
-              'Financial Year-End Closing & Balance Carry-Forward',
-            ]}
-          />
-        );
+        return <ReportsCenterPage initialTab="party-statement" />;
+
+      // Reports Center
+      case '/reports':
+      case '/reports/inventory':
+        return <ReportsCenterPage initialTab="inventory" />;
+      case '/reports/stock-ledger':
+        return <ReportsCenterPage initialTab="stock-ledger" />;
+      case '/reports/sales':
+        return <ReportsCenterPage initialTab="sales" />;
+      case '/reports/purchases':
+        return <ReportsCenterPage initialTab="purchases" />;
+      case '/reports/outstanding':
+        return <ReportsCenterPage initialTab="outstanding" />;
+      case '/reports/party-statement':
+        return <ReportsCenterPage initialTab="party-statement" />;
+      case '/reports/payments':
+        return <ReportsCenterPage initialTab="payments" />;
+      case '/reports/analytics':
+        return <ReportsCenterPage initialTab="analytics" />;
 
       default:
         return <DashboardPage onNavigate={setCurrentPath} />;
