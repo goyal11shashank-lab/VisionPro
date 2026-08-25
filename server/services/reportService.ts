@@ -117,7 +117,7 @@ export class ReportService {
     // Search term
     if (filters.search) {
       const q = `%${filters.search.trim()}%`;
-      conditions.push(`(b.barcode ILIKE $${paramIndex} OR u.name ILIKE $${paramIndex} OR u.sku ILIKE $${paramIndex} OR p.name ILIKE $${paramIndex})`);
+      conditions.push(`(b.barcode ILIKE $${paramIndex} OR u.name ILIKE $${paramIndex} OR u.code ILIKE $${paramIndex} OR p.name ILIKE $${paramIndex})`);
       params.push(q);
       paramIndex++;
     }
@@ -158,7 +158,7 @@ export class ReportService {
         b.side,
         u.id AS unique_item_id,
         u.name AS unique_item_name,
-        u.sku,
+        u.code AS sku,
         u.mrp,
         p.id AS primary_item_id,
         p.name AS primary_item_name,
@@ -288,7 +288,7 @@ export class ReportService {
          b.add,
          b.side,
          u.name AS unique_item_name,
-         u.sku,
+         u.code AS sku,
          c.name AS category_name,
          sl.transaction_type,
          sl.document_type,
@@ -547,12 +547,13 @@ export class ReportService {
       `SELECT
          COUNT(pil.id) AS total_lines,
          COALESCE(SUM(pil.quantity), 0) AS total_quantity,
-         COALESCE(SUM(pil.total_amount), 0) AS total_amount
+         COALESCE(SUM(pil.line_total), 0) AS total_amount
        FROM purchase_invoice_lines pil
        JOIN purchase_invoices pi ON pil.purchase_invoice_id = pi.id
        JOIN parties p ON pi.supplier_party_id = p.id
        JOIN unique_items u ON pil.unique_item_id = u.id
-       LEFT JOIN optical_batches b ON pil.batch_id = b.id
+       LEFT JOIN purchase_invoice_line_batches pilb ON pil.id = pilb.purchase_invoice_line_id
+       LEFT JOIN optical_batches b ON pilb.batch_id = b.id
        WHERE ${whereClause}`,
       params
     );
@@ -572,7 +573,7 @@ export class ReportService {
          pi.invoice_date,
          p.name AS supplier_name,
          u.name AS unique_item_name,
-         u.sku,
+         u.code AS sku,
          b.barcode,
          b.sph,
          b.cyl,
@@ -580,17 +581,18 @@ export class ReportService {
          b.add,
          b.side,
          pil.quantity,
-         pil.unit_cost,
-         pil.discount_percent,
-         pil.tax_rate,
+         pil.rate AS unit_cost,
+         pil.discount_value AS discount_percent,
+         pil.gst_rate AS tax_rate,
          pil.tax_amount,
-         pil.total_amount,
+         pil.line_total AS total_amount,
          pi.status
        FROM purchase_invoice_lines pil
        JOIN purchase_invoices pi ON pil.purchase_invoice_id = pi.id
        JOIN parties p ON pi.supplier_party_id = p.id
        JOIN unique_items u ON pil.unique_item_id = u.id
-       LEFT JOIN optical_batches b ON pil.batch_id = b.id
+       LEFT JOIN purchase_invoice_line_batches pilb ON pil.id = pilb.purchase_invoice_line_id
+       LEFT JOIN optical_batches b ON pilb.batch_id = b.id
        WHERE ${whereClause}
        ORDER BY pi.invoice_date DESC, pil.id ASC
        LIMIT $${paramIndex} OFFSET $${paramIndex + 1}`,
@@ -929,12 +931,13 @@ export class ReportService {
       `SELECT
          COUNT(sil.id) AS total_lines,
          COALESCE(SUM(sil.quantity), 0) AS total_quantity,
-         COALESCE(SUM(sil.total_amount), 0) AS total_amount
+         COALESCE(SUM(sil.line_total), 0) AS total_amount
        FROM sales_invoice_lines sil
        JOIN sales_invoices si ON sil.sales_invoice_id = si.id
        JOIN parties p ON si.party_id = p.id
        JOIN unique_items u ON sil.unique_item_id = u.id
-       LEFT JOIN optical_batches b ON sil.batch_id = b.id
+       LEFT JOIN sales_invoice_line_batches silb ON sil.id = silb.sales_invoice_line_id
+       LEFT JOIN optical_batches b ON silb.batch_id = b.id
        WHERE ${whereClause}`,
       params
     );
@@ -954,7 +957,7 @@ export class ReportService {
          si.invoice_date,
          p.name AS customer_name,
          u.name AS unique_item_name,
-         u.sku,
+         u.code AS sku,
          b.barcode,
          b.sph,
          b.cyl,
@@ -962,17 +965,18 @@ export class ReportService {
          b.add,
          b.side,
          sil.quantity,
-         sil.unit_price,
-         sil.discount_percent,
-         sil.tax_rate,
+         sil.rate AS unit_price,
+         sil.discount_value AS discount_percent,
+         sil.gst_rate AS tax_rate,
          sil.tax_amount,
-         sil.total_amount,
+         sil.line_total AS total_amount,
          si.status
        FROM sales_invoice_lines sil
        JOIN sales_invoices si ON sil.sales_invoice_id = si.id
        JOIN parties p ON si.party_id = p.id
        JOIN unique_items u ON sil.unique_item_id = u.id
-       LEFT JOIN optical_batches b ON sil.batch_id = b.id
+       LEFT JOIN sales_invoice_line_batches silb ON sil.id = silb.sales_invoice_line_id
+       LEFT JOIN optical_batches b ON silb.batch_id = b.id
        WHERE ${whereClause}
        ORDER BY si.invoice_date DESC, sil.id ASC
        LIMIT $${paramIndex} OFFSET $${paramIndex + 1}`,
@@ -1114,7 +1118,7 @@ export class ReportService {
   static async getOutstandingReport(
     businessId: string,
     partyType: 'CUSTOMER' | 'SUPPLIER',
-    filters: PaginationParams & { search?: string }
+    filters: PaginationParams & { search?: string } = {}
   ) {
     const page = Math.max(1, Number(filters.page) || 1);
     const limit = Math.min(500, Math.max(1, Number(filters.limit) || 50));
@@ -1124,6 +1128,8 @@ export class ReportService {
     const ledgerTable = isCustomer ? 'customer_ledgers' : 'supplier_ledgers';
     const invoiceTable = isCustomer ? 'sales_invoices' : 'purchase_invoices';
     const returnTable = isCustomer ? 'sales_returns' : 'purchase_returns';
+    const invPartyCol = isCustomer ? 'party_id' : 'supplier_party_id';
+    const retPartyCol = isCustomer ? 'party_id' : 'supplier_party_id';
 
     const conditions: string[] = ['p.business_id = $1'];
     const params: any[] = [businessId];
@@ -1169,12 +1175,12 @@ export class ReportService {
          COALESCE((
            SELECT SUM(grand_total)
            FROM ${invoiceTable} inv
-           WHERE (CASE WHEN '${invoiceTable}' = 'purchase_invoices' THEN inv.supplier_party_id ELSE inv.party_id END) = p.id AND inv.business_id = $1 AND inv.status = 'POSTED'
+           WHERE inv.${invPartyCol} = p.id AND inv.business_id = $1 AND inv.status = 'POSTED'
          ), 0) AS total_invoiced,
          COALESCE((
            SELECT SUM(grand_total)
            FROM ${returnTable} ret
-           WHERE (CASE WHEN '${returnTable}' = 'purchase_returns' THEN ret.supplier_party_id ELSE ret.party_id END) = p.id AND ret.business_id = $1 AND ret.status = 'POSTED'
+           WHERE ret.${retPartyCol} = p.id AND ret.business_id = $1 AND ret.status = 'POSTED'
          ), 0) AS total_returned,
          COALESCE((
            SELECT SUM(CASE
@@ -1189,7 +1195,7 @@ export class ReportService {
              JOIN payments pmt ON pmt.id = pa.payment_id
              WHERE pa.document_id = inv.id AND pa.status = 'ACTIVE' AND pmt.status = 'POSTED'
            ) pa_sub ON true
-           WHERE (CASE WHEN '${invoiceTable}' = 'purchase_invoices' THEN inv.supplier_party_id ELSE inv.party_id END) = p.id AND inv.business_id = $1 AND inv.status = 'POSTED' AND (inv.grand_total - COALESCE(pa_sub.paid_amount, 0)) > 0
+           WHERE inv.${invPartyCol} = p.id AND inv.business_id = $1 AND inv.status = 'POSTED' AND (inv.grand_total - COALESCE(pa_sub.paid_amount, 0)) > 0
          ), 0) AS overdue_balance
        FROM parties p
        WHERE ${whereClause}
@@ -1569,19 +1575,19 @@ export class ReportService {
       `SELECT
          u.id AS unique_item_id,
          u.name AS unique_item_name,
-         u.sku,
+         u.code AS sku,
          c.name AS category_name,
          p.name AS brand_name,
          COUNT(DISTINCT si.id) AS invoice_count,
          COALESCE(SUM(sil.quantity), 0) AS total_quantity_sold,
-         COALESCE(SUM(sil.total_amount), 0) AS total_sales_amount
+         COALESCE(SUM(sil.line_total), 0) AS total_sales_amount
        FROM sales_invoice_lines sil
        JOIN sales_invoices si ON sil.sales_invoice_id = si.id
        JOIN unique_items u ON sil.unique_item_id = u.id
        JOIN primary_items p ON u.primary_item_id = p.id
        JOIN categories c ON p.category_id = c.id
        WHERE ${whereClause}
-       GROUP BY u.id, u.name, u.sku, c.name, p.name
+       GROUP BY u.id, u.name, u.code, c.name, p.name
        ORDER BY total_sales_amount DESC
        LIMIT $${paramIndex} OFFSET $${paramIndex + 1}`,
       [...params, limit, offset]
@@ -1644,7 +1650,8 @@ export class ReportService {
       `SELECT COUNT(DISTINCT CONCAT(b.sph, ':', b.cyl, ':', b.axis, ':', b.add, ':', b.side, ':', b.unique_item_id)) AS total_powers
        FROM sales_invoice_lines sil
        JOIN sales_invoices si ON sil.sales_invoice_id = si.id
-       JOIN optical_batches b ON sil.batch_id = b.id
+       JOIN sales_invoice_line_batches silb ON sil.id = silb.sales_invoice_line_id
+       JOIN optical_batches b ON silb.batch_id = b.id
        WHERE ${whereClause}`,
       params
     );
@@ -1653,20 +1660,21 @@ export class ReportService {
     const dataRes = await pool.query(
       `SELECT
          u.name AS unique_item_name,
-         u.sku,
+         u.code AS sku,
          b.sph,
          b.cyl,
          b.axis,
          b.add,
          b.side,
-         COALESCE(SUM(sil.quantity), 0) AS total_quantity_sold,
-         COALESCE(SUM(sil.total_amount), 0) AS total_sales_amount
+         COALESCE(SUM(silb.quantity), 0) AS total_quantity_sold,
+         COALESCE(SUM(silb.quantity * sil.rate), 0) AS total_sales_amount
        FROM sales_invoice_lines sil
        JOIN sales_invoices si ON sil.sales_invoice_id = si.id
-       JOIN optical_batches b ON sil.batch_id = b.id
+       JOIN sales_invoice_line_batches silb ON sil.id = silb.sales_invoice_line_id
+       JOIN optical_batches b ON silb.batch_id = b.id
        JOIN unique_items u ON b.unique_item_id = u.id
        WHERE ${whereClause}
-       GROUP BY u.name, u.sku, b.sph, b.cyl, b.axis, b.add, b.side
+       GROUP BY u.name, u.code, b.sph, b.cyl, b.axis, b.add, b.side
        ORDER BY total_quantity_sold DESC
        LIMIT $${paramIndex} OFFSET $${paramIndex + 1}`,
       [...params, limit, offset]

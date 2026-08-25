@@ -69,6 +69,7 @@ import {
   rolePermissions,
   userRoles,
   userBusinessAccess,
+  importSessions,
 } from '../db/schema.js';
 import { eq, and, sql, desc, inArray } from 'drizzle-orm';
 import { StockService } from '../services/stockService.js';
@@ -82,6 +83,7 @@ import { ReportService } from '../services/reportService.js';
 import { SearchService } from '../services/searchService.js';
 import { ImportValidationService } from '../services/importValidationService.js';
 import { ImportPostingService } from '../services/importPostingService.js';
+import { ColumnMappingService } from '../services/columnMappingService.js';
 import { round2 } from '../services/taxCalculationService.js';
 
 export interface ScorecardEntry {
@@ -228,10 +230,10 @@ export async function runPhase10ProductionAcceptanceSuite() {
     const [piProg] = await db.insert(primaryItems).values({ businessId: bizAId, categoryId: catProgId, baseId: baseCR39Id, name: 'Prog Standard', code: `P_PROG_${runSuffix}`, status: 'ACTIVE' }).returning();
 
     // Unique Items: HC SV, BCG SV, PG HC KT, PG HC PROG
-    const [uHCSV] = await db.insert(uniqueItems).values({ businessId: bizAId, primaryItemId: piSV.id, coatingId: coatHCId, name: 'HC SV', code: `HC_SV_${runSuffix}`, defaultPurchaseRate: '100.00', defaultSalesRate: '150.00', defaultGstRate: '5.00', status: 'ACTIVE' }).returning();
-    const [uBCGSV] = await db.insert(uniqueItems).values({ businessId: bizAId, primaryItemId: piSV.id, coatingId: coatBCGId, name: 'BCG SV', code: `BCG_SV_${runSuffix}`, defaultPurchaseRate: '150.00', defaultSalesRate: '220.00', defaultGstRate: '5.00', status: 'ACTIVE' }).returning();
-    const [uPGHCKT] = await db.insert(uniqueItems).values({ businessId: bizAId, primaryItemId: piKT.id, coatingId: coatPGId, name: 'PG HC KT', code: `PG_HC_KT_${runSuffix}`, defaultPurchaseRate: '200.00', defaultSalesRate: '300.00', defaultGstRate: '12.00', status: 'ACTIVE' }).returning();
-    const [uPGHCProg] = await db.insert(uniqueItems).values({ businessId: bizAId, primaryItemId: piProg.id, coatingId: coatPGId, name: 'PG HC PROG', code: `PG_HC_PROG_${runSuffix}`, defaultPurchaseRate: '500.00', defaultSalesRate: '800.00', defaultGstRate: '18.00', status: 'ACTIVE' }).returning();
+    const [uHCSV] = await db.insert(uniqueItems).values({ businessId: bizAId, primaryItemId: piSV.id, name: 'HC SV', code: `HC_SV_${runSuffix}`, purchaseRate: '100.00', lastPurchasePrice: '100.00', mrp: '150.00', status: 'ACTIVE' }).returning();
+    const [uBCGSV] = await db.insert(uniqueItems).values({ businessId: bizAId, primaryItemId: piSV.id, name: 'BCG SV', code: `BCG_SV_${runSuffix}`, purchaseRate: '150.00', lastPurchasePrice: '150.00', mrp: '220.00', status: 'ACTIVE' }).returning();
+    const [uPGHCKT] = await db.insert(uniqueItems).values({ businessId: bizAId, primaryItemId: piKT.id, name: 'PG HC KT', code: `PG_HC_KT_${runSuffix}`, purchaseRate: '200.00', lastPurchasePrice: '200.00', mrp: '300.00', status: 'ACTIVE' }).returning();
+    const [uPGHCProg] = await db.insert(uniqueItems).values({ businessId: bizAId, primaryItemId: piProg.id, name: 'PG HC PROG', code: `PG_HC_PROG_${runSuffix}`, purchaseRate: '500.00', lastPurchasePrice: '500.00', mrp: '800.00', status: 'ACTIVE' }).returning();
     itemHCSVId = uHCSV.id;
     itemBCGSVId = uBCGSV.id;
     itemPGHCKTId = uPGHCKT.id;
@@ -243,11 +245,11 @@ export async function runPhase10ProductionAcceptanceSuite() {
     // SV: -2.50 / -1.00
     const bSV2 = await findOrCreateOpticalBatch({ businessId: bizAId, uniqueItemId: itemHCSVId, sph: -2.50, cyl: -1.00 });
     // KT: +3.00 / -1.00 / 90 / +2.00
-    const bKT = await findOrCreateOpticalBatch({ businessId: bizAId, uniqueItemId: itemPGHCKTId, sph: 3.00, cyl: -1.00, axis: 90, addition: 2.00 });
+    const bKT = await findOrCreateOpticalBatch({ businessId: bizAId, uniqueItemId: itemPGHCKTId, sph: 3.00, cyl: -1.00, axis: 90, add: 2.00 });
     // PROG: -2.00 / -1.00 / 90 / +2.00 / R
-    const bProgR = await findOrCreateOpticalBatch({ businessId: bizAId, uniqueItemId: itemPGHCProgId, sph: -2.00, cyl: -1.00, axis: 90, addition: 2.00, side: 'R' });
+    const bProgR = await findOrCreateOpticalBatch({ businessId: bizAId, uniqueItemId: itemPGHCProgId, sph: -2.00, cyl: -1.00, axis: 90, add: 2.00, side: 'R' });
     // PROG: -2.00 / -1.00 / 90 / +2.00 / L
-    const bProgL = await findOrCreateOpticalBatch({ businessId: bizAId, uniqueItemId: itemPGHCProgId, sph: -2.00, cyl: -1.00, axis: 90, addition: 2.00, side: 'L' });
+    const bProgL = await findOrCreateOpticalBatch({ businessId: bizAId, uniqueItemId: itemPGHCProgId, sph: -2.00, cyl: -1.00, axis: 90, add: 2.00, side: 'L' });
 
     batchSV1Id = bSV1.batch.id;
     batchSV2Id = bSV2.batch.id;
@@ -259,7 +261,6 @@ export async function runPhase10ProductionAcceptanceSuite() {
     await StockService.recordOpeningStock(bizAId, {
       batchId: batchSV1Id,
       quantity: 50.0,
-      rate: 100.0,
     }, adminUserId);
 
     // Parties: Customer, Supplier, BOTH
@@ -519,12 +520,11 @@ export async function runPhase10ProductionAcceptanceSuite() {
   await assertTest('6. Reservation Test (Starting 16/0/16 -> Reserve 5 -> 16/5/11; Reserve 12 -> REJECT)', async () => {
     // Current stock: Physical = 16, Reserved = 0, Available = 16
     const resResult = await StockService.createReservation(bizAId, {
-      uniqueItemId: itemHCSVId,
       batchId: batchSV2Id,
       quantity: 5.0,
       notes: 'Customer hold reservation',
     }, adminUserId);
-    reservation1Id = resResult.reservation?.id || resResult.id;
+    reservation1Id = resResult.reservation?.id;
 
     const [stock] = await db
       .select()
@@ -542,7 +542,6 @@ export async function runPhase10ProductionAcceptanceSuite() {
     let rejected = false;
     try {
       await StockService.createReservation(bizAId, {
-        uniqueItemId: itemHCSVId,
         batchId: batchSV2Id,
         quantity: 12.0,
         notes: 'Excessive reservation attempt',
@@ -586,7 +585,6 @@ export async function runPhase10ProductionAcceptanceSuite() {
             {
               batchId: batchSV2Id,
               quantity: 5.0,
-              rate: 150.0,
             },
           ],
         },
@@ -645,7 +643,6 @@ export async function runPhase10ProductionAcceptanceSuite() {
             {
               batchId: batchSV2Id,
               quantity: 3.0,
-              rate: 150.0,
             },
           ],
         },
@@ -696,7 +693,7 @@ export async function runPhase10ProductionAcceptanceSuite() {
     const s1 = await SalesService.createSalesInvoice(bizAId, {
       partyId: customerPartyId,
       invoiceDate: new Date(),
-      lines: [{ uniqueItemId: itemBCGSVId, quantity: 1.0, rate: 120.0, gstRate: 5.0, batches: [{ batchId: batchSV1Id, quantity: 1.0, rate: 120.0 }] }],
+      lines: [{ uniqueItemId: itemBCGSVId, quantity: 1.0, rate: 120.0, gstRate: 5.0, batches: [{ batchId: batchSV1Id, quantity: 1.0 }] }],
     }, adminUserId);
     await SalesService.postSalesInvoice(bizAId, s1.id, adminUserId);
 
@@ -710,7 +707,7 @@ export async function runPhase10ProductionAcceptanceSuite() {
     const s2 = await SalesService.createSalesInvoice(bizAId, {
       partyId: customerPartyId,
       invoiceDate: new Date(),
-      lines: [{ uniqueItemId: itemBCGSVId, quantity: 1.0, rate: 130.0, gstRate: 5.0, batches: [{ batchId: batchSV1Id, quantity: 1.0, rate: 130.0 }] }],
+      lines: [{ uniqueItemId: itemBCGSVId, quantity: 1.0, rate: 130.0, gstRate: 5.0, batches: [{ batchId: batchSV1Id, quantity: 1.0 }] }],
     }, adminUserId);
     await SalesService.postSalesInvoice(bizAId, s2.id, adminUserId);
 
@@ -750,7 +747,7 @@ export async function runPhase10ProductionAcceptanceSuite() {
           quantity: 1.0,
           rate: 10000.0,
           gstRate: 0.0,
-          batches: [{ batchId: batchSV1Id, quantity: 1.0, rate: 10000.0 }],
+          batches: [{ batchId: batchSV1Id, quantity: 1.0 }],
         },
       ],
     }, adminUserId);
@@ -816,6 +813,22 @@ export async function runPhase10ProductionAcceptanceSuite() {
   // SECTION 11: UNALLOCATED PAYMENT TEST
   // -------------------------------------------------------------------------
   await assertTest('11. Unallocated Payment Test (Receipt 10,000, Allocate 6,000 -> Unallocated 4,000)', async () => {
+    // Create fresh invoice of 10,000 for allocation
+    const invForAlloc = await SalesService.createSalesInvoice(bizAId, {
+      partyId: customerPartyId,
+      invoiceDate: new Date(),
+      lines: [
+        {
+          uniqueItemId: itemBCGSVId,
+          quantity: 1.0,
+          rate: 10000.0,
+          gstRate: 0.0,
+          batches: [{ batchId: batchSV1Id, quantity: 1.0 }],
+        },
+      ],
+    }, adminUserId);
+    await SalesService.postSalesInvoice(bizAId, invForAlloc.id, adminUserId);
+
     const unallocPay = await PaymentService.createPayment(bizAId, {
       partyId: customerPartyId,
       paymentType: 'RECEIPT',
@@ -825,7 +838,7 @@ export async function runPhase10ProductionAcceptanceSuite() {
       allocations: [
         {
           documentType: 'SALES_INVOICE',
-          documentId: paymentInvoiceId, // Allocate 6000 towards previous
+          documentId: invForAlloc.id,
           allocatedAmount: 6000.0,
         },
       ],
@@ -833,7 +846,9 @@ export async function runPhase10ProductionAcceptanceSuite() {
 
     const [pRow] = await db.select().from(payments).where(eq(payments.id, unallocPay.id));
     if (Number(pRow.amount) !== 10000) throw new Error(`Payment amount mismatch: ${pRow.amount}`);
-    if (Number(pRow.allocatedAmount) !== 6000) throw new Error(`Allocated amount mismatch: ${pRow.allocatedAmount}`);
+    const allocs = await db.select().from(paymentAllocations).where(eq(paymentAllocations.paymentId, unallocPay.id));
+    const totalAllocated = allocs.reduce((sum, a) => sum + Number(a.allocatedAmount), 0);
+    if (totalAllocated !== 6000) throw new Error(`Allocated amount mismatch: ${totalAllocated}`);
     if (Number(pRow.unallocatedAmount) !== 4000) throw new Error(`Unallocated amount mismatch: ${pRow.unallocatedAmount}`);
   });
 
@@ -987,13 +1002,12 @@ export async function runPhase10ProductionAcceptanceSuite() {
     await StockService.recordOpeningStock(bizAId, {
       batchId: bConc.id,
       quantity: 1.0,
-      rate: 100.0,
     }, adminUserId);
 
     // Fire 2 concurrent reservations for 1.0
     const [res1, res2] = await Promise.allSettled([
-      StockService.createReservation(bizAId, { uniqueItemId: itemHCSVId, batchId: bConc.id, quantity: 1.0, notes: 'Thread 1' }, adminUserId),
-      StockService.createReservation(bizAId, { uniqueItemId: itemHCSVId, batchId: bConc.id, quantity: 1.0, notes: 'Thread 2' }, adminUserId),
+      StockService.createReservation(bizAId, { batchId: bConc.id, quantity: 1.0, notes: 'Thread 1' }, adminUserId),
+      StockService.createReservation(bizAId, { batchId: bConc.id, quantity: 1.0, notes: 'Thread 2' }, adminUserId),
     ]);
 
     const successes = [res1, res2].filter(r => r.status === 'fulfilled');
@@ -1054,59 +1068,105 @@ export async function runPhase10ProductionAcceptanceSuite() {
     // 1. Purchase Excel Validation & Posting
     const pRows = [
       {
-        'Category Code': 'SV',
-        'Item Code': `HC_SV_${runSuffix}`,
-        'SPH': -2.50,
-        'CYL': -1.00,
-        'Quantity': 6.0,
-        'Rate': 100.0,
-        'GST %': 5.0,
+        'Supplier': `TEST SUPPLIER ${runSuffix}`,
+        'Supplier Invoice Number': `BILL-EXCEL-${runSuffix}`,
+        'Supplier Invoice Date': '2026-08-20',
+        'Invoice Date': '2026-08-20',
+        'Unique Item': `HC_SV_${runSuffix}`,
+        'SPH': '-2.50',
+        'CYL': '-1.00',
+        'Quantity': '6.0',
+        'Rate': '100.00',
+        'GST Mode': 'INTRA_STATE',
       },
     ];
 
-    const valRes = await ImportValidationService.validateRows(bizAId, 'PURCHASE', pRows);
-    if (!valRes.valid) {
-      throw new Error(`Excel purchase validation failed: ${valRes.errors.join(', ')}`);
+    const pMapping = ColumnMappingService.detectMapping('PURCHASE', Object.keys(pRows[0])).columnMapping;
+    const valRes = await ImportValidationService.validateImportData(
+      bizAId,
+      'PURCHASE',
+      pRows,
+      pMapping
+    );
+    if (!valRes.canPost || valRes.invalidRows > 0) {
+      throw new Error(`Excel purchase validation failed: ${valRes.errorSummary.map(e => e.message).join(', ')}`);
     }
 
-    const postRes = await ImportPostingService.postImport(bizAId, 'PURCHASE', valRes.validatedRows, {
-      partyId: supplierPartyId,
-      invoiceNumber: `IMP-PUR-${runSuffix}`,
-      invoiceDate: new Date().toISOString().split('T')[0],
-      paymentMode: 'CREDIT',
-    }, adminUserId);
+    const [pSession] = await db
+      .insert(importSessions)
+      .values({
+        businessId: bizAId,
+        importType: 'PURCHASE',
+        fileName: 'test_purchase.xlsx',
+        fileSize: '1024',
+        status: 'READY',
+        totalRows: String(valRes.totalRows),
+        validRows: String(valRes.validRows),
+        invalidRows: String(valRes.invalidRows),
+        duplicateRows: String(valRes.duplicateRows),
+        postedRows: '0',
+        failedRows: '0',
+        columnMapping: pMapping,
+        previewData: valRes,
+        errorSummary: valRes.errorSummary,
+        createdBy: adminUserId,
+      })
+      .returning();
 
-    if (!postRes.success) {
-      throw new Error(`Excel purchase posting failed: ${postRes.error}`);
+    const postRes = await ImportPostingService.postImportSession(bizAId, pSession.id, adminUserId);
+    if (postRes.status !== 'COMPLETED') {
+      throw new Error(`Excel purchase posting failed: ${postRes.errors.map(e => e.message).join(', ')}`);
     }
 
     // 2. Sales Excel Validation & Posting
     const sRows = [
       {
-        'Category Code': 'SV',
-        'Item Code': `HC_SV_${runSuffix}`,
-        'SPH': -2.50,
-        'CYL': -1.00,
-        'Quantity': 2.0,
-        'Rate': 150.0,
-        'GST %': 5.0,
+        'Customer': `TEST CUSTOMER ${runSuffix}`,
+        'Invoice Date': '2026-08-20',
+        'Unique Item': `HC_SV_${runSuffix}`,
+        'SPH': '-2.50',
+        'CYL': '-1.00',
+        'Quantity': '2.0',
+        'Rate': '150.00',
+        'GST Mode': 'INTRA_STATE',
       },
     ];
 
-    const sValRes = await ImportValidationService.validateRows(bizAId, 'SALES', sRows);
-    if (!sValRes.valid) {
-      throw new Error(`Excel sales validation failed: ${sValRes.errors.join(', ')}`);
+    const sMapping = ColumnMappingService.detectMapping('SALES_INVOICE', Object.keys(sRows[0])).columnMapping;
+    const sValRes = await ImportValidationService.validateImportData(
+      bizAId,
+      'SALES_INVOICE',
+      sRows,
+      sMapping
+    );
+    if (!sValRes.canPost || sValRes.invalidRows > 0) {
+      throw new Error(`Excel sales validation failed: ${sValRes.errorSummary.map(e => e.message).join(', ')}`);
     }
 
-    const sPostRes = await ImportPostingService.postImport(bizAId, 'SALES', sValRes.validatedRows, {
-      partyId: customerPartyId,
-      invoiceNumber: `IMP-SAL-${runSuffix}`,
-      invoiceDate: new Date().toISOString().split('T')[0],
-      paymentMode: 'CREDIT',
-    }, adminUserId);
+    const [sSession] = await db
+      .insert(importSessions)
+      .values({
+        businessId: bizAId,
+        importType: 'SALES_INVOICE',
+        fileName: 'test_sales.xlsx',
+        fileSize: '1024',
+        status: 'READY',
+        totalRows: String(sValRes.totalRows),
+        validRows: String(sValRes.validRows),
+        invalidRows: String(sValRes.invalidRows),
+        duplicateRows: String(sValRes.duplicateRows),
+        postedRows: '0',
+        failedRows: '0',
+        columnMapping: sMapping,
+        previewData: sValRes,
+        errorSummary: sValRes.errorSummary,
+        createdBy: adminUserId,
+      })
+      .returning();
 
-    if (!sPostRes.success) {
-      throw new Error(`Excel sales posting failed: ${sPostRes.error}`);
+    const sPostRes = await ImportPostingService.postImportSession(bizAId, sSession.id, adminUserId);
+    if (sPostRes.status !== 'COMPLETED') {
+      throw new Error(`Excel sales posting failed: ${sPostRes.errors.map(e => e.message).join(', ')}`);
     }
   });
 
@@ -1120,7 +1180,7 @@ export async function runPhase10ProductionAcceptanceSuite() {
     const intraSale = await SalesService.createSalesInvoice(bizAId, {
       partyId: customerPartyId, // Delhi
       invoiceDate: new Date(),
-      lines: [{ uniqueItemId: itemHCSVId, quantity: 1.0, rate: 100.0, gstRate: 5.0, batches: [{ batchId: batchSV1Id, quantity: 1.0, rate: 100.0 }] }],
+      lines: [{ uniqueItemId: itemHCSVId, quantity: 1.0, rate: 100.0, gstRate: 5.0, batches: [{ batchId: batchSV1Id, quantity: 1.0 }] }],
     }, adminUserId);
 
     const [intraRow] = await db.select().from(salesInvoices).where(eq(salesInvoices.id, intraSale.id));
@@ -1132,7 +1192,7 @@ export async function runPhase10ProductionAcceptanceSuite() {
     const interSale = await SalesService.createSalesInvoice(bizAId, {
       partyId: bothPartyId, // Maharashtra
       invoiceDate: new Date(),
-      lines: [{ uniqueItemId: itemHCSVId, quantity: 1.0, rate: 100.0, gstRate: 5.0, batches: [{ batchId: batchSV1Id, quantity: 1.0, rate: 100.0 }] }],
+      lines: [{ uniqueItemId: itemHCSVId, quantity: 1.0, rate: 100.0, gstRate: 5.0, batches: [{ batchId: batchSV1Id, quantity: 1.0 }] }],
     }, adminUserId);
 
     const [interRow] = await db.select().from(salesInvoices).where(eq(salesInvoices.id, interSale.id));
@@ -1166,28 +1226,34 @@ export async function runPhase10ProductionAcceptanceSuite() {
   // SECTION 22 & 23: REPORT CROSS-CHECK & FINANCIAL INVARIANTS
   // -------------------------------------------------------------------------
   await assertTest('22 & 23. Report Cross-Check & Financial Invariants', async () => {
-    const trialBalance = await ReportService.getTrialBalance(bizAId, {
-      fromDate: '2020-01-01',
-      toDate: '2030-12-31',
-    });
-
-    if (!trialBalance || !trialBalance.rows) {
-      throw new Error('Trial balance report generation failed');
-    }
-
-    const stockSummary = await ReportService.getStockSummary(bizAId, {});
-    if (!stockSummary || !stockSummary.rows) {
-      throw new Error('Stock summary report generation failed');
+    const invReport = await ReportService.getInventoryReport(bizAId, {});
+    if (!invReport || !invReport.data) {
+      throw new Error('Inventory report generation failed');
     }
 
     // Verify Available = Physical - Reserved invariant on all stock rows
-    for (const row of stockSummary.rows) {
-      const phys = Number(row.physicalStock || row.physical_stock || 0);
-      const res = Number(row.reservedStock || row.reserved_stock || 0);
-      const avail = Number(row.availableStock || row.available_stock || 0);
+    for (const row of invReport.data) {
+      const phys = Number(row.physicalStock || 0);
+      const res = Number(row.reservedStock || 0);
+      const avail = Number(row.availableStock || 0);
       if (round2(avail) !== round2(phys - res)) {
         throw new Error(`Inventory invariant broken: Phys=${phys}, Res=${res}, Avail=${avail}`);
       }
+    }
+
+    const salesReport = await ReportService.getSalesReport(bizAId, {});
+    if (!salesReport || !salesReport.data) {
+      throw new Error('Sales report generation failed');
+    }
+
+    const purchaseReport = await ReportService.getPurchaseReport(bizAId, {});
+    if (!purchaseReport || !purchaseReport.data) {
+      throw new Error('Purchase report generation failed');
+    }
+
+    const outstandingReport = await ReportService.getOutstandingReport(bizAId, 'CUSTOMER', {});
+    if (!outstandingReport || !outstandingReport.data) {
+      throw new Error('Outstanding report generation failed');
     }
   });
 

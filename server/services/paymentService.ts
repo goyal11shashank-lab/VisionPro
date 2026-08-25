@@ -419,7 +419,15 @@ export class PaymentService {
         }
       }
 
-      // 3. Update Ledgers
+      // 3. Update Payment Master status to POSTED
+      await client.query(
+        `UPDATE payments 
+         SET status = 'POSTED', updated_at = NOW(), updated_by = $1 
+         WHERE id = $2`,
+        [userId || null, paymentId]
+      );
+
+      // 4. Update Ledgers & sync invoice payment statuses
       if (paymentType === 'RECEIPT') {
         // Lock last customer ledger
         const lastLedgerRes = await client.query(
@@ -493,14 +501,6 @@ export class PaymentService {
           await this.syncPurchaseInvoicePaymentStatus(client, businessId, alloc.document_id);
         }
       }
-
-      // 4. Update Payment Master status
-      await client.query(
-        `UPDATE payments 
-         SET status = 'POSTED', updated_at = NOW(), updated_by = $1 
-         WHERE id = $2`,
-        [userId || null, paymentId]
-      );
 
       await client.query('COMMIT');
 

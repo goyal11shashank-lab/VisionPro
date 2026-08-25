@@ -1384,7 +1384,7 @@ export const payments = pgTable('payments', {
   paymentMode: varchar('payment_mode', { length: 50 }).notNull(), // CASH, BANK, UPI, CHEQUE, OTHER
   amount: numeric('amount', { precision: 12, scale: 2 }).notNull(),
   unallocatedAmount: numeric('unallocated_amount', { precision: 12, scale: 2 }).default('0.00').notNull(),
-  referenceNumber: varchar('100'),
+  referenceNumber: varchar('reference_number', { length: 100 }),
   referenceDate: timestamp('reference_date', { withTimezone: true }),
   bankName: varchar('bank_name', { length: 255 }),
   notes: text('notes'),

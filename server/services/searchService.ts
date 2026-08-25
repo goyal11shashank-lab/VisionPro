@@ -54,6 +54,30 @@ export interface GlobalSearchResult {
 
 export class SearchService {
   /**
+   * Global Search convenience method for barcode/item resolution
+   */
+  static async globalSearch(
+    businessId: string,
+    query: string
+  ) {
+    const res = await this.search(businessId, query, [], true);
+    const exactBarcode = res.barcodes.find(b => b.isExactMatch || b.barcode.toLowerCase() === query.trim().toLowerCase());
+    return {
+      ...res,
+      exactMatch: exactBarcode ? {
+        id: exactBarcode.batchId,
+        barcode: exactBarcode.barcode,
+        sph: exactBarcode.sph,
+        cyl: exactBarcode.cyl,
+        axis: exactBarcode.axis,
+        add: exactBarcode.add,
+        side: exactBarcode.side,
+        uniqueItemId: exactBarcode.uniqueItemId,
+      } : null,
+    };
+  }
+
+  /**
    * Global Search across authorized entities within a business.
    */
   static async search(
@@ -90,7 +114,7 @@ export class SearchService {
            b.barcode,
            u.id AS unique_item_id,
            u.name AS unique_item_name,
-           u.sku,
+           u.code AS sku,
            c.code AS category_code,
            c.name AS category_name,
            b.sph,
@@ -107,7 +131,7 @@ export class SearchService {
          JOIN categories c ON b.category_id = c.id
          LEFT JOIN optical_stocks s ON (s.batch_id = b.id AND s.business_id = b.business_id)
          WHERE b.business_id = $1 
-           AND (b.barcode ILIKE $3 OR u.name ILIKE $3 OR u.sku ILIKE $3)
+           AND (b.barcode ILIKE $3 OR u.name ILIKE $3 OR u.code ILIKE $3)
          ORDER BY (LOWER(b.barcode) = LOWER($2)) DESC, b.barcode ASC
          LIMIT 10`,
         [businessId, rawQuery, likeQuery]
@@ -325,7 +349,7 @@ export class SearchService {
         `SELECT 
            u.id,
            u.name,
-           u.sku,
+           u.code AS sku,
            u.mrp,
            u.status,
            c.name AS category_name,
@@ -334,7 +358,7 @@ export class SearchService {
          JOIN primary_items p ON u.primary_item_id = p.id
          JOIN categories c ON p.category_id = c.id
          WHERE u.business_id = $1 
-           AND (u.name ILIKE $2 OR u.sku ILIKE $2 OR p.name ILIKE $2)
+           AND (u.name ILIKE $2 OR u.code ILIKE $2 OR p.name ILIKE $2)
          ORDER BY u.name ASC
          LIMIT 8`,
         [businessId, likeQuery]

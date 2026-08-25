@@ -229,7 +229,7 @@ export class ExportService {
       SELECT
         b.barcode AS "Barcode",
         u.name AS "Item Name",
-        u.sku AS "SKU",
+        u.code AS "SKU",
         c.name AS "Category",
         p.name AS "Primary Item / Brand",
         b.sph AS "SPH",
@@ -262,7 +262,7 @@ export class ExportService {
       SELECT
         b.barcode AS "Barcode",
         u.name AS "Product Name",
-        u.sku AS "SKU",
+        u.code AS "SKU",
         c.name AS "Category",
         p.name AS "Brand",
         b.sph AS "SPH",
@@ -322,7 +322,7 @@ export class ExportService {
         TO_CHAR(sl.created_at, 'YYYY-MM-DD HH24:MI:SS') AS "Date & Time",
         b.barcode AS "Barcode",
         u.name AS "Product Name",
-        u.sku AS "SKU",
+        u.code AS "SKU",
         CONCAT('SPH:', b.sph, ' CYL:', b.cyl, ' AXIS:', b.axis, ' ADD:', b.add, ' SIDE:', b.side) AS "Optical Power",
         sl.transaction_type AS "Transaction Type",
         sl.document_type AS "Document Type",
@@ -413,21 +413,22 @@ export class ExportService {
         TO_CHAR(pi.invoice_date, 'YYYY-MM-DD') AS "Invoice Date",
         p.name AS "Supplier Name",
         u.name AS "Unique Item",
-        u.sku AS "SKU",
+        u.code AS "SKU",
         COALESCE(b.barcode, 'N/A') AS "Barcode",
         CASE WHEN b.id IS NOT NULL THEN CONCAT('SPH:', b.sph, ' CYL:', b.cyl, ' AXIS:', b.axis, ' ADD:', b.add, ' SIDE:', b.side) ELSE 'N/A' END AS "Optical Power",
         pil.quantity AS "Quantity",
-        pil.unit_cost AS "Unit Cost",
-        pil.discount_percent AS "Discount %",
-        pil.tax_rate AS "Tax Rate %",
+        pil.rate AS "Unit Cost",
+        pil.discount_value AS "Discount %",
+        pil.gst_rate AS "Tax Rate %",
         pil.tax_amount AS "Tax Amount",
-        pil.total_amount AS "Line Total",
+        pil.line_total AS "Line Total",
         pi.status AS "Status"
       FROM purchase_invoice_lines pil
       JOIN purchase_invoices pi ON pil.purchase_invoice_id = pi.id
       JOIN parties p ON pi.supplier_party_id = p.id
       JOIN unique_items u ON pil.unique_item_id = u.id
-      LEFT JOIN optical_batches b ON pil.batch_id = b.id
+      LEFT JOIN purchase_invoice_line_batches pilb ON pil.id = pilb.purchase_invoice_line_id
+      LEFT JOIN optical_batches b ON pilb.batch_id = b.id
       WHERE pi.business_id = $1
     `;
     const params: any[] = [businessId];
@@ -569,21 +570,22 @@ export class ExportService {
         TO_CHAR(si.invoice_date, 'YYYY-MM-DD') AS "Invoice Date",
         p.name AS "Customer Name",
         u.name AS "Unique Item",
-        u.sku AS "SKU",
+        u.code AS "SKU",
         COALESCE(b.barcode, 'N/A') AS "Barcode",
         CASE WHEN b.id IS NOT NULL THEN CONCAT('SPH:', b.sph, ' CYL:', b.cyl, ' AXIS:', b.axis, ' ADD:', b.add, ' SIDE:', b.side) ELSE 'N/A' END AS "Optical Power",
         sil.quantity AS "Quantity",
-        sil.unit_price AS "Unit Price",
-        sil.discount_percent AS "Discount %",
-        sil.tax_rate AS "Tax Rate %",
+        sil.rate AS "Unit Price",
+        sil.discount_value AS "Discount %",
+        sil.gst_rate AS "Tax Rate %",
         sil.tax_amount AS "Tax Amount",
-        sil.total_amount AS "Line Total",
+        sil.line_total AS "Line Total",
         si.status AS "Status"
       FROM sales_invoice_lines sil
       JOIN sales_invoices si ON sil.sales_invoice_id = si.id
       JOIN parties p ON si.party_id = p.id
       JOIN unique_items u ON sil.unique_item_id = u.id
-      LEFT JOIN optical_batches b ON sil.batch_id = b.id
+      LEFT JOIN sales_invoice_line_batches silb ON sil.id = silb.sales_invoice_line_id
+      LEFT JOIN optical_batches b ON silb.batch_id = b.id
       WHERE si.business_id = $1
     `;
     const params: any[] = [businessId];
@@ -784,12 +786,12 @@ export class ExportService {
     let sql = `
       SELECT
         u.name AS "Product Name",
-        u.sku AS "SKU",
+        u.code AS "SKU",
         c.name AS "Category",
         p.name AS "Brand",
         COUNT(DISTINCT si.id) AS "Total Invoices",
         COALESCE(SUM(sil.quantity), 0) AS "Total Qty Sold",
-        COALESCE(SUM(sil.total_amount), 0) AS "Total Sales Amount"
+        COALESCE(SUM(sil.line_total), 0) AS "Total Sales Amount"
       FROM sales_invoice_lines sil
       JOIN sales_invoices si ON sil.sales_invoice_id = si.id
       JOIN unique_items u ON sil.unique_item_id = u.id
@@ -810,7 +812,7 @@ export class ExportService {
     }
 
     sql += `
-      GROUP BY u.name, u.sku, c.name, p.name
+      GROUP BY u.name, u.code, c.name, p.name
       ORDER BY "Total Sales Amount" DESC
     `;
     const res = await pool.query(sql, params);
@@ -821,17 +823,18 @@ export class ExportService {
     let sql = `
       SELECT
         u.name AS "Product Name",
-        u.sku AS "SKU",
+        u.code AS "SKU",
         b.sph AS "SPH",
         b.cyl AS "CYL",
         b.axis AS "AXIS",
         b.add AS "ADD",
         b.side AS "SIDE",
-        COALESCE(SUM(sil.quantity), 0) AS "Total Qty Sold",
-        COALESCE(SUM(sil.total_amount), 0) AS "Total Sales Amount"
+        COALESCE(SUM(silb.quantity), 0) AS "Total Qty Sold",
+        COALESCE(SUM(silb.quantity * sil.rate), 0) AS "Total Sales Amount"
       FROM sales_invoice_lines sil
       JOIN sales_invoices si ON sil.sales_invoice_id = si.id
-      JOIN optical_batches b ON sil.batch_id = b.id
+      JOIN sales_invoice_line_batches silb ON sil.id = silb.sales_invoice_line_id
+      JOIN optical_batches b ON silb.batch_id = b.id
       JOIN unique_items u ON b.unique_item_id = u.id
       WHERE si.business_id = $1 AND si.status = 'POSTED'
     `;
@@ -848,7 +851,7 @@ export class ExportService {
     }
 
     sql += `
-      GROUP BY u.name, u.sku, b.sph, b.cyl, b.axis, b.add, b.side
+      GROUP BY u.name, u.code, b.sph, b.cyl, b.axis, b.add, b.side
       ORDER BY "Total Qty Sold" DESC
     `;
     const res = await pool.query(sql, params);

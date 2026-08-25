@@ -364,8 +364,42 @@ export async function findOrCreateOpticalBatch(input: OpticalPowerInput) {
       stock: newStock,
       isNew: true,
     };
-  } catch (txError) {
+  } catch (txError: any) {
     await client.query('ROLLBACK');
+    if (txError?.code === '23505') {
+      // Unique constraint race condition resolved: retrieve the existing record
+      const [existingBatch] = await db
+        .select()
+        .from(opticalBatches)
+        .where(
+          and(
+            eq(opticalBatches.businessId, businessId),
+            eq(opticalBatches.identityKey, fullIdentityKey)
+          )
+        )
+        .limit(1);
+
+      if (existingBatch) {
+        const [existingStock] = await db
+          .select()
+          .from(opticalStocks)
+          .where(and(eq(opticalStocks.businessId, businessId), eq(opticalStocks.batchId, existingBatch.id)))
+          .limit(1);
+
+        return {
+          batch: existingBatch,
+          stock: existingStock || {
+            id: '',
+            businessId,
+            batchId: existingBatch.id,
+            physicalStock: '0.00',
+            reservedStock: '0.00',
+            availableStock: '0.00',
+          },
+          isNew: false,
+        };
+      }
+    }
     throw txError;
   } finally {
     client.release();

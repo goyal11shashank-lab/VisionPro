@@ -449,17 +449,17 @@ export class DashboardService {
         `SELECT 
            u.id AS unique_item_id,
            u.name,
-           u.sku,
+           u.code AS sku,
            c.name AS category,
            COALESCE(SUM(sil.quantity), 0) AS quantity_sold,
-           COALESCE(SUM(sil.total_amount), 0) AS total_sales
+           COALESCE(SUM(sil.line_total), 0) AS total_sales
          FROM sales_invoice_lines sil
          JOIN sales_invoices si ON sil.sales_invoice_id = si.id
          JOIN unique_items u ON sil.unique_item_id = u.id
          JOIN primary_items p ON u.primary_item_id = p.id
          JOIN categories c ON p.category_id = c.id
          WHERE si.business_id = $1 AND si.status = 'POSTED'
-         GROUP BY u.id, u.name, u.sku, c.name
+         GROUP BY u.id, u.name, u.code, c.name
          ORDER BY total_sales DESC
          LIMIT 5`,
         [businessId]
@@ -480,17 +480,17 @@ export class DashboardService {
         `SELECT 
            u.id AS unique_item_id,
            u.name,
-           u.sku,
+           u.code AS sku,
            c.name AS category,
            COALESCE(SUM(pil.quantity), 0) AS quantity_purchased,
-           COALESCE(SUM(pil.total_amount), 0) AS total_purchases
+           COALESCE(SUM(pil.line_total), 0) AS total_purchases
          FROM purchase_invoice_lines pil
          JOIN purchase_invoices pi ON pil.purchase_invoice_id = pi.id
          JOIN unique_items u ON pil.unique_item_id = u.id
          JOIN primary_items p ON u.primary_item_id = p.id
          JOIN categories c ON p.category_id = c.id
          WHERE pi.business_id = $1 AND pi.status = 'POSTED'
-         GROUP BY u.id, u.name, u.sku, c.name
+         GROUP BY u.id, u.name, u.code, c.name
          ORDER BY total_purchases DESC
          LIMIT 5`,
         [businessId]
