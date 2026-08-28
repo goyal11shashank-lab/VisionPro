@@ -158,6 +158,27 @@ router.post(
 );
 
 /**
+ * DELETE /api/sales/orders/:id
+ * Permanently delete a sales order
+ */
+router.delete(
+  '/orders/:id',
+  requireAnyPermission(['sales:delete', 'sales.delete', 'sales:order:delete', 'sales.order.delete', 'sales:cancel', 'sales:edit']),
+  async (req: Request, res: Response) => {
+    try {
+      const businessId = req.user!.currentBusinessId;
+      const userId = req.user!.id;
+
+      const result = await SalesService.deleteSalesOrder(businessId, req.params.id, userId);
+      res.json(result);
+    } catch (err: any) {
+      console.error('[DELETE /api/sales/orders/:id Error]', err);
+      res.status(400).json({ error: 'DELETE_ORDER_FAILED', message: err.message });
+    }
+  }
+);
+
+/**
  * POST /api/sales/orders/:id/convert
  * Convert Sales Order to Sales Invoice (Partial or Full)
  */
@@ -264,6 +285,27 @@ router.get(
 );
 
 /**
+ * PUT /api/sales/invoices/:id
+ * Update an existing active sales invoice
+ */
+router.put(
+  '/invoices/:id',
+  requireAnyPermission(['sales:edit', 'sales.edit', 'sales:invoice:create', 'sales.invoice.create', 'sales:create', 'sales.create']),
+  async (req: Request, res: Response) => {
+    try {
+      const businessId = req.user!.currentBusinessId;
+      const userId = req.user!.id;
+
+      const invoice = await SalesService.updateSalesInvoice(businessId, req.params.id, req.body, userId);
+      res.json(invoice);
+    } catch (err: any) {
+      console.error('[PUT /api/sales/invoices/:id Error]', err);
+      res.status(400).json({ error: 'UPDATE_INVOICE_FAILED', message: err.message });
+    }
+  }
+);
+
+/**
  * POST /api/sales/invoices/:id/post
  * Post a DRAFT sales invoice to inventory and customer ledger
  */
@@ -302,6 +344,27 @@ router.post(
     } catch (err: any) {
       console.error('[POST /api/sales/invoices/:id/cancel Error]', err);
       res.status(400).json({ error: 'CANCEL_INVOICE_FAILED', message: err.message });
+    }
+  }
+);
+
+/**
+ * DELETE /api/sales/invoices/:id
+ * Permanently delete a sales invoice
+ */
+router.delete(
+  '/invoices/:id',
+  requireAnyPermission(['sales:delete', 'sales.delete', 'sales:invoice:delete', 'sales.invoice.delete', 'sales:cancel', 'sales:edit']),
+  async (req: Request, res: Response) => {
+    try {
+      const businessId = req.user!.currentBusinessId;
+      const userId = req.user!.id;
+
+      const result = await SalesService.deleteSalesInvoice(businessId, req.params.id, userId);
+      res.json(result);
+    } catch (err: any) {
+      console.error('[DELETE /api/sales/invoices/:id Error]', err);
+      res.status(400).json({ error: 'DELETE_INVOICE_FAILED', message: err.message });
     }
   }
 );

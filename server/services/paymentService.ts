@@ -980,6 +980,108 @@ export class PaymentService {
   }
 
   /**
+   * Permanently deletes a Payment/Receipt voucher, restoring ledgers and invoice statuses
+   */
+  static async deletePayment(
+    businessId: string,
+    paymentId: string,
+    userId?: string
+  ) {
+    const client = await pool.connect();
+    try {
+      await client.query('BEGIN');
+
+      const payRes = await client.query(
+        `SELECT * FROM payments 
+         WHERE business_id = $1 AND id = $2 
+         FOR UPDATE`,
+        [businessId, paymentId]
+      );
+
+      if (payRes.rows.length === 0) {
+        throw new Error('Payment voucher not found');
+      }
+
+      const payment = payRes.rows[0];
+      const wasPosted = payment.status === 'POSTED';
+      const paymentType = payment.payment_type;
+
+      // 1. Fetch allocated documents to sync their statuses later
+      const allocsRes = await client.query(
+        `SELECT * FROM payment_allocations 
+         WHERE business_id = $1 AND payment_id = $2`,
+        [businessId, paymentId]
+      );
+
+      // 2. Delete payment allocations
+      await client.query(
+        `DELETE FROM payment_allocations WHERE business_id = $1 AND payment_id = $2`,
+        [businessId, paymentId]
+      );
+
+      // 3. Delete ledger entries created for this payment
+      if (wasPosted) {
+        if (paymentType === 'RECEIPT') {
+          await client.query(
+            `DELETE FROM customer_ledgers 
+             WHERE business_id = $1 AND reference_type IN ('PAYMENT', 'PAYMENT_CANCEL') AND reference_id = $2`,
+            [businessId, paymentId]
+          );
+
+          // Recalculate sales invoice statuses
+          for (const alloc of allocsRes.rows) {
+            await this.syncSalesInvoicePaymentStatus(client, businessId, alloc.document_id);
+          }
+        } else {
+          await client.query(
+            `DELETE FROM supplier_ledgers 
+             WHERE business_id = $1 AND reference_type IN ('PAYMENT', 'PAYMENT_CANCEL') AND reference_id = $2`,
+            [businessId, paymentId]
+          );
+
+          // Recalculate purchase invoice statuses
+          for (const alloc of allocsRes.rows) {
+            await this.syncPurchaseInvoicePaymentStatus(client, businessId, alloc.document_id);
+          }
+        }
+      }
+
+      // 4. Delete payment voucher
+      await client.query(
+        `DELETE FROM payments WHERE business_id = $1 AND id = $2`,
+        [businessId, paymentId]
+      );
+
+      await client.query('COMMIT');
+
+      await AuditService.log({
+        businessId,
+        userId,
+        module: 'payment',
+        action: 'DELETE_PAYMENT',
+        entityType: 'PAYMENT',
+        entityId: paymentId,
+        previousValue: {
+          paymentNumber: payment.payment_number,
+          paymentType: payment.payment_type,
+          amount: payment.amount,
+          status: payment.status,
+        },
+      });
+
+      return {
+        success: true,
+        message: `Payment/Receipt voucher ${payment.payment_number} deleted successfully.`,
+      };
+    } catch (err) {
+      await client.query('ROLLBACK');
+      throw err;
+    } finally {
+      client.release();
+    }
+  }
+
+  /**
    * Atomic helper for Cash Invoice creation with immediate settlement
    */
   static async createAndPostCashPayment(

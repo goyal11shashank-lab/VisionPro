@@ -409,7 +409,7 @@ export const CoatingsPage: React.FC = () => {
                         </td>
                         <td className="px-5 py-4 text-right" onClick={e => e.stopPropagation()}>
                           <div className="flex items-center justify-end gap-1">
-                            {hasPermission('master:edit') && (
+                            {(hasPermission('master:edit') || hasPermission('master:create') || hasPermission('master:manage')) && (
                               <button
                                 id={`btn-edit-coating-${c.id}`}
                                 onClick={() => handleOpenEdit(c)}
@@ -440,6 +440,89 @@ export const CoatingsPage: React.FC = () => {
                 )}
               </tbody>
             </table>
+          </div>
+        </div>
+      )}
+
+      {/* Bulk Delete Modal */}
+      {showBulkDeleteModal && (
+        <div id="modal-bulk-delete-coatings" className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/60 backdrop-blur-xs p-4">
+          <div className="bg-white rounded-2xl max-w-lg w-full p-6 shadow-xl border border-rose-100 animate-in fade-in zoom-in-95 duration-150">
+            <div className="flex items-start gap-4">
+              <div className="p-3 bg-rose-100 text-rose-600 rounded-full shrink-0">
+                <AlertTriangle className="h-6 w-6" />
+              </div>
+              <div className="flex-1">
+                <h3 className="text-lg font-bold text-slate-900">
+                  Delete {selectedIds.length} Selected Optical Coatings
+                </h3>
+                <p className="text-sm text-slate-500 mt-1">
+                  You are about to permanently delete <span className="font-semibold text-slate-800">{selectedIds.length}</span> optical coating records from the database.
+                </p>
+
+                {/* List preview */}
+                <div className="mt-3 max-h-36 overflow-y-auto bg-slate-50 p-2.5 rounded-lg border border-slate-200 text-xs space-y-1">
+                  {selectedCoatings.slice(0, 10).map(c => (
+                    <div key={c.id} className="flex items-center justify-between text-slate-700">
+                      <span className="font-semibold">{c.name}</span>
+                      <span className="text-purple-700 bg-purple-50 px-1.5 py-0.5 rounded font-mono">{c.code}</span>
+                    </div>
+                  ))}
+                  {selectedCoatings.length > 10 && (
+                    <p className="text-slate-400 italic pt-1 text-center">
+                      ...and {selectedCoatings.length - 10} more
+                    </p>
+                  )}
+                </div>
+
+                <div className="mt-3 p-3 bg-amber-50 border border-amber-200 rounded-lg text-xs text-amber-800 space-y-1">
+                  <p className="font-semibold flex items-center gap-1.5">
+                    <ShieldAlert className="h-4 w-4 text-amber-600 shrink-0" />
+                    Database Safeguards:
+                  </p>
+                  <p>
+                    • Coatings referenced in sales/purchase invoices or linked to existing primary items cannot be deleted and will be protected automatically.
+                  </p>
+                </div>
+
+                {bulkDeleteError && (
+                  <div className="mt-3 p-3 bg-rose-50 border border-rose-200 rounded-lg text-xs text-rose-700 font-medium">
+                    {bulkDeleteError}
+                  </div>
+                )}
+              </div>
+            </div>
+
+            <div className="flex items-center justify-end gap-3 mt-6 pt-4 border-t border-slate-100">
+              <button
+                type="button"
+                id="btn-cancel-bulk-delete-coatings"
+                disabled={bulkDeleting}
+                onClick={() => setShowBulkDeleteModal(false)}
+                className="px-4 py-2 text-sm font-medium text-slate-600 bg-slate-100 hover:bg-slate-200 rounded-lg transition-colors cursor-pointer"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                id="btn-confirm-bulk-delete-coatings"
+                disabled={bulkDeleting}
+                onClick={handleBulkDeleteConfirm}
+                className="inline-flex items-center gap-2 px-4 py-2 text-sm font-medium text-white bg-rose-600 hover:bg-rose-700 rounded-lg disabled:opacity-50 transition-colors shadow-xs cursor-pointer"
+              >
+                {bulkDeleting ? (
+                  <>
+                    <RefreshCw className="h-4 w-4 animate-spin" />
+                    Deleting {selectedIds.length} items...
+                  </>
+                ) : (
+                  <>
+                    <Trash2 className="h-4 w-4" />
+                    Delete {selectedIds.length} Coating(s)
+                  </>
+                )}
+              </button>
+            </div>
           </div>
         </div>
       )}

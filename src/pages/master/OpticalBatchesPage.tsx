@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { Barcode, Plus, Search, RefreshCw, CheckCircle2, XCircle, Trash2, AlertTriangle, ShieldAlert, Filter, Sparkles, Eye, Layers, Copy, Check } from 'lucide-react';
+import { Barcode, Plus, Search, RefreshCw, CheckCircle2, XCircle, Trash2, AlertTriangle, ShieldAlert, Filter, Sparkles, Eye, Layers, Copy, Check, Edit3 } from 'lucide-react';
 import { apiRequest } from '../../api/client.js';
 import { OpticalBatch, UniqueItem, Category } from '../../types/index.js';
 import { useAuth } from '../../context/AuthContext.js';
@@ -40,6 +40,20 @@ export const OpticalBatchesPage: React.FC = () => {
   });
   const [submitting, setSubmitting] = useState<boolean>(false);
   const [createResult, setCreateResult] = useState<{ batch: OpticalBatch; isNew: boolean } | null>(null);
+
+  // Edit Batch Modal State
+  const [editingBatch, setEditingBatch] = useState<OpticalBatch | null>(null);
+  const [editFormData, setEditFormData] = useState({
+    uniqueItemId: '',
+    sph: '0.00',
+    cyl: '0.00',
+    axis: '0',
+    add: '0.00',
+    side: 'NONE' as 'NONE' | 'R' | 'L' | 'BE',
+    status: 'ACTIVE' as 'ACTIVE' | 'INACTIVE',
+  });
+  const [editSubmitting, setEditSubmitting] = useState<boolean>(false);
+  const [editError, setEditError] = useState<string | null>(null);
 
   const fetchData = async () => {
     try {
@@ -159,6 +173,62 @@ export const OpticalBatchesPage: React.FC = () => {
   // Determine selected item category to show appropriate fields
   const selectedItemObj = uniqueItems.find(u => u.id === formData.uniqueItemId);
   const currentCategoryCode = (selectedItemObj?.categoryCode || 'SV').toUpperCase();
+
+  const editSelectedItemObj = uniqueItems.find(u => u.id === editFormData.uniqueItemId);
+  const editCategoryCode = (editSelectedItemObj?.categoryCode || editingBatch?.categoryCode || 'SV').toUpperCase();
+
+  const handleOpenEdit = (b: OpticalBatch) => {
+    setEditingBatch(b);
+    setEditFormData({
+      uniqueItemId: b.uniqueItemId,
+      sph: String(Number(b.sph) || 0),
+      cyl: String(Number(b.cyl) || 0),
+      axis: String(Number(b.axis) || 0),
+      add: String(Number(b.add) || 0),
+      side: (b.side as 'NONE' | 'R' | 'L' | 'BE') || 'NONE',
+      status: (b.status as 'ACTIVE' | 'INACTIVE') || 'ACTIVE',
+    });
+    setEditError(null);
+  };
+
+  const handleEditSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!editingBatch) return;
+    try {
+      setEditSubmitting(true);
+      setEditError(null);
+
+      const payload = {
+        uniqueItemId: editFormData.uniqueItemId,
+        sph: parseFloat(editFormData.sph) || 0,
+        cyl: parseFloat(editFormData.cyl) || 0,
+        axis: editCategoryCode !== 'SV' ? parseFloat(editFormData.axis) || 0 : 0,
+        add: editCategoryCode !== 'SV' ? parseFloat(editFormData.add) || 0 : 0,
+        side: editCategoryCode === 'PROG' ? editFormData.side : 'NONE',
+        status: editFormData.status,
+      };
+
+      await apiRequest<{ success: boolean; batch: OpticalBatch }>(
+        `/api/optical-master/batches/${editingBatch.id}`,
+        {
+          method: 'PATCH',
+          body: JSON.stringify(payload),
+        }
+      );
+
+      setFeedbackMessage({
+        type: 'success',
+        text: `Optical Batch "${editingBatch.barcode}" updated successfully.`,
+      });
+      setEditingBatch(null);
+      setTimeout(() => setFeedbackMessage(null), 5000);
+      fetchData();
+    } catch (err: any) {
+      setEditError(err.message || 'Failed to update optical batch');
+    } finally {
+      setEditSubmitting(false);
+    }
+  };
 
   const handleCopyBarcode = (barcode: string) => {
     navigator.clipboard.writeText(barcode);
@@ -492,16 +562,28 @@ export const OpticalBatchesPage: React.FC = () => {
                           )}
                         </td>
                         <td className="px-5 py-4 text-right" onClick={e => e.stopPropagation()}>
-                          {(hasPermission('master:delete') || hasPermission('master:edit')) && (
-                            <button
-                              id={`btn-delete-batch-${b.barcode}`}
-                              onClick={() => handleDeleteClick(b)}
-                              className="p-1.5 text-slate-400 hover:text-rose-600 hover:bg-rose-50 rounded-md transition-colors cursor-pointer"
-                              title="Delete Optical Batch & Power Record"
-                            >
-                              <Trash2 className="h-4 w-4" />
-                            </button>
-                          )}
+                          <div className="flex items-center justify-end gap-1">
+                            {(hasPermission('master:edit') || hasPermission('master:create')) && (
+                              <button
+                                id={`btn-edit-batch-${b.barcode}`}
+                                onClick={() => handleOpenEdit(b)}
+                                className="p-1.5 text-slate-500 hover:text-indigo-600 hover:bg-indigo-50 rounded-md transition-colors cursor-pointer"
+                                title="Edit Optical Batch & Powers"
+                              >
+                                <Edit3 className="h-4 w-4" />
+                              </button>
+                            )}
+                            {(hasPermission('master:delete') || hasPermission('master:edit')) && (
+                              <button
+                                id={`btn-delete-batch-${b.barcode}`}
+                                onClick={() => handleDeleteClick(b)}
+                                className="p-1.5 text-slate-400 hover:text-rose-600 hover:bg-rose-50 rounded-md transition-colors cursor-pointer"
+                                title="Delete Optical Batch & Power Record"
+                              >
+                                <Trash2 className="h-4 w-4" />
+                              </button>
+                            )}
+                          </div>
                         </td>
                       </tr>
                     );
@@ -794,6 +876,160 @@ export const OpticalBatchesPage: React.FC = () => {
                 )}
               </button>
             </div>
+          </div>
+        </div>
+      )}
+      {/* Edit Batch Modal */}
+      {editingBatch && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/60 backdrop-blur-xs p-4">
+          <div className="bg-white rounded-2xl max-w-lg w-full p-6 shadow-xl border border-slate-200 max-h-[90vh] overflow-y-auto">
+            <div className="flex items-center justify-between mb-2">
+              <h3 className="text-lg font-bold text-slate-900">
+                Edit Optical Batch: <span className="font-mono text-indigo-600">{editingBatch.barcode}</span>
+              </h3>
+              <span className="text-xs font-mono bg-slate-100 text-slate-700 px-2 py-0.5 rounded border border-slate-200">
+                {editCategoryCode}
+              </span>
+            </div>
+            <p className="text-xs text-slate-500 mb-4">
+              Update optical power parameters, SKU mapping, or status for this batch.
+            </p>
+
+            {editError && (
+              <div className="mb-4 p-3 bg-rose-50 border border-rose-200 rounded-xl text-rose-700 text-xs flex items-start gap-2">
+                <AlertTriangle className="h-4 w-4 shrink-0 mt-0.5" />
+                <span>{editError}</span>
+              </div>
+            )}
+
+            <form onSubmit={handleEditSubmit} className="space-y-4">
+              <div>
+                <label className="block text-xs font-medium text-slate-700 mb-1">Unique SKU / Item *</label>
+                <select
+                  required
+                  value={editFormData.uniqueItemId}
+                  onChange={(e) => setEditFormData({ ...editFormData, uniqueItemId: e.target.value })}
+                  className="w-full px-3 py-2 text-sm bg-slate-50 border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                >
+                  {uniqueItems.map(u => (
+                    <option key={u.id} value={u.id}>
+                      {u.name} ({u.code}) - {u.categoryCode || 'SV'}
+                    </option>
+                  ))}
+                </select>
+              </div>
+
+              {/* Optical Parameters Form Grid */}
+              <div className="p-4 bg-slate-50 rounded-xl border border-slate-200">
+                <div className="text-xs font-bold text-slate-800 uppercase tracking-wider mb-3">
+                  Optical Power Specifications ({editCategoryCode})
+                </div>
+
+                <div className="grid grid-cols-2 gap-3">
+                  <div>
+                    <label className="block text-xs font-medium text-slate-700 mb-1">SPH (Spherical) *</label>
+                    <input
+                      type="number"
+                      step="0.25"
+                      required
+                      value={editFormData.sph}
+                      onChange={(e) => setEditFormData({ ...editFormData, sph: e.target.value })}
+                      placeholder="-2.00 / +1.50"
+                      className="w-full px-3 py-2 text-sm bg-white border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-indigo-500 font-mono"
+                    />
+                  </div>
+
+                  <div>
+                    <label className="block text-xs font-medium text-slate-700 mb-1">CYL (Cylindrical) *</label>
+                    <input
+                      type="number"
+                      step="0.25"
+                      required
+                      value={editFormData.cyl}
+                      onChange={(e) => setEditFormData({ ...editFormData, cyl: e.target.value })}
+                      placeholder="-0.50 / 0.00"
+                      className="w-full px-3 py-2 text-sm bg-white border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-indigo-500 font-mono"
+                    />
+                  </div>
+
+                  {editCategoryCode !== 'SV' && (
+                    <>
+                      <div>
+                        <label className="block text-xs font-medium text-slate-700 mb-1">AXIS (0 - 180°)</label>
+                        <input
+                          type="number"
+                          min="0"
+                          max="180"
+                          step="1"
+                          value={editFormData.axis}
+                          onChange={(e) => setEditFormData({ ...editFormData, axis: e.target.value })}
+                          placeholder="e.g. 90 / 180"
+                          className="w-full px-3 py-2 text-sm bg-white border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-indigo-500 font-mono"
+                        />
+                      </div>
+
+                      <div>
+                        <label className="block text-xs font-medium text-slate-700 mb-1">ADD (Addition Power)</label>
+                        <input
+                          type="number"
+                          step="0.25"
+                          min="0"
+                          value={editFormData.add}
+                          onChange={(e) => setEditFormData({ ...editFormData, add: e.target.value })}
+                          placeholder="e.g. +1.50 / +2.00"
+                          className="w-full px-3 py-2 text-sm bg-white border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-indigo-500 font-mono"
+                        />
+                      </div>
+                    </>
+                  )}
+                </div>
+
+                {editCategoryCode === 'PROG' && (
+                  <div className="mt-3">
+                    <label className="block text-xs font-medium text-slate-700 mb-1">Eye / Side *</label>
+                    <select
+                      required
+                      value={editFormData.side}
+                      onChange={(e) => setEditFormData({ ...editFormData, side: e.target.value as any })}
+                      className="w-full px-3 py-2 text-sm bg-white border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-indigo-500 font-semibold"
+                    >
+                      <option value="R">Right Eye (R)</option>
+                      <option value="L">Left Eye (L)</option>
+                      <option value="BE">Both Eyes Pair (BE)</option>
+                    </select>
+                  </div>
+                )}
+              </div>
+
+              <div>
+                <label className="block text-xs font-medium text-slate-700 mb-1">Status</label>
+                <select
+                  value={editFormData.status}
+                  onChange={(e) => setEditFormData({ ...editFormData, status: e.target.value as 'ACTIVE' | 'INACTIVE' })}
+                  className="w-full px-3 py-2 text-sm bg-slate-50 border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                >
+                  <option value="ACTIVE">ACTIVE</option>
+                  <option value="INACTIVE">INACTIVE</option>
+                </select>
+              </div>
+
+              <div className="flex items-center justify-end gap-3 pt-3 border-t border-slate-100">
+                <button
+                  type="button"
+                  onClick={() => setEditingBatch(null)}
+                  className="px-4 py-2 text-sm font-medium text-slate-600 bg-slate-100 hover:bg-slate-200 rounded-lg cursor-pointer"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="submit"
+                  disabled={editSubmitting}
+                  className="px-4 py-2 text-sm font-medium text-white bg-indigo-600 hover:bg-indigo-700 rounded-lg disabled:opacity-50 cursor-pointer"
+                >
+                  {editSubmitting ? 'Saving...' : 'Save Changes'}
+                </button>
+              </div>
+            </form>
           </div>
         </div>
       )}

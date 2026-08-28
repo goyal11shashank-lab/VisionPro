@@ -47,13 +47,16 @@ interface LineItemState {
 }
 
 export const CreatePurchaseInvoicePage: React.FC<{
+  editInvoiceId?: string | null;
   onBack: () => void;
   onSuccess: (invoiceId: string) => void;
-}> = ({ onBack, onSuccess }) => {
+}> = ({ editInvoiceId, onBack, onSuccess }) => {
   // Master Data
   const [suppliers, setSuppliers] = useState<Party[]>([]);
   const [uniqueItemsList, setUniqueItemsList] = useState<UniqueItem[]>([]);
   const [loadingInitial, setLoadingInitial] = useState<boolean>(true);
+  const [existingInvoiceNumber, setExistingInvoiceNumber] = useState<string>('');
+  const [existingStatus, setExistingStatus] = useState<string>('');
 
   // Form State
   const [supplierPartyId, setSupplierPartyId] = useState<string>('');
@@ -75,7 +78,7 @@ export const CreatePurchaseInvoicePage: React.FC<{
   const [submitting, setSubmitting] = useState<boolean>(false);
   const [error, setError] = useState<string | null>(null);
 
-  // Load suppliers and unique items
+  // Load suppliers, unique items, and existing invoice if editing
   useEffect(() => {
     const loadData = async () => {
       setLoadingInitial(true);
@@ -87,11 +90,53 @@ export const CreatePurchaseInvoicePage: React.FC<{
 
         const allSuppliers = supData.parties || [];
         setSuppliers(allSuppliers);
-        if (allSuppliers.length > 0) {
+        setUniqueItemsList(itemData || []);
+
+        if (editInvoiceId) {
+          const inv = await apiRequest<any>(`/api/purchases/invoices/${editInvoiceId}`);
+          if (inv) {
+            setExistingInvoiceNumber(inv.invoiceNumber);
+            setExistingStatus(inv.status);
+            setSupplierPartyId(inv.supplierPartyId || (inv.supplier?.id ?? ''));
+            if (inv.invoiceDate) {
+              setInvoiceDate(new Date(inv.invoiceDate).toISOString().split('T')[0]);
+            }
+            setSupplierInvoiceNumber(inv.supplierInvoiceNumber || '');
+            if (inv.supplierInvoiceDate) {
+              setSupplierInvoiceDate(new Date(inv.supplierInvoiceDate).toISOString().split('T')[0]);
+            }
+            setGstMode(inv.gstMode || 'INTRA_STATE');
+            setNotes(inv.notes || '');
+
+            if (inv.lines && inv.lines.length > 0) {
+              const loadedLines: LineItemState[] = inv.lines.map((l: any) => ({
+                uniqueItemId: l.uniqueItemId,
+                uniqueItemName: l.uniqueItem?.name || 'Item',
+                uniqueItemCode: l.uniqueItem?.code || '',
+                categoryCode: l.category?.code || l.uniqueItem?.categoryCode,
+                quantity: parseFloat(l.quantity) || 1,
+                rate: parseFloat(l.rate) || 0,
+                discountType: l.discountType || 'NONE',
+                discountValue: parseFloat(l.discountValue) || 0,
+                gstRate: parseFloat(l.gstRate) || 12,
+                batches: (l.batches || []).map((b: any) => ({
+                  batchId: b.batchId || b.batch?.id,
+                  sph: parseFloat(b.batch?.sph ?? b.sph ?? 0),
+                  cyl: parseFloat(b.batch?.cyl ?? b.cyl ?? 0),
+                  axis: parseFloat(b.batch?.axis ?? b.axis ?? 0),
+                  add: parseFloat(b.batch?.add ?? b.add ?? 0),
+                  side: b.batch?.side || b.side || 'NONE',
+                  quantity: parseFloat(b.quantity) || 1,
+                  rate: parseFloat(b.rate ?? l.rate ?? 0),
+                })),
+                isBatchesOpen: (l.batches || []).length > 0,
+              }));
+              setLines(loadedLines);
+            }
+          }
+        } else if (allSuppliers.length > 0) {
           setSupplierPartyId(allSuppliers[0].id);
         }
-
-        setUniqueItemsList(itemData || []);
       } catch (err: any) {
         setError(err.message || 'Failed to load master items for purchase form');
       } finally {
@@ -99,7 +144,7 @@ export const CreatePurchaseInvoicePage: React.FC<{
       }
     };
     loadData();
-  }, []);
+  }, [editInvoiceId]);
 
   // Auto-detect GST mode from supplier state if available
   const handleSupplierChange = (supId: string) => {
@@ -368,6 +413,7 @@ export const CreatePurchaseInvoicePage: React.FC<{
         supplierInvoiceDate: supplierInvoiceDate ? new Date(supplierInvoiceDate) : undefined,
         gstMode,
         notes: notes.trim() || undefined,
+        status: andPost ? 'POSTED' : 'DRAFT',
         lines: lines.map(l => ({
           uniqueItemId: l.uniqueItemId,
           quantity: l.quantity,
@@ -388,18 +434,29 @@ export const CreatePurchaseInvoicePage: React.FC<{
         })),
       };
 
-      const created = await apiRequest<{ id: string; invoiceNumber: string }>('/api/purchases/invoices', {
-        method: 'POST',
-        body: JSON.stringify(payload),
-      });
+      let resultId = editInvoiceId;
 
-      if (andPost) {
-        await apiRequest(`/api/purchases/invoices/${created.id}/post`, {
-          method: 'POST',
+      if (editInvoiceId) {
+        const updated = await apiRequest<{ id: string; invoiceNumber: string }>(`/api/purchases/invoices/${editInvoiceId}`, {
+          method: 'PUT',
+          body: JSON.stringify(payload),
         });
+        resultId = updated.id;
+      } else {
+        const created = await apiRequest<{ id: string; invoiceNumber: string }>('/api/purchases/invoices', {
+          method: 'POST',
+          body: JSON.stringify(payload),
+        });
+        resultId = created.id;
+
+        if (andPost) {
+          await apiRequest(`/api/purchases/invoices/${created.id}/post`, {
+            method: 'POST',
+          });
+        }
       }
 
-      onSuccess(created.id);
+      onSuccess(resultId!);
     } catch (err: any) {
       setError(err.message || 'Failed to save purchase invoice');
     } finally {
@@ -428,9 +485,28 @@ export const CreatePurchaseInvoicePage: React.FC<{
             <ArrowLeft className="w-5 h-5" />
           </button>
           <div>
-            <h1 className="text-xl font-bold text-slate-900">New Purchase Invoice</h1>
+            <div className="flex items-center gap-2">
+              <h1 className="text-xl font-bold text-slate-900">
+                {editInvoiceId ? `Edit Purchase Invoice #${existingInvoiceNumber}` : 'New Purchase Invoice'}
+              </h1>
+              {existingStatus && (
+                <span
+                  className={`px-2.5 py-0.5 text-xs font-semibold rounded-full ${
+                    existingStatus === 'POSTED'
+                      ? 'bg-emerald-50 text-emerald-700 border border-emerald-200'
+                      : existingStatus === 'CANCELLED'
+                      ? 'bg-rose-50 text-rose-700 border border-rose-200'
+                      : 'bg-amber-50 text-amber-700 border border-amber-200'
+                  }`}
+                >
+                  {existingStatus}
+                </span>
+              )}
+            </div>
             <p className="text-xs text-slate-500">
-              Procure ophthalmic lenses, frames, and batches with automated GST reconciliation.
+              {editInvoiceId
+                ? 'Update supplier, optical items, batch powers, rates, and GST reconciliation.'
+                : 'Procure ophthalmic lenses, frames, and batches with automated GST reconciliation.'}
             </p>
           </div>
         </div>
@@ -443,7 +519,7 @@ export const CreatePurchaseInvoicePage: React.FC<{
             className="flex items-center gap-2 px-4 py-2.5 rounded-xl border border-slate-200 bg-white hover:bg-slate-50 text-slate-700 text-xs font-bold transition-colors shadow-xs"
           >
             <Save className="w-4 h-4 text-slate-500" />
-            <span>Save as Draft</span>
+            <span>{editInvoiceId ? 'Save Changes (Draft)' : 'Save as Draft'}</span>
           </button>
           <button
             type="button"

@@ -12,6 +12,7 @@ import {
   RefreshCw,
   Eye,
   Ban,
+  Trash2,
   Building2,
   Layers,
 } from 'lucide-react';

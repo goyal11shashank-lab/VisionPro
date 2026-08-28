@@ -348,4 +348,35 @@ router.post(
   }
 );
 
+/**
+ * DELETE /api/payments/:id
+ * Permanently delete payment voucher and restore ledger impacts
+ */
+router.delete(
+  '/:id',
+  requireAnyPermission([
+    'payment.receipt.delete',
+    'payment:receipt:delete',
+    'payment.supplier.delete',
+    'payment:supplier:delete',
+    'payment:delete',
+    'payment.delete',
+    'accounts:delete',
+    'accounts:edit',
+  ]),
+  async (req: Request, res: Response) => {
+    try {
+      const businessId = req.user!.currentBusinessId;
+      const userId = req.user!.id;
+      const { id } = req.params;
+
+      const result = await PaymentService.deletePayment(businessId, id, userId);
+      res.json(result);
+    } catch (err: any) {
+      console.error('[DELETE /api/payments/:id Error]', err);
+      res.status(400).json({ error: 'DELETE_PAYMENT_FAILED', message: err.message });
+    }
+  }
+);
+
 export default router;

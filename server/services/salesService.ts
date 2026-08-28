@@ -21,6 +21,11 @@ import { calculateLineTax, calculateInvoiceTotals, round2 } from './taxCalculati
 import { AuditService } from './auditService.js';
 import { PoolClient } from 'pg';
 
+const UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+function isValidUUID(id: string): boolean {
+  return typeof id === 'string' && UUID_REGEX.test(id);
+}
+
 export interface SalesLineBatchInput {
   batchId: string;
   quantity: number; // in pairs
@@ -961,6 +966,105 @@ export class SalesService {
   }
 
   /**
+   * Deletes a Sales Order permanently, releasing any active inventory reservations
+   */
+  static async deleteSalesOrder(businessId: string, orderId: string, userId?: string) {
+    const client = await pool.connect();
+    try {
+      await client.query('BEGIN');
+
+      const orderRes = await client.query(
+        `SELECT id, order_number, status 
+         FROM sales_orders 
+         WHERE business_id = $1 AND id = $2 
+         FOR UPDATE`,
+        [businessId, orderId]
+      );
+
+      if (orderRes.rows.length === 0) {
+        throw new Error('Sales order not found');
+      }
+
+      const order = orderRes.rows[0];
+
+      // Check if any non-cancelled sales invoices are linked to this order
+      const activeInvRes = await client.query(
+        `SELECT id, invoice_number, status 
+         FROM sales_invoices 
+         WHERE business_id = $1 AND sales_order_id = $2 AND status != 'CANCELLED'
+         LIMIT 1`,
+        [businessId, orderId]
+      );
+
+      if (activeInvRes.rows.length > 0) {
+        throw new Error(
+          `Cannot delete Sales Order ${order.order_number}: active Sales Invoice ${activeInvRes.rows[0].invoice_number} (${activeInvRes.rows[0].status}) is linked to it. Please delete or cancel the sales invoice first.`
+        );
+      }
+
+      // If CONFIRMED or PARTIALLY_CONVERTED, release active reservations
+      if (order.status === 'CONFIRMED' || order.status === 'PARTIALLY_CONVERTED') {
+        await this._releaseOrderReservationsInternal(client, businessId, orderId, userId);
+      }
+
+      // Unlink any cancelled sales invoices pointing to this order
+      await client.query(
+        `UPDATE sales_invoices SET sales_order_id = NULL WHERE sales_order_id = $1`,
+        [orderId]
+      );
+
+      // Delete stock reservations for this order
+      await client.query(
+        `DELETE FROM stock_reservations WHERE business_id = $1 AND reference_type = 'SALES_ORDER' AND reference_id = $2`,
+        [businessId, orderId]
+      );
+
+      // Delete line batches
+      await client.query(
+        `DELETE FROM sales_order_line_batches 
+         WHERE sales_order_line_id IN (
+           SELECT id FROM sales_order_lines WHERE sales_order_id = $1
+         )`,
+        [orderId]
+      );
+
+      // Delete order lines
+      await client.query(
+        `DELETE FROM sales_order_lines WHERE sales_order_id = $1`,
+        [orderId]
+      );
+
+      // Delete sales order
+      await client.query(
+        `DELETE FROM sales_orders WHERE business_id = $1 AND id = $2`,
+        [businessId, orderId]
+      );
+
+      await client.query('COMMIT');
+
+      await AuditService.log({
+        businessId,
+        userId,
+        module: 'sales',
+        action: 'DELETE_SALES_ORDER',
+        entityType: 'SALES_ORDER',
+        entityId: orderId,
+        previousValue: { orderNumber: order.order_number, status: order.status },
+      });
+
+      return {
+        success: true,
+        message: `Sales Order ${order.order_number} deleted successfully.`,
+      };
+    } catch (err) {
+      await client.query('ROLLBACK');
+      throw err;
+    } finally {
+      client.release();
+    }
+  }
+
+  /**
    * Get single Sales Order by ID with lines and batches
    */
   static async getSalesOrderById(businessId: string, orderId: string) {
@@ -1235,6 +1339,271 @@ export class SalesService {
         entityType: 'SALES_INVOICE',
         entityId: invoiceId,
         newValue: { invoiceNumber, partyId: data.partyId, grandTotal: totals.grandTotal, status: targetStatus },
+      });
+
+      return await this.getSalesInvoiceById(businessId, invoiceId);
+    } catch (err) {
+      await client.query('ROLLBACK');
+      throw err;
+    } finally {
+      client.release();
+    }
+  }
+
+  /**
+   * Updates an existing Sales Invoice (DRAFT, POSTED)
+   * Rejects editing if invoice is CANCELLED.
+   */
+  static async updateSalesInvoice(
+    businessId: string,
+    invoiceId: string,
+    data: CreateSalesInvoiceDTO & { status?: string },
+    userId?: string
+  ) {
+    if (!businessId || !invoiceId || !isValidUUID(invoiceId)) {
+      throw new Error(`Invalid Sales Invoice ID: ${invoiceId}`);
+    }
+    if (!data.partyId) throw new Error('Customer party ID is required');
+    if (!data.lines || data.lines.length === 0) throw new Error('At least one sales line is required');
+
+    const customer = await this.validateCustomerParty(businessId, data.partyId);
+
+    const client = await pool.connect();
+    try {
+      await client.query('BEGIN');
+
+      const invRes = await client.query(
+        `SELECT * FROM sales_invoices WHERE business_id = $1 AND id = $2 FOR UPDATE`,
+        [businessId, invoiceId]
+      );
+
+      if (invRes.rows.length === 0) {
+        throw new Error(`Sales Invoice not found with ID ${invoiceId}`);
+      }
+
+      const existingInv = invRes.rows[0];
+
+      if (existingInv.status === 'CANCELLED') {
+        throw new Error(`Cannot edit Sales Invoice ${existingInv.invoice_number} because it has been CANCELLED. Cancelled invoices are permanently read-only.`);
+      }
+
+      // Check active returns
+      const activeReturnsRes = await client.query(
+        `SELECT id, return_number, status FROM sales_returns 
+         WHERE business_id = $1 AND sales_invoice_id = $2 AND status != 'CANCELLED' 
+         LIMIT 1`,
+        [businessId, invoiceId]
+      );
+      if (activeReturnsRes.rows.length > 0) {
+        throw new Error(
+          `Cannot modify Sales Invoice ${existingInv.invoice_number} because active Sales Return ${activeReturnsRes.rows[0].return_number} exists against it. Please delete or cancel the return first.`
+        );
+      }
+
+      // If existing invoice was POSTED, reverse stock and customer ledger first
+      if (existingInv.status === 'POSTED') {
+        const oldLinesRes = await client.query(
+          `SELECT silb.batch_id, silb.quantity 
+           FROM sales_invoice_lines sil
+           JOIN sales_invoice_line_batches silb ON sil.id = silb.sales_invoice_line_id
+           WHERE sil.sales_invoice_id = $1`,
+          [invoiceId]
+        );
+
+        for (const row of oldLinesRes.rows) {
+          const batchId = row.batch_id;
+          const qty = parseFloat(row.quantity);
+
+          const stockRes = await client.query(
+            `SELECT id, physical_stock, reserved_stock, available_stock 
+             FROM optical_stocks 
+             WHERE business_id = $1 AND batch_id = $2 
+             FOR UPDATE`,
+            [businessId, batchId]
+          );
+
+          if (stockRes.rows.length > 0) {
+            const cur = stockRes.rows[0];
+            const newPhys = round2(parseFloat(cur.physical_stock) + qty);
+            const newAvail = round2(newPhys - parseFloat(cur.reserved_stock));
+
+            await client.query(
+              `UPDATE optical_stocks 
+               SET physical_stock = $1, available_stock = $2, updated_at = NOW() 
+               WHERE id = $3`,
+              [newPhys.toFixed(2), newAvail.toFixed(2), cur.id]
+            );
+          }
+        }
+
+        await client.query(
+          `DELETE FROM stock_ledger WHERE business_id = $1 AND reference_type IN ('SALES_INVOICE', 'SALES_INVOICE_CANCEL') AND reference_id = $2`,
+          [businessId, invoiceId]
+        );
+
+        await client.query(
+          `DELETE FROM customer_ledgers WHERE business_id = $1 AND reference_type IN ('SALES_INVOICE', 'SALES_INVOICE_CANCEL') AND reference_id = $2`,
+          [businessId, invoiceId]
+        );
+      }
+
+      const [biz] = await db.select().from(businesses).where(eq(businesses.id, businessId)).limit(1);
+      const isInterState =
+        biz?.state && customer?.state && biz.state.trim().toLowerCase() !== customer.state.trim().toLowerCase();
+      const gstMode = data.gstMode || (isInterState ? 'INTER_STATE' : 'INTRA_STATE');
+
+      const invoiceDate = new Date(data.invoiceDate || existingInv.invoice_date);
+      const targetStatus = data.status || existingInv.status;
+
+      const computedLines = data.lines.map(line => {
+        if (line.quantity <= 0) throw new Error('Line quantity must be greater than zero');
+        if (line.rate < 0) throw new Error('Line rate cannot be negative');
+
+        const discType =
+          line.discountType || (line.discountPercent !== undefined && line.discountPercent > 0 ? 'PERCENTAGE' : 'NONE');
+        const discVal = line.discountValue !== undefined ? line.discountValue : (line.discountPercent ?? 0);
+
+        const taxRes = calculateLineTax({
+          quantity: line.quantity,
+          rate: line.rate,
+          discountType: discType,
+          discountValue: discVal,
+          gstRate: line.gstRate ?? 5.0,
+        });
+
+        return {
+          ...line,
+          taxRes,
+        };
+      });
+
+      const totals = calculateInvoiceTotals({
+        lines: computedLines.map(l => l.taxRes),
+        gstMode,
+      });
+
+      // Delete old line batches & lines
+      await client.query(
+        `DELETE FROM sales_invoice_line_batches WHERE sales_invoice_line_id IN (
+           SELECT id FROM sales_invoice_lines WHERE sales_invoice_id = $1
+         )`,
+        [invoiceId]
+      );
+      await client.query(
+        `DELETE FROM sales_invoice_lines WHERE sales_invoice_id = $1`,
+        [invoiceId]
+      );
+
+      // Update invoice header
+      await client.query(
+        `UPDATE sales_invoices SET
+          party_id = $1,
+          invoice_date = $2,
+          subtotal = $3,
+          discount_total = $4,
+          taxable_amount = $5,
+          igst_rate = $6,
+          igst_amount = $7,
+          cgst_rate = $8,
+          cgst_amount = $9,
+          sgst_rate = $10,
+          sgst_amount = $11,
+          round_off = $12,
+          grand_total = $13,
+          status = $14,
+          notes = $15,
+          payment_terms = $16,
+          updated_by = $17,
+          updated_at = NOW()
+        WHERE business_id = $18 AND id = $19`,
+        [
+          data.partyId,
+          invoiceDate,
+          totals.subtotal.toFixed(2),
+          totals.discountTotal.toFixed(2),
+          totals.taxableAmount.toFixed(2),
+          totals.igstRate.toFixed(2),
+          totals.igstAmount.toFixed(2),
+          totals.cgstRate.toFixed(2),
+          totals.cgstAmount.toFixed(2),
+          totals.sgstRate.toFixed(2),
+          totals.sgstAmount.toFixed(2),
+          totals.roundOff.toFixed(2),
+          totals.grandTotal.toFixed(2),
+          targetStatus,
+          data.notes || null,
+          data.paymentTerms || existingInv.payment_terms || null,
+          userId || null,
+          businessId,
+          invoiceId,
+        ]
+      );
+
+      // Insert new lines and batches
+      for (const line of computedLines) {
+        const lineRes = await client.query(
+          `INSERT INTO sales_invoice_lines (
+            sales_invoice_id, unique_item_id, quantity, rate,
+            discount_type, discount_value, discount_amount,
+            taxable_amount, gst_rate, tax_amount, line_total
+          ) VALUES (
+            $1, $2, $3, $4,
+            $5, $6, $7,
+            $8, $9, $10, $11
+          ) RETURNING id`,
+          [
+            invoiceId,
+            line.uniqueItemId,
+            line.taxRes.quantity.toFixed(2),
+            line.taxRes.rate.toFixed(2),
+            line.taxRes.discountType,
+            line.taxRes.discountValue.toFixed(2),
+            line.taxRes.discountAmount.toFixed(2),
+            line.taxRes.taxableAmount.toFixed(2),
+            line.taxRes.gstRate.toFixed(2),
+            line.taxRes.taxAmount.toFixed(2),
+            line.taxRes.lineTotal.toFixed(2),
+          ]
+        );
+
+        const lineId = lineRes.rows[0].id;
+
+        if (line.batches && line.batches.length > 0) {
+          let batchSum = 0;
+          for (const b of line.batches) {
+            batchSum += b.quantity;
+            await client.query(
+              `INSERT INTO sales_invoice_line_batches (sales_invoice_line_id, batch_id, quantity)
+               VALUES ($1, $2, $3)`,
+              [lineId, b.batchId, b.quantity.toFixed(2)]
+            );
+          }
+          if (round2(batchSum) !== round2(line.quantity)) {
+            throw new Error(`Allocated batch quantity (${batchSum}) does not match line quantity (${line.quantity})`);
+          }
+        }
+      }
+
+      // If target status is POSTED, perform stock deduction & ledger update
+      if (targetStatus === 'POSTED') {
+        await this._postDirectInvoiceInternal(client, businessId, invoiceId, userId);
+      }
+
+      await client.query('COMMIT');
+
+      await AuditService.log({
+        businessId,
+        userId,
+        module: 'sales',
+        action: 'UPDATE_SALES_INVOICE',
+        entityType: 'SALES_INVOICE',
+        entityId: invoiceId,
+        newValue: {
+          invoiceNumber: existingInv.invoice_number,
+          partyId: data.partyId,
+          grandTotal: totals.grandTotal,
+          status: targetStatus,
+        },
       });
 
       return await this.getSalesInvoiceById(businessId, invoiceId);
@@ -1916,6 +2285,164 @@ export class SalesService {
       });
 
       return await this.getSalesInvoiceById(businessId, invoiceId);
+    } catch (err) {
+      await client.query('ROLLBACK');
+      throw err;
+    } finally {
+      client.release();
+    }
+  }
+
+  /**
+   * Deletes a Sales Invoice permanently, restoring stock & ledger if POSTED
+   */
+  static async deleteSalesInvoice(businessId: string, invoiceId: string, userId?: string) {
+    const client = await pool.connect();
+    try {
+      await client.query('BEGIN');
+
+      const invRes = await client.query(
+        `SELECT * FROM sales_invoices WHERE business_id = $1 AND id = $2 FOR UPDATE`,
+        [businessId, invoiceId]
+      );
+
+      if (invRes.rows.length === 0) {
+        throw new Error('Sales invoice not found');
+      }
+
+      const invoice = invRes.rows[0];
+
+      // Check if active sales returns exist for this invoice
+      const activeReturnsRes = await client.query(
+        `SELECT id, return_number, status FROM sales_returns 
+         WHERE business_id = $1 AND sales_invoice_id = $2 AND status != 'CANCELLED'
+         LIMIT 1`,
+        [businessId, invoiceId]
+      );
+      if (activeReturnsRes.rows.length > 0) {
+        throw new Error(
+          `Cannot delete Sales Invoice ${invoice.invoice_number}: active Sales Return ${activeReturnsRes.rows[0].return_number} (${activeReturnsRes.rows[0].status}) is attached to it. Please delete or cancel the sales return first.`
+        );
+      }
+
+      // If POSTED, restore physical stock and customer ledger
+      if (invoice.status === 'POSTED') {
+        const linesRes = await client.query(
+          `SELECT silb.batch_id, silb.quantity 
+           FROM sales_invoice_lines sil
+           JOIN sales_invoice_line_batches silb ON sil.id = silb.sales_invoice_line_id
+           WHERE sil.sales_invoice_id = $1`,
+          [invoiceId]
+        );
+
+        for (const row of linesRes.rows) {
+          const batchId = row.batch_id;
+          const qty = parseFloat(row.quantity);
+
+          const stockRes = await client.query(
+            `SELECT id, physical_stock, reserved_stock, available_stock 
+             FROM optical_stocks 
+             WHERE business_id = $1 AND batch_id = $2 
+             FOR UPDATE`,
+            [businessId, batchId]
+          );
+
+          if (stockRes.rows.length > 0) {
+            const cur = stockRes.rows[0];
+            const newPhys = round2(parseFloat(cur.physical_stock) + qty);
+            const newAvail = round2(newPhys - parseFloat(cur.reserved_stock));
+
+            await client.query(
+              `UPDATE optical_stocks 
+               SET physical_stock = $1, available_stock = $2, updated_at = NOW() 
+               WHERE id = $3`,
+              [newPhys.toFixed(2), newAvail.toFixed(2), cur.id]
+            );
+          }
+        }
+
+        // Delete stock_ledger entries related to this sales invoice
+        await client.query(
+          `DELETE FROM stock_ledger WHERE business_id = $1 AND reference_type = 'SALES_INVOICE' AND reference_id = $2`,
+          [businessId, invoiceId]
+        );
+
+        // Reverse/recalculate customer ledger balance
+        const grandTotal = parseFloat(invoice.grand_total);
+        const lastLedgerRes = await client.query(
+          `SELECT balance FROM customer_ledgers 
+           WHERE business_id = $1 AND party_id = $2 AND reference_id != $3
+           ORDER BY transaction_date DESC, created_at DESC 
+           LIMIT 1`,
+          [businessId, invoice.party_id, invoiceId]
+        );
+
+        // Delete customer_ledgers entry for this invoice
+        await client.query(
+          `DELETE FROM customer_ledgers WHERE business_id = $1 AND reference_type = 'SALES_INVOICE' AND reference_id = $2`,
+          [businessId, invoiceId]
+        );
+      }
+
+      // Delete payment allocations on this invoice
+      await client.query(
+        `DELETE FROM payment_allocations WHERE business_id = $1 AND document_id = $2`,
+        [businessId, invoiceId]
+      );
+
+      // If linked to a sales order, check if sales order should be reset to CONFIRMED
+      if (invoice.sales_order_id) {
+        const remainingInvoicesRes = await client.query(
+          `SELECT id FROM sales_invoices 
+           WHERE business_id = $1 AND sales_order_id = $2 AND id != $3 AND status != 'CANCELLED'`,
+          [businessId, invoice.sales_order_id, invoiceId]
+        );
+
+        if (remainingInvoicesRes.rows.length === 0) {
+          await client.query(
+            `UPDATE sales_orders SET status = 'CONFIRMED', updated_at = NOW() WHERE id = $1 AND status IN ('CONVERTED', 'PARTIALLY_CONVERTED')`,
+            [invoice.sales_order_id]
+          );
+        }
+      }
+
+      // Delete invoice line batches
+      await client.query(
+        `DELETE FROM sales_invoice_line_batches 
+         WHERE sales_invoice_line_id IN (
+           SELECT id FROM sales_invoice_lines WHERE sales_invoice_id = $1
+         )`,
+        [invoiceId]
+      );
+
+      // Delete invoice lines
+      await client.query(
+        `DELETE FROM sales_invoice_lines WHERE sales_invoice_id = $1`,
+        [invoiceId]
+      );
+
+      // Delete sales invoice
+      await client.query(
+        `DELETE FROM sales_invoices WHERE business_id = $1 AND id = $2`,
+        [businessId, invoiceId]
+      );
+
+      await client.query('COMMIT');
+
+      await AuditService.log({
+        businessId,
+        userId,
+        module: 'sales',
+        action: 'DELETE_SALES_INVOICE',
+        entityType: 'SALES_INVOICE',
+        entityId: invoiceId,
+        previousValue: { invoiceNumber: invoice.invoice_number, grandTotal: invoice.grand_total, status: invoice.status },
+      });
+
+      return {
+        success: true,
+        message: `Sales Invoice ${invoice.invoice_number} deleted successfully.`,
+      };
     } catch (err) {
       await client.query('ROLLBACK');
       throw err;

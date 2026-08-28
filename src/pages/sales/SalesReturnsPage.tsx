@@ -16,6 +16,7 @@ import {
   RefreshCw,
   Eye,
   Ban,
+  Trash2,
   Calendar,
 } from 'lucide-react';
 import { apiRequest } from '../../api/client.js';
@@ -337,6 +338,30 @@ export const SalesReturnsPage: React.FC = () => {
     }
   };
 
+  // Delete Return
+  const handleDeleteReturn = async (id: string, returnNumber: string) => {
+    if (
+      !confirm(
+        `Are you sure you want to permanently delete Sales Return #${returnNumber}?\nIf posted, this will reverse all stock and ledger entries.`
+      )
+    ) {
+      return;
+    }
+
+    try {
+      setLoading(true);
+      await apiRequest(`/api/sales/returns/${id}`, {
+        method: 'DELETE',
+      });
+      setViewReturn(null);
+      fetchReturns();
+    } catch (err: any) {
+      alert('Failed to delete sales return: ' + err.message);
+    } finally {
+      setLoading(false);
+    }
+  };
+
   return (
     <div className="space-y-6">
       {/* Header Banner */}
@@ -501,6 +526,14 @@ export const SalesReturnsPage: React.FC = () => {
                             <Ban className="w-4 h-4" />
                           </button>
                         )}
+                        <button
+                          id={`btn-delete-return-${ret.id}`}
+                          onClick={() => handleDeleteReturn(ret.id, ret.returnNumber)}
+                          className="p-1.5 rounded-lg bg-slate-800 hover:bg-rose-500/20 text-slate-400 hover:text-rose-400 transition-colors"
+                          title="Delete Return"
+                        >
+                          <Trash2 className="w-4 h-4" />
+                        </button>
                       </div>
                     </td>
                   </tr>
@@ -831,7 +864,18 @@ export const SalesReturnsPage: React.FC = () => {
               </div>
             </div>
 
-            <div className="p-6 border-t border-slate-800 bg-slate-950 flex justify-end">
+            <div className="p-6 border-t border-slate-800 bg-slate-950 flex items-center justify-between">
+              <div>
+                <button
+                  id="btn-delete-return-modal"
+                  onClick={() => handleDeleteReturn(viewReturn.id, viewReturn.returnNumber)}
+                  className="flex items-center gap-1.5 px-4 py-2 rounded-xl bg-rose-600 hover:bg-rose-500 text-white text-xs font-semibold transition-colors shadow-sm"
+                >
+                  <Trash2 className="w-4 h-4" />
+                  <span>Delete Sales Return</span>
+                </button>
+              </div>
+
               <button
                 onClick={() => setViewReturn(null)}
                 className="px-4 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-300 text-sm font-medium transition-colors"

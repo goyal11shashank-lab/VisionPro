@@ -15,6 +15,7 @@ import {
   Trash2,
   Send,
   Eye,
+  Pencil,
 } from 'lucide-react';
 import { PurchaseInvoice, PurchaseInvoiceLine } from '../../types/index.js';
 import { apiRequest } from '../../api/client.js';
@@ -23,12 +24,14 @@ interface PurchaseInvoiceDetailModalProps {
   invoice: PurchaseInvoice;
   onClose: () => void;
   onRefresh: () => void;
+  onEdit?: (invoiceId: string) => void;
 }
 
 export const PurchaseInvoiceDetailModal: React.FC<PurchaseInvoiceDetailModalProps> = ({
   invoice,
   onClose,
   onRefresh,
+  onEdit,
 }) => {
   const [actionLoading, setActionLoading] = useState<boolean>(false);
   const [actionError, setActionError] = useState<string | null>(null);
@@ -76,8 +79,12 @@ export const PurchaseInvoiceDetailModal: React.FC<PurchaseInvoiceDetailModalProp
     }
   };
 
-  const handleDeleteDraft = async () => {
-    if (!confirm(`Delete unposted draft invoice ${invoice.invoiceNumber}? This action cannot be undone.`)) {
+  const handleDeleteInvoice = async () => {
+    if (
+      !confirm(
+        `Are you sure you want to permanently delete Purchase Invoice ${invoice.invoiceNumber}?\nThis will reverse any stock additions and supplier ledger entries associated with it.`
+      )
+    ) {
       return;
     }
     setActionLoading(true);
@@ -89,7 +96,7 @@ export const PurchaseInvoiceDetailModal: React.FC<PurchaseInvoiceDetailModalProp
       onRefresh();
       onClose();
     } catch (err: any) {
-      setActionError(err.message || 'Failed to delete draft invoice');
+      setActionError(err.message || 'Failed to delete invoice');
     } finally {
       setActionLoading(false);
     }
@@ -143,6 +150,20 @@ export const PurchaseInvoiceDetailModal: React.FC<PurchaseInvoiceDetailModalProp
           </div>
 
           <div className="flex items-center gap-2">
+            {onEdit && invoice.status !== 'CANCELLED' && (
+              <button
+                id="btn-modal-edit-purchase-invoice"
+                onClick={() => {
+                  onClose();
+                  onEdit(invoice.id);
+                }}
+                className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl border border-purple-200 bg-purple-50 text-purple-700 hover:bg-purple-100 text-xs font-semibold transition-colors"
+                title="Edit Purchase Invoice"
+              >
+                <Pencil className="w-3.5 h-3.5" />
+                <span>Edit Invoice</span>
+              </button>
+            )}
             <button
               onClick={() => window.print()}
               className="p-2 rounded-xl border border-slate-200 text-slate-600 hover:bg-slate-100 transition-colors"
@@ -343,17 +364,6 @@ export const PurchaseInvoiceDetailModal: React.FC<PurchaseInvoiceDetailModalProp
         {/* Footer Actions */}
         <div className="p-4 border-t border-slate-100 bg-slate-50/80 flex items-center justify-between">
           <div className="flex items-center gap-2">
-            {invoice.status === 'DRAFT' && (
-              <button
-                onClick={handleDeleteDraft}
-                disabled={actionLoading}
-                className="flex items-center gap-1.5 px-3.5 py-2 rounded-xl border border-rose-200 bg-white text-rose-600 text-xs font-semibold hover:bg-rose-50 transition-colors"
-              >
-                <Trash2 className="w-3.5 h-3.5" />
-                <span>Delete Draft</span>
-              </button>
-            )}
-
             {invoice.status === 'POSTED' && (
               <button
                 onClick={() => setCancelModalOpen(true)}
@@ -364,6 +374,15 @@ export const PurchaseInvoiceDetailModal: React.FC<PurchaseInvoiceDetailModalProp
                 <span>Cancel & Reverse Stock</span>
               </button>
             )}
+
+            <button
+              onClick={handleDeleteInvoice}
+              disabled={actionLoading}
+              className="flex items-center gap-1.5 px-3.5 py-2 rounded-xl bg-rose-600 hover:bg-rose-700 text-white text-xs font-semibold transition-colors shadow-xs"
+            >
+              <Trash2 className="w-3.5 h-3.5" />
+              <span>Delete Invoice</span>
+            </button>
           </div>
 
           <div className="flex items-center gap-3">

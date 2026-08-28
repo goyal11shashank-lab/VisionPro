@@ -6,9 +6,9 @@ import {
   categories, bases, coatings, baseCategories, primaryItems, uniqueItems,
   opticalBatches, opticalStocks, stockLedger, businesses
 } from '../db/schema.js';
-import { eq, and, desc, sql, ilike, or } from 'drizzle-orm';
+import { eq, and, desc, sql, ilike, or, ne } from 'drizzle-orm';
 import { recordAuditLog } from '../services/auditService.js';
-import { findOrCreateOpticalBatch, OpticalPowerInput, validateOpticalPower } from '../services/opticalMasterService.js';
+import { findOrCreateOpticalBatch, OpticalPowerInput, validateOpticalPower, updateOpticalBatch } from '../services/opticalMasterService.js';
 import { z } from 'zod';
 
 const router = Router();
@@ -112,7 +112,7 @@ router.post('/categories', requirePermission('master:create'), async (req: Reque
   }
 });
 
-router.patch('/categories/:id', requirePermission('master:edit'), async (req: Request, res: Response): Promise<void> => {
+router.patch('/categories/:id', requireAnyPermission(['master:edit', 'master.edit', 'master:manage', 'master:create']), async (req: Request, res: Response): Promise<void> => {
   try {
     const bizId = req.user!.currentBusinessId;
     const { id } = req.params;
@@ -123,9 +123,30 @@ router.patch('/categories/:id', requirePermission('master:edit'), async (req: Re
       return;
     }
 
+    let codeToUpdate = current.code;
+    if (req.body.code && req.body.code.trim().toUpperCase() !== current.code) {
+      codeToUpdate = req.body.code.trim().toUpperCase();
+      const [existing] = await db
+        .select()
+        .from(categories)
+        .where(
+          and(
+            eq(categories.code, codeToUpdate),
+            or(eq(categories.businessId, bizId), sql`${categories.businessId} IS NULL`),
+            ne(categories.id, id)
+          )
+        )
+        .limit(1);
+      if (existing) {
+        res.status(400).json({ error: `Category with code "${codeToUpdate}" already exists.` });
+        return;
+      }
+    }
+
     const [updated] = await db
       .update(categories)
       .set({
+        code: codeToUpdate,
         name: req.body.name ?? current.name,
         description: req.body.description ?? current.description,
         status: req.body.status ?? current.status,
@@ -459,7 +480,7 @@ router.post('/coatings', requirePermission('master:create'), async (req: Request
   }
 });
 
-router.patch('/coatings/:id', requirePermission('master:edit'), async (req: Request, res: Response): Promise<void> => {
+router.patch('/coatings/:id', requireAnyPermission(['master:edit', 'master.edit', 'master:manage', 'master:create']), async (req: Request, res: Response): Promise<void> => {
   try {
     const bizId = req.user!.currentBusinessId;
     const { id } = req.params;
@@ -470,9 +491,30 @@ router.patch('/coatings/:id', requirePermission('master:edit'), async (req: Requ
       return;
     }
 
+    let codeToUpdate = current.code;
+    if (req.body.code && req.body.code.trim().toUpperCase() !== current.code) {
+      codeToUpdate = req.body.code.trim().toUpperCase();
+      const [existing] = await db
+        .select()
+        .from(coatings)
+        .where(
+          and(
+            eq(coatings.code, codeToUpdate),
+            or(eq(coatings.businessId, bizId), sql`${coatings.businessId} IS NULL`),
+            ne(coatings.id, id)
+          )
+        )
+        .limit(1);
+      if (existing) {
+        res.status(400).json({ error: `Coating with code "${codeToUpdate}" already exists.` });
+        return;
+      }
+    }
+
     const [updated] = await db
       .update(coatings)
       .set({
+        code: codeToUpdate,
         name: req.body.name ?? current.name,
         description: req.body.description ?? current.description,
         status: req.body.status ?? current.status,
@@ -859,7 +901,7 @@ router.post('/bases', requirePermission('master:create'), async (req: Request, r
   }
 });
 
-router.patch('/bases/:id', requirePermission('master:edit'), async (req: Request, res: Response): Promise<void> => {
+router.patch('/bases/:id', requireAnyPermission(['master:edit', 'master.edit', 'master:manage', 'master:create']), async (req: Request, res: Response): Promise<void> => {
   try {
     const bizId = req.user!.currentBusinessId;
     const { id } = req.params;
@@ -870,9 +912,30 @@ router.patch('/bases/:id', requirePermission('master:edit'), async (req: Request
       return;
     }
 
+    let codeToUpdate = current.code;
+    if (req.body.code && req.body.code.trim().toUpperCase() !== current.code) {
+      codeToUpdate = req.body.code.trim().toUpperCase();
+      const [existing] = await db
+        .select()
+        .from(bases)
+        .where(
+          and(
+            eq(bases.code, codeToUpdate),
+            or(eq(bases.businessId, bizId), sql`${bases.businessId} IS NULL`),
+            ne(bases.id, id)
+          )
+        )
+        .limit(1);
+      if (existing) {
+        res.status(400).json({ error: `Base with code "${codeToUpdate}" already exists.` });
+        return;
+      }
+    }
+
     const [updated] = await db
       .update(bases)
       .set({
+        code: codeToUpdate,
         name: req.body.name ?? current.name,
         family: req.body.family ?? current.family,
         coatingId: req.body.coatingId !== undefined ? req.body.coatingId : current.coatingId,
@@ -1256,7 +1319,7 @@ router.post('/primary-items', requirePermission('master:create'), async (req: Re
   }
 });
 
-router.patch('/primary-items/:id', requirePermission('master:edit'), async (req: Request, res: Response): Promise<void> => {
+router.patch('/primary-items/:id', requireAnyPermission(['master:edit', 'master.edit', 'master:manage', 'master:create']), async (req: Request, res: Response): Promise<void> => {
   try {
     const bizId = req.user!.currentBusinessId;
     const { id } = req.params;
@@ -1267,9 +1330,30 @@ router.patch('/primary-items/:id', requirePermission('master:edit'), async (req:
       return;
     }
 
+    let codeToUpdate = current.code;
+    if (req.body.code && req.body.code.trim().toUpperCase() !== current.code) {
+      codeToUpdate = req.body.code.trim().toUpperCase();
+      const [existing] = await db
+        .select()
+        .from(primaryItems)
+        .where(
+          and(
+            eq(primaryItems.code, codeToUpdate),
+            eq(primaryItems.businessId, bizId),
+            ne(primaryItems.id, id)
+          )
+        )
+        .limit(1);
+      if (existing) {
+        res.status(400).json({ error: `Primary item with code "${codeToUpdate}" already exists.` });
+        return;
+      }
+    }
+
     const [updated] = await db
       .update(primaryItems)
       .set({
+        code: codeToUpdate,
         name: req.body.name ?? current.name,
         description: req.body.description ?? current.description,
         status: req.body.status ?? current.status,
@@ -1708,7 +1792,7 @@ router.post('/unique-items', requirePermission('master:create'), async (req: Req
   }
 });
 
-router.patch('/unique-items/:id', requirePermission('master:edit'), async (req: Request, res: Response): Promise<void> => {
+router.patch('/unique-items/:id', requireAnyPermission(['master:edit', 'master.edit', 'master:manage', 'master:create']), async (req: Request, res: Response): Promise<void> => {
   try {
     const bizId = req.user!.currentBusinessId;
     const { id } = req.params;
@@ -1719,10 +1803,32 @@ router.patch('/unique-items/:id', requirePermission('master:edit'), async (req: 
       return;
     }
 
+    let codeToUpdate = current.code;
+    if (req.body.code && req.body.code.trim().toUpperCase() !== current.code) {
+      codeToUpdate = req.body.code.trim().toUpperCase();
+      const [existing] = await db
+        .select()
+        .from(uniqueItems)
+        .where(
+          and(
+            eq(uniqueItems.code, codeToUpdate),
+            eq(uniqueItems.businessId, bizId),
+            ne(uniqueItems.id, id)
+          )
+        )
+        .limit(1);
+      if (existing) {
+        res.status(400).json({ error: `Unique item with code "${codeToUpdate}" already exists.` });
+        return;
+      }
+    }
+
     const [updated] = await db
       .update(uniqueItems)
       .set({
+        code: codeToUpdate,
         name: req.body.name ?? current.name,
+        primaryItemId: req.body.primaryItemId ?? current.primaryItemId,
         description: req.body.description ?? current.description,
         purchaseRate: req.body.purchaseRate !== undefined ? String(req.body.purchaseRate) : current.purchaseRate,
         lastPurchasePrice: req.body.lastPurchasePrice !== undefined ? String(req.body.lastPurchasePrice) : current.lastPurchasePrice,
@@ -2157,7 +2263,43 @@ router.post('/batches/find-or-create', requirePermission('master:create'), async
   }
 });
 
-router.patch('/batches/:id/status', requirePermission('master:edit'), async (req: Request, res: Response): Promise<void> => {
+router.patch('/batches/:id', requireAnyPermission(['master:edit', 'master.edit', 'master:manage', 'master:create']), async (req: Request, res: Response): Promise<void> => {
+  try {
+    const bizId = req.user!.currentBusinessId;
+    const { id } = req.params;
+
+    const [current] = await db
+      .select()
+      .from(opticalBatches)
+      .where(and(eq(opticalBatches.id, id), eq(opticalBatches.businessId, bizId)))
+      .limit(1);
+
+    if (!current) {
+      res.status(404).json({ error: 'Optical Batch not found' });
+      return;
+    }
+
+    const updated = await updateOpticalBatch(bizId, id, req.body, req.user!.id);
+
+    await recordAuditLog({
+      businessId: bizId,
+      userId: req.user!.id,
+      action: req.body.status && req.body.status !== current.status ? (req.body.status === 'ACTIVE' ? 'ENABLE' : 'DISABLE') : 'UPDATE',
+      module: 'INVENTORY',
+      entityType: 'OpticalBatch',
+      entityId: id,
+      previousValue: current,
+      newValue: updated,
+      req,
+    });
+
+    res.json({ success: true, batch: updated });
+  } catch (error: any) {
+    res.status(400).json({ error: error.message || 'Failed to update optical batch' });
+  }
+});
+
+router.patch('/batches/:id/status', requireAnyPermission(['master:edit', 'master.edit', 'master:manage', 'master:create']), async (req: Request, res: Response): Promise<void> => {
   try {
     const bizId = req.user!.currentBusinessId;
     const { id } = req.params;

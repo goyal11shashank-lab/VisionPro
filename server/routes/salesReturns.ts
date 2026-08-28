@@ -192,4 +192,33 @@ router.post(
   }
 );
 
+/**
+ * DELETE /api/sales/returns/:id
+ * Permanently delete a sales return
+ */
+router.delete(
+  '/:id',
+  requireAnyPermission([
+    'sales:return:delete',
+    'sales.return.delete',
+    'sales:delete',
+    'sales.delete',
+    'sales:cancel',
+    'sales:edit',
+  ]),
+  async (req: Request, res: Response) => {
+    try {
+      const businessId = req.user!.currentBusinessId;
+      const userId = req.user!.id;
+      const { id } = req.params;
+
+      const result = await SalesReturnService.deleteSalesReturn(businessId, id, userId);
+      res.json(result);
+    } catch (err: any) {
+      console.error('[DELETE /api/sales/returns/:id Error]', err);
+      res.status(400).json({ error: 'DELETE_SALES_RETURN_FAILED', message: err.message });
+    }
+  }
+);
+
 export default router;

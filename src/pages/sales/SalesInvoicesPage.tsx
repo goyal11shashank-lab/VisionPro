@@ -631,6 +631,40 @@ export const SalesInvoicesPage: React.FC<{ initialConvertOrderId?: string }> = (
     }
   };
 
+  // Delete Invoice
+  const handleDeleteInvoice = async (invoiceId: string, invoiceNumber: string) => {
+    if (
+      !window.confirm(
+        `Are you sure you want to permanently delete Sales Invoice #${invoiceNumber}?\nThis will reverse any stock deductions and ledger balances associated with it.`
+      )
+    ) {
+      return;
+    }
+
+    try {
+      setSubmitting(true);
+      const res = await fetch(`/api/sales/invoices/${invoiceId}`, {
+        method: 'DELETE',
+        headers: {
+          Authorization: `Bearer ${localStorage.getItem('token')}`,
+          'X-Business-Id': currentBusiness!.id,
+        },
+      });
+
+      if (!res.ok) {
+        const err = await res.json();
+        throw new Error(err.message || 'Failed to delete sales invoice');
+      }
+
+      setIsDetailOpen(false);
+      fetchInvoices();
+    } catch (err: any) {
+      alert(err.message);
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
   const getStatusBadge = (status: string) => {
     switch (status) {
       case 'DRAFT':
@@ -772,17 +806,27 @@ export const SalesInvoicesPage: React.FC<{ initialConvertOrderId?: string }> = (
                       ₹{parseFloat(String(inv.grandTotal)).toLocaleString('en-IN', { minimumFractionDigits: 2 })}
                     </td>
                     <td className="py-3.5 px-4 text-center">
-                      <button
-                        id={`btn-view-invoice-${inv.id}`}
-                        onClick={() => {
-                          setSelectedInvoice(inv);
-                          setIsDetailOpen(true);
-                        }}
-                        className="p-1.5 text-slate-600 hover:text-emerald-600 hover:bg-emerald-50 rounded transition"
-                        title="View Tax Invoice"
-                      >
-                        <Eye className="w-4 h-4" />
-                      </button>
+                      <div className="flex items-center justify-center gap-1">
+                        <button
+                          id={`btn-view-invoice-${inv.id}`}
+                          onClick={() => {
+                            setSelectedInvoice(inv);
+                            setIsDetailOpen(true);
+                          }}
+                          className="p-1.5 text-slate-600 hover:text-emerald-600 hover:bg-emerald-50 rounded transition"
+                          title="View Tax Invoice"
+                        >
+                          <Eye className="w-4 h-4" />
+                        </button>
+                        <button
+                          id={`btn-delete-invoice-${inv.id}`}
+                          onClick={() => handleDeleteInvoice(inv.id, inv.invoiceNumber)}
+                          className="p-1.5 text-slate-400 hover:text-rose-600 hover:bg-rose-50 rounded transition"
+                          title="Delete Tax Invoice"
+                        >
+                          <Trash2 className="w-4 h-4" />
+                        </button>
+                      </div>
                     </td>
                   </tr>
                 ))}
@@ -1465,7 +1509,7 @@ export const SalesInvoicesPage: React.FC<{ initialConvertOrderId?: string }> = (
 
             {/* Footer Cancellation Actions */}
             <div className="px-6 py-4 bg-slate-50 border-t border-slate-200 flex items-center justify-between print:hidden">
-              <div>
+              <div className="flex items-center gap-2">
                 {selectedInvoice.status === 'POSTED' && (
                   <button
                     id="btn-cancel-posted-invoice"
@@ -1476,6 +1520,15 @@ export const SalesInvoicesPage: React.FC<{ initialConvertOrderId?: string }> = (
                     Cancel Invoice (Reverse Stock & Ledger)
                   </button>
                 )}
+                <button
+                  id="btn-delete-invoice-modal"
+                  onClick={() => handleDeleteInvoice(selectedInvoice.id, selectedInvoice.invoiceNumber)}
+                  disabled={submitting}
+                  className="px-4 py-2 bg-rose-600 hover:bg-rose-700 text-white text-xs font-semibold rounded-lg transition flex items-center gap-1.5 shadow-sm"
+                >
+                  <Trash2 className="w-3.5 h-3.5" />
+                  Delete Invoice
+                </button>
               </div>
 
               <button

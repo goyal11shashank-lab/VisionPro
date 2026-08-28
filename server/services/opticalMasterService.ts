@@ -5,7 +5,7 @@
  */
 import { pool, db } from '../db/index.js';
 import { opticalBatches, opticalStocks, stockLedger, categories, uniqueItems, primaryItems, bases, coatings } from '../db/schema.js';
-import { eq, and, sql } from 'drizzle-orm';
+import { eq, and, sql, ne } from 'drizzle-orm';
 
 export interface OpticalPowerInput {
   businessId: string;
@@ -404,4 +404,110 @@ export async function findOrCreateOpticalBatch(input: OpticalPowerInput) {
   } finally {
     client.release();
   }
+}
+
+/**
+ * Updates an existing optical batch's power specifications, SKU, or status.
+ */
+export async function updateOpticalBatch(
+  businessId: string,
+  batchId: string,
+  input: {
+    uniqueItemId?: string;
+    sph?: number | string;
+    cyl?: number | string;
+    axis?: number | string;
+    add?: number | string;
+    side?: 'NONE' | 'R' | 'L' | 'BE';
+    status?: 'ACTIVE' | 'INACTIVE';
+  },
+  userId?: string
+) {
+  const [current] = await db
+    .select()
+    .from(opticalBatches)
+    .where(and(eq(opticalBatches.id, batchId), eq(opticalBatches.businessId, businessId)))
+    .limit(1);
+
+  if (!current) {
+    throw new Error('Optical Batch not found');
+  }
+
+  const targetUniqueItemId = input.uniqueItemId || current.uniqueItemId;
+
+  const [uItem] = await db
+    .select({
+      id: uniqueItems.id,
+      name: uniqueItems.name,
+      code: uniqueItems.code,
+      categoryId: primaryItems.categoryId,
+      categoryCode: categories.code,
+    })
+    .from(uniqueItems)
+    .innerJoin(primaryItems, eq(uniqueItems.primaryItemId, primaryItems.id))
+    .innerJoin(categories, eq(primaryItems.categoryId, categories.id))
+    .where(and(eq(uniqueItems.id, targetUniqueItemId), eq(uniqueItems.businessId, businessId)))
+    .limit(1);
+
+  if (!uItem) {
+    throw new Error(`Unique item ${targetUniqueItemId} not found`);
+  }
+
+  const categoryCode = uItem.categoryCode;
+
+  const sph = input.sph !== undefined ? input.sph : current.sph;
+  const cyl = input.cyl !== undefined ? input.cyl : current.cyl;
+  const axis = input.axis !== undefined ? input.axis : current.axis;
+  const add = input.add !== undefined ? input.add : current.add;
+  const side = input.side !== undefined ? input.side : current.side;
+
+  const validated = validateOpticalPower(
+    categoryCode,
+    sph,
+    cyl,
+    axis,
+    add,
+    side
+  );
+
+  const fullIdentityKey = `${targetUniqueItemId}:${validated.identityKey}`;
+
+  if (fullIdentityKey !== current.identityKey) {
+    const [conflict] = await db
+      .select({ id: opticalBatches.id, barcode: opticalBatches.barcode })
+      .from(opticalBatches)
+      .where(
+        and(
+          eq(opticalBatches.businessId, businessId),
+          eq(opticalBatches.identityKey, fullIdentityKey),
+          ne(opticalBatches.id, batchId)
+        )
+      )
+      .limit(1);
+
+    if (conflict) {
+      throw new Error(`An optical batch with power specifications (${validated.identityKey}) already exists (Barcode: ${conflict.barcode}).`);
+    }
+  }
+
+  const newStatus = input.status || current.status;
+
+  const [updated] = await db
+    .update(opticalBatches)
+    .set({
+      uniqueItemId: targetUniqueItemId,
+      sph: String(validated.sphNum),
+      cyl: String(validated.cylNum),
+      axis: String(validated.axisNum),
+      add: String(validated.addNum),
+      side: validated.sideNormalized,
+      identityKey: fullIdentityKey,
+      status: newStatus,
+      updatedAt: new Date(),
+      updatedBy: userId || current.updatedBy,
+    })
+    .where(eq(opticalBatches.id, batchId))
+    .returning();
+
+  return updated;
 }

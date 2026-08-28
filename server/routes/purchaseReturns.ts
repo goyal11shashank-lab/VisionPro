@@ -191,4 +191,33 @@ router.post(
   }
 );
 
+/**
+ * DELETE /api/purchases/returns/:id
+ * Permanently delete a purchase return
+ */
+router.delete(
+  '/:id',
+  requireAnyPermission([
+    'purchase:return:delete',
+    'purchase.return.delete',
+    'purchase:delete',
+    'purchase.delete',
+    'purchase:cancel',
+    'purchase:edit',
+  ]),
+  async (req: Request, res: Response) => {
+    try {
+      const businessId = req.user!.currentBusinessId;
+      const userId = req.user!.id;
+      const { id } = req.params;
+
+      const result = await PurchaseReturnService.deletePurchaseReturn(businessId, id, userId);
+      res.json(result);
+    } catch (err: any) {
+      console.error('[DELETE /api/purchases/returns/:id Error]', err);
+      res.status(400).json({ error: 'DELETE_PURCHASE_RETURN_FAILED', message: err.message });
+    }
+  }
+);
+
 export default router;

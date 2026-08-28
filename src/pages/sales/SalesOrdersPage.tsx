@@ -539,6 +539,40 @@ export const SalesOrdersPage: React.FC<{ onNavigateToInvoice?: (orderId: string)
     }
   };
 
+  // Delete Order
+  const handleDeleteOrder = async (orderId: string, orderNumber: string) => {
+    if (
+      !window.confirm(
+        `Are you sure you want to permanently delete Sales Order #${orderNumber}?\nAny reserved optical batch stock will be released.`
+      )
+    ) {
+      return;
+    }
+
+    try {
+      setSubmitting(true);
+      const res = await fetch(`/api/sales/orders/${orderId}`, {
+        method: 'DELETE',
+        headers: {
+          Authorization: `Bearer ${localStorage.getItem('token')}`,
+          'X-Business-Id': currentBusiness!.id,
+        },
+      });
+
+      if (!res.ok) {
+        const err = await res.json();
+        throw new Error(err.message || 'Failed to delete sales order');
+      }
+
+      setIsDetailOpen(false);
+      fetchOrders();
+    } catch (err: any) {
+      alert(err.message);
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
   const getStatusBadge = (status: string) => {
     switch (status) {
       case 'DRAFT':
@@ -678,6 +712,15 @@ export const SalesOrdersPage: React.FC<{ onNavigateToInvoice?: (orderId: string)
                           title="View Details"
                         >
                           <Eye className="w-4 h-4" />
+                        </button>
+
+                        <button
+                          id={`btn-delete-order-${order.id}`}
+                          onClick={() => handleDeleteOrder(order.id, order.orderNumber)}
+                          className="p-1.5 text-slate-400 hover:text-rose-600 hover:bg-rose-50 rounded transition"
+                          title="Delete Sales Order"
+                        >
+                          <Trash2 className="w-4 h-4" />
                         </button>
 
                         {order.status === 'CONFIRMED' && onNavigateToInvoice && (
@@ -1193,6 +1236,16 @@ export const SalesOrdersPage: React.FC<{ onNavigateToInvoice?: (orderId: string)
                     Cancel Order
                   </button>
                 )}
+
+                <button
+                  id="btn-delete-order-modal"
+                  onClick={() => handleDeleteOrder(selectedOrder.id, selectedOrder.orderNumber)}
+                  disabled={submitting}
+                  className="px-4 py-2 bg-rose-600 hover:bg-rose-700 text-white text-xs font-semibold rounded-lg transition flex items-center gap-1.5 shadow-sm"
+                >
+                  <Trash2 className="w-3.5 h-3.5" />
+                  Delete Order
+                </button>
               </div>
 
               <div className="flex items-center gap-2">

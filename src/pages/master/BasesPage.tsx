@@ -482,7 +482,7 @@ export const BasesPage: React.FC = () => {
                         </td>
                         <td className="px-5 py-4 text-right" onClick={e => e.stopPropagation()}>
                           <div className="flex items-center justify-end gap-1">
-                            {hasPermission('master:edit') && (
+                            {(hasPermission('master:edit') || hasPermission('master:create') || hasPermission('master:manage')) && (
                               <button
                                 id={`btn-edit-base-${b.id}`}
                                 onClick={() => handleOpenEdit(b)}

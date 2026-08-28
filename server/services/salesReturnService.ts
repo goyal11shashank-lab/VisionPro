@@ -955,4 +955,124 @@ export class SalesReturnService {
       offset,
     };
   }
+
+  /**
+   * Permanently deletes a Sales Return, restoring stock & ledger if POSTED
+   */
+  static async deleteSalesReturn(
+    businessId: string,
+    returnId: string,
+    userId?: string
+  ) {
+    const client = await pool.connect();
+    try {
+      await client.query('BEGIN');
+
+      const returnRes = await client.query(
+        `SELECT * FROM sales_returns WHERE business_id = $1 AND id = $2 FOR UPDATE`,
+        [businessId, returnId]
+      );
+
+      if (returnRes.rows.length === 0) {
+        throw new Error(`Sales Return not found with ID ${returnId}`);
+      }
+
+      const sReturn = returnRes.rows[0];
+
+      // If POSTED, reverse restored stock and customer ledger
+      if (sReturn.status === 'POSTED') {
+        const batchesRes = await client.query(
+          `SELECT srlb.batch_id, srlb.quantity
+           FROM sales_return_line_batches srlb
+           INNER JOIN sales_return_lines srl ON srlb.sales_return_line_id = srl.id
+           WHERE srl.sales_return_id = $1`,
+          [returnId]
+        );
+
+        for (const row of batchesRes.rows) {
+          const batchId = row.batch_id;
+          const qty = parseFloat(row.quantity);
+
+          const stockRes = await client.query(
+            `SELECT * FROM optical_stocks WHERE business_id = $1 AND batch_id = $2 FOR UPDATE`,
+            [businessId, batchId]
+          );
+
+          if (stockRes.rows.length > 0) {
+            const stockRow = stockRes.rows[0];
+            const curPhys = parseFloat(stockRow.physical_stock);
+            const curResv = parseFloat(stockRow.reserved_stock);
+            const newPhys = round2(Math.max(0, curPhys - qty));
+            const newAvail = round2(newPhys - curResv);
+
+            await client.query(
+              `UPDATE optical_stocks 
+               SET physical_stock = $1, available_stock = $2, updated_at = NOW() 
+               WHERE id = $3`,
+              [newPhys.toFixed(2), newAvail.toFixed(2), stockRow.id]
+            );
+          }
+        }
+
+        // Delete stock_ledger entries created by this return
+        await client.query(
+          `DELETE FROM stock_ledger WHERE business_id = $1 AND reference_type IN ('SALES_RETURN', 'SALES_RETURN_CANCEL') AND reference_id = $2`,
+          [businessId, returnId]
+        );
+
+        // Delete customer_ledgers entry for this return
+        await client.query(
+          `DELETE FROM customer_ledgers WHERE business_id = $1 AND reference_type IN ('SALES_RETURN', 'SALES_RETURN_CANCEL') AND reference_id = $2`,
+          [businessId, returnId]
+        );
+      }
+
+      // Delete line batches
+      await client.query(
+        `DELETE FROM sales_return_line_batches 
+         WHERE sales_return_line_id IN (
+           SELECT id FROM sales_return_lines WHERE sales_return_id = $1
+         )`,
+        [returnId]
+      );
+
+      // Delete return lines
+      await client.query(
+        `DELETE FROM sales_return_lines WHERE sales_return_id = $1`,
+        [returnId]
+      );
+
+      // Delete sales return
+      await client.query(
+        `DELETE FROM sales_returns WHERE business_id = $1 AND id = $2`,
+        [businessId, returnId]
+      );
+
+      await client.query('COMMIT');
+
+      await AuditService.log({
+        businessId,
+        userId,
+        module: 'sales',
+        action: 'DELETE_SALES_RETURN',
+        entityType: 'SALES_RETURN',
+        entityId: returnId,
+        previousValue: {
+          returnNumber: sReturn.return_number,
+          grandTotal: sReturn.grand_total,
+          status: sReturn.status,
+        },
+      });
+
+      return {
+        success: true,
+        message: `Sales Return ${sReturn.return_number} deleted successfully.`,
+      };
+    } catch (err) {
+      await client.query('ROLLBACK');
+      throw err;
+    } finally {
+      client.release();
+    }
+  }
 }
