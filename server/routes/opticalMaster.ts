@@ -1,6 +1,6 @@
 import { Router, Request, Response } from 'express';
 import { authenticateToken } from '../middleware/auth.js';
-import { requirePermission } from '../middleware/permission.js';
+import { requirePermission, requireAnyPermission } from '../middleware/permission.js';
 import { db, pool } from '../db/index.js';
 import {
   categories, bases, coatings, baseCategories, primaryItems, uniqueItems,
@@ -153,6 +153,234 @@ router.patch('/categories/:id', requirePermission('master:edit'), async (req: Re
   }
 });
 
+router.delete('/categories/:id', requireAnyPermission(['master:delete', 'master:edit']), async (req: Request, res: Response): Promise<void> => {
+  try {
+    const bizId = req.user!.currentBusinessId;
+    const { id } = req.params;
+
+    const [current] = await db
+      .select()
+      .from(categories)
+      .where(and(eq(categories.id, id), or(eq(categories.businessId, bizId), sql`${categories.businessId} IS NULL`)))
+      .limit(1);
+
+    if (!current) {
+      res.status(404).json({ error: 'Category not found' });
+      return;
+    }
+
+    if (!current.businessId) {
+      res.status(403).json({ error: 'Protected system standard categories cannot be deleted.' });
+      return;
+    }
+
+    // Check if any invoices (sales or purchase) or documents reference this category
+    const checkRes = await pool.query(
+      `SELECT 
+        (
+          SELECT COUNT(*)::int 
+          FROM sales_invoice_lines sil
+          JOIN unique_items ui ON sil.unique_item_id = ui.id
+          WHERE ui.category_id = $1
+        ) AS sales_invoice_lines_count,
+        (
+          SELECT COUNT(*)::int 
+          FROM purchase_invoice_lines pil
+          JOIN unique_items ui ON pil.unique_item_id = ui.id
+          WHERE ui.category_id = $1
+        ) AS purchase_invoice_lines_count,
+        (
+          SELECT COUNT(*)::int 
+          FROM sales_order_lines sol
+          JOIN unique_items ui ON sol.unique_item_id = ui.id
+          WHERE ui.category_id = $1
+        ) AS sales_order_lines_count,
+        (
+          SELECT COUNT(*)::int 
+          FROM sales_return_lines srl
+          JOIN unique_items ui ON srl.unique_item_id = ui.id
+          WHERE ui.category_id = $1
+        ) AS sales_return_lines_count,
+        (
+          SELECT COUNT(*)::int 
+          FROM purchase_return_lines prl
+          JOIN unique_items ui ON prl.unique_item_id = ui.id
+          WHERE ui.category_id = $1
+        ) AS purchase_return_lines_count,
+        (
+          SELECT COUNT(*)::int 
+          FROM primary_items pi 
+          WHERE pi.category_id = $1
+        ) AS primary_items_count,
+        (
+          SELECT COUNT(*)::int 
+          FROM optical_batches ob 
+          WHERE ob.category_id = $1
+        ) AS optical_batches_count
+      `,
+      [id]
+    );
+
+    const {
+      sales_invoice_lines_count,
+      purchase_invoice_lines_count,
+      sales_order_lines_count,
+      sales_return_lines_count,
+      purchase_return_lines_count,
+      primary_items_count,
+      optical_batches_count,
+    } = checkRes.rows[0];
+
+    if (sales_invoice_lines_count > 0 || purchase_invoice_lines_count > 0 || sales_return_lines_count > 0 || purchase_return_lines_count > 0) {
+      res.status(400).json({
+        error: `Cannot delete category "${current.name}" (${current.code}): Sales or Purchase Invoices have already been created with products in this category.`
+      });
+      return;
+    }
+
+    if (sales_order_lines_count > 0) {
+      res.status(400).json({
+        error: `Cannot delete category "${current.name}" (${current.code}): Active Sales Orders reference products in this category.`
+      });
+      return;
+    }
+
+    if (primary_items_count > 0 || optical_batches_count > 0) {
+      res.status(400).json({
+        error: `Cannot delete category "${current.name}" (${current.code}): It is currently referenced by ${primary_items_count} primary item(s) and ${optical_batches_count} optical batch(es). Please remove linked items first.`
+      });
+      return;
+    }
+
+    // Delete base compatibility mappings
+    await db.delete(baseCategories).where(and(eq(baseCategories.categoryId, id), eq(baseCategories.businessId, bizId)));
+
+    // Delete category
+    await db.delete(categories).where(and(eq(categories.id, id), eq(categories.businessId, bizId)));
+
+    await recordAuditLog({
+      businessId: bizId,
+      userId: req.user!.id,
+      action: 'DELETE',
+      module: 'INVENTORY',
+      entityType: 'Category',
+      entityId: id,
+      previousValue: current,
+      req,
+    });
+
+    res.json({
+      success: true,
+      message: `Category "${current.name}" (${current.code}) was deleted successfully.`
+    });
+  } catch (error: any) {
+    res.status(500).json({ error: error.message || 'Failed to delete category' });
+  }
+});
+
+router.post('/categories/bulk-delete', requireAnyPermission(['master:delete', 'master:edit']), async (req: Request, res: Response): Promise<void> => {
+  try {
+    const bizId = req.user!.currentBusinessId;
+    const { ids } = req.body;
+    if (!Array.isArray(ids) || ids.length === 0) {
+      res.status(400).json({ error: 'Please provide an array of category IDs to delete.' });
+      return;
+    }
+
+    let deletedCount = 0;
+    const errors: string[] = [];
+
+    for (const id of ids) {
+      try {
+        const [current] = await db
+          .select()
+          .from(categories)
+          .where(and(eq(categories.id, id), or(eq(categories.businessId, bizId), sql`${categories.businessId} IS NULL`)))
+          .limit(1);
+
+        if (!current) {
+          errors.push(`Category ID ${id} not found.`);
+          continue;
+        }
+
+        if (!current.businessId) {
+          errors.push(`Category "${current.name}" (${current.code}) is a protected system standard category and cannot be deleted.`);
+          continue;
+        }
+
+        const checkRes = await pool.query(
+          `SELECT 
+            (SELECT COUNT(*)::int FROM sales_invoice_lines sil JOIN unique_items ui ON sil.unique_item_id = ui.id WHERE ui.category_id = $1) AS sales_invoice_lines_count,
+            (SELECT COUNT(*)::int FROM purchase_invoice_lines pil JOIN unique_items ui ON pil.unique_item_id = ui.id WHERE ui.category_id = $1) AS purchase_invoice_lines_count,
+            (SELECT COUNT(*)::int FROM sales_order_lines sol JOIN unique_items ui ON sol.unique_item_id = ui.id WHERE ui.category_id = $1) AS sales_order_lines_count,
+            (SELECT COUNT(*)::int FROM sales_return_lines srl JOIN unique_items ui ON srl.unique_item_id = ui.id WHERE ui.category_id = $1) AS sales_return_lines_count,
+            (SELECT COUNT(*)::int FROM purchase_return_lines prl JOIN unique_items ui ON prl.unique_item_id = ui.id WHERE ui.category_id = $1) AS purchase_return_lines_count,
+            (SELECT COUNT(*)::int FROM primary_items pi WHERE pi.category_id = $1) AS primary_items_count,
+            (SELECT COUNT(*)::int FROM optical_batches ob WHERE ob.category_id = $1) AS optical_batches_count
+          `,
+          [id]
+        );
+
+        const {
+          sales_invoice_lines_count,
+          purchase_invoice_lines_count,
+          sales_order_lines_count,
+          sales_return_lines_count,
+          purchase_return_lines_count,
+          primary_items_count,
+          optical_batches_count,
+        } = checkRes.rows[0];
+
+        if (sales_invoice_lines_count > 0 || purchase_invoice_lines_count > 0 || sales_return_lines_count > 0 || purchase_return_lines_count > 0) {
+          errors.push(`"${current.name}" (${current.code}) has recorded sales or purchase invoices / returns.`);
+          continue;
+        }
+
+        if (sales_order_lines_count > 0) {
+          errors.push(`"${current.name}" (${current.code}) has active sales orders.`);
+          continue;
+        }
+
+        if (primary_items_count > 0 || optical_batches_count > 0) {
+          errors.push(`"${current.name}" (${current.code}) has ${primary_items_count} linked primary item(s) and ${optical_batches_count} optical batch(es).`);
+          continue;
+        }
+
+        await db.delete(baseCategories).where(and(eq(baseCategories.categoryId, id), eq(baseCategories.businessId, bizId)));
+        await db.delete(categories).where(and(eq(categories.id, id), eq(categories.businessId, bizId)));
+
+        await recordAuditLog({
+          businessId: bizId,
+          userId: req.user!.id,
+          action: 'DELETE',
+          module: 'INVENTORY',
+          entityType: 'Category',
+          entityId: id,
+          previousValue: current,
+          req,
+        });
+
+        deletedCount++;
+      } catch (itemErr: any) {
+        errors.push(`Failed to delete category ${id}: ${itemErr.message}`);
+      }
+    }
+
+    res.json({
+      success: true,
+      totalRequested: ids.length,
+      deletedCount,
+      failedCount: errors.length,
+      errors,
+      message: deletedCount === ids.length
+        ? `Successfully deleted ${deletedCount} category/categories.`
+        : `Deleted ${deletedCount} of ${ids.length} category/categories. ${errors.length} item(s) could not be deleted.`
+    });
+  } catch (error: any) {
+    res.status(500).json({ error: error.message || 'Failed to perform bulk delete of categories' });
+  }
+});
+
 // ==========================================
 // 2. COATINGS CRUD
 // ==========================================
@@ -269,6 +497,238 @@ router.patch('/coatings/:id', requirePermission('master:edit'), async (req: Requ
     res.json({ success: true, coating: updated });
   } catch (error: any) {
     res.status(500).json({ error: error.message || 'Failed to update coating' });
+  }
+});
+
+router.delete('/coatings/:id', requireAnyPermission(['master:delete', 'master:edit']), async (req: Request, res: Response): Promise<void> => {
+  try {
+    const bizId = req.user!.currentBusinessId;
+    const { id } = req.params;
+
+    const [current] = await db
+      .select()
+      .from(coatings)
+      .where(and(eq(coatings.id, id), or(eq(coatings.businessId, bizId), sql`${coatings.businessId} IS NULL`)))
+      .limit(1);
+
+    if (!current) {
+      res.status(404).json({ error: 'Coating not found' });
+      return;
+    }
+
+    if (!current.businessId) {
+      res.status(403).json({ error: 'Protected system standard coatings cannot be deleted.' });
+      return;
+    }
+
+    // Check if any invoices (sales or purchase) or documents reference products under this coating
+    const checkRes = await pool.query(
+      `SELECT 
+        (
+          SELECT COUNT(*)::int 
+          FROM sales_invoice_lines sil
+          JOIN unique_items ui ON sil.unique_item_id = ui.id
+          JOIN primary_items pi ON ui.primary_item_id = pi.id
+          WHERE pi.coating_id = $1
+        ) AS sales_invoice_lines_count,
+        (
+          SELECT COUNT(*)::int 
+          FROM purchase_invoice_lines pil
+          JOIN unique_items ui ON pil.unique_item_id = ui.id
+          JOIN primary_items pi ON ui.primary_item_id = pi.id
+          WHERE pi.coating_id = $1
+        ) AS purchase_invoice_lines_count,
+        (
+          SELECT COUNT(*)::int 
+          FROM sales_order_lines sol
+          JOIN unique_items ui ON sol.unique_item_id = ui.id
+          JOIN primary_items pi ON ui.primary_item_id = pi.id
+          WHERE pi.coating_id = $1
+        ) AS sales_order_lines_count,
+        (
+          SELECT COUNT(*)::int 
+          FROM sales_return_lines srl
+          JOIN unique_items ui ON srl.unique_item_id = ui.id
+          JOIN primary_items pi ON ui.primary_item_id = pi.id
+          WHERE pi.coating_id = $1
+        ) AS sales_return_lines_count,
+        (
+          SELECT COUNT(*)::int 
+          FROM purchase_return_lines prl
+          JOIN unique_items ui ON prl.unique_item_id = ui.id
+          JOIN primary_items pi ON ui.primary_item_id = pi.id
+          WHERE pi.coating_id = $1
+        ) AS purchase_return_lines_count,
+        (
+          SELECT COUNT(*)::int 
+          FROM primary_items pi 
+          WHERE pi.coating_id = $1
+        ) AS primary_items_count
+      `,
+      [id]
+    );
+
+    const {
+      sales_invoice_lines_count,
+      purchase_invoice_lines_count,
+      sales_order_lines_count,
+      sales_return_lines_count,
+      purchase_return_lines_count,
+      primary_items_count,
+    } = checkRes.rows[0];
+
+    if (sales_invoice_lines_count > 0 || purchase_invoice_lines_count > 0 || sales_return_lines_count > 0 || purchase_return_lines_count > 0) {
+      res.status(400).json({
+        error: `Cannot delete coating "${current.name}" (${current.code}): Sales or Purchase Invoices have already been created with products using this coating.`
+      });
+      return;
+    }
+
+    if (sales_order_lines_count > 0) {
+      res.status(400).json({
+        error: `Cannot delete coating "${current.name}" (${current.code}): Active Sales Orders reference products with this coating.`
+      });
+      return;
+    }
+
+    if (primary_items_count > 0) {
+      res.status(400).json({
+        error: `Cannot delete coating "${current.name}" (${current.code}): It is currently linked to ${primary_items_count} primary item(s). Remove or reassign the primary items before deleting this coating.`
+      });
+      return;
+    }
+
+    // Set coatingId to null in bases referencing this coating
+    await db
+      .update(bases)
+      .set({ coatingId: null, updatedAt: new Date() })
+      .where(and(eq(bases.coatingId, id), eq(bases.businessId, bizId)));
+
+    // Delete coating record
+    await db.delete(coatings).where(and(eq(coatings.id, id), eq(coatings.businessId, bizId)));
+
+    await recordAuditLog({
+      businessId: bizId,
+      userId: req.user!.id,
+      action: 'DELETE',
+      module: 'INVENTORY',
+      entityType: 'Coating',
+      entityId: id,
+      previousValue: current,
+      req,
+    });
+
+    res.json({
+      success: true,
+      message: `Coating "${current.name}" (${current.code}) was deleted successfully from database.`
+    });
+  } catch (error: any) {
+    res.status(500).json({ error: error.message || 'Failed to delete coating' });
+  }
+});
+
+router.post('/coatings/bulk-delete', requireAnyPermission(['master:delete', 'master:edit']), async (req: Request, res: Response): Promise<void> => {
+  try {
+    const bizId = req.user!.currentBusinessId;
+    const { ids } = req.body;
+    if (!Array.isArray(ids) || ids.length === 0) {
+      res.status(400).json({ error: 'Please provide an array of coating IDs to delete.' });
+      return;
+    }
+
+    let deletedCount = 0;
+    const errors: string[] = [];
+
+    for (const id of ids) {
+      try {
+        const [current] = await db
+          .select()
+          .from(coatings)
+          .where(and(eq(coatings.id, id), or(eq(coatings.businessId, bizId), sql`${coatings.businessId} IS NULL`)))
+          .limit(1);
+
+        if (!current) {
+          errors.push(`Coating ID ${id} not found.`);
+          continue;
+        }
+
+        if (!current.businessId) {
+          errors.push(`Coating "${current.name}" (${current.code}) is a protected system standard coating and cannot be deleted.`);
+          continue;
+        }
+
+        const checkRes = await pool.query(
+          `SELECT 
+            (SELECT COUNT(*)::int FROM sales_invoice_lines sil JOIN unique_items ui ON sil.unique_item_id = ui.id JOIN primary_items pi ON ui.primary_item_id = pi.id WHERE pi.coating_id = $1) AS sales_invoice_lines_count,
+            (SELECT COUNT(*)::int FROM purchase_invoice_lines pil JOIN unique_items ui ON pil.unique_item_id = ui.id JOIN primary_items pi ON ui.primary_item_id = pi.id WHERE pi.coating_id = $1) AS purchase_invoice_lines_count,
+            (SELECT COUNT(*)::int FROM sales_order_lines sol JOIN unique_items ui ON sol.unique_item_id = ui.id JOIN primary_items pi ON ui.primary_item_id = pi.id WHERE pi.coating_id = $1) AS sales_order_lines_count,
+            (SELECT COUNT(*)::int FROM sales_return_lines srl JOIN unique_items ui ON srl.unique_item_id = ui.id JOIN primary_items pi ON ui.primary_item_id = pi.id WHERE pi.coating_id = $1) AS sales_return_lines_count,
+            (SELECT COUNT(*)::int FROM purchase_return_lines prl JOIN unique_items ui ON prl.unique_item_id = ui.id JOIN primary_items pi ON ui.primary_item_id = pi.id WHERE pi.coating_id = $1) AS purchase_return_lines_count,
+            (SELECT COUNT(*)::int FROM primary_items pi WHERE pi.coating_id = $1) AS primary_items_count
+          `,
+          [id]
+        );
+
+        const {
+          sales_invoice_lines_count,
+          purchase_invoice_lines_count,
+          sales_order_lines_count,
+          sales_return_lines_count,
+          purchase_return_lines_count,
+          primary_items_count,
+        } = checkRes.rows[0];
+
+        if (sales_invoice_lines_count > 0 || purchase_invoice_lines_count > 0 || sales_return_lines_count > 0 || purchase_return_lines_count > 0) {
+          errors.push(`"${current.name}" (${current.code}) has recorded sales or purchase invoices / returns.`);
+          continue;
+        }
+
+        if (sales_order_lines_count > 0) {
+          errors.push(`"${current.name}" (${current.code}) has active sales orders.`);
+          continue;
+        }
+
+        if (primary_items_count > 0) {
+          errors.push(`"${current.name}" (${current.code}) is linked to ${primary_items_count} primary item(s).`);
+          continue;
+        }
+
+        await db
+          .update(bases)
+          .set({ coatingId: null, updatedAt: new Date() })
+          .where(and(eq(bases.coatingId, id), eq(bases.businessId, bizId)));
+
+        await db.delete(coatings).where(and(eq(coatings.id, id), eq(coatings.businessId, bizId)));
+
+        await recordAuditLog({
+          businessId: bizId,
+          userId: req.user!.id,
+          action: 'DELETE',
+          module: 'INVENTORY',
+          entityType: 'Coating',
+          entityId: id,
+          previousValue: current,
+          req,
+        });
+
+        deletedCount++;
+      } catch (itemErr: any) {
+        errors.push(`Failed to delete coating ${id}: ${itemErr.message}`);
+      }
+    }
+
+    res.json({
+      success: true,
+      totalRequested: ids.length,
+      deletedCount,
+      failedCount: errors.length,
+      errors,
+      message: deletedCount === ids.length
+        ? `Successfully deleted ${deletedCount} coating(s).`
+        : `Deleted ${deletedCount} of ${ids.length} coating(s). ${errors.length} item(s) could not be deleted.`
+    });
+  } catch (error: any) {
+    res.status(500).json({ error: error.message || 'Failed to perform bulk delete of coatings' });
   }
 });
 
@@ -454,6 +914,231 @@ router.patch('/bases/:id', requirePermission('master:edit'), async (req: Request
   }
 });
 
+router.delete('/bases/:id', requireAnyPermission(['master:delete', 'master:edit']), async (req: Request, res: Response): Promise<void> => {
+  try {
+    const bizId = req.user!.currentBusinessId;
+    const { id } = req.params;
+
+    const [current] = await db
+      .select()
+      .from(bases)
+      .where(and(eq(bases.id, id), or(eq(bases.businessId, bizId), sql`${bases.businessId} IS NULL`)))
+      .limit(1);
+
+    if (!current) {
+      res.status(404).json({ error: 'Base not found' });
+      return;
+    }
+
+    if (!current.businessId) {
+      res.status(403).json({ error: 'Protected system standard bases cannot be deleted.' });
+      return;
+    }
+
+    // Check if any invoices (sales or purchase) or documents reference products under this base
+    const checkRes = await pool.query(
+      `SELECT 
+        (
+          SELECT COUNT(*)::int 
+          FROM sales_invoice_lines sil
+          JOIN unique_items ui ON sil.unique_item_id = ui.id
+          JOIN primary_items pi ON ui.primary_item_id = pi.id
+          WHERE pi.base_id = $1
+        ) AS sales_invoice_lines_count,
+        (
+          SELECT COUNT(*)::int 
+          FROM purchase_invoice_lines pil
+          JOIN unique_items ui ON pil.unique_item_id = ui.id
+          JOIN primary_items pi ON ui.primary_item_id = pi.id
+          WHERE pi.base_id = $1
+        ) AS purchase_invoice_lines_count,
+        (
+          SELECT COUNT(*)::int 
+          FROM sales_order_lines sol
+          JOIN unique_items ui ON sol.unique_item_id = ui.id
+          JOIN primary_items pi ON ui.primary_item_id = pi.id
+          WHERE pi.base_id = $1
+        ) AS sales_order_lines_count,
+        (
+          SELECT COUNT(*)::int 
+          FROM sales_return_lines srl
+          JOIN unique_items ui ON srl.unique_item_id = ui.id
+          JOIN primary_items pi ON ui.primary_item_id = pi.id
+          WHERE pi.base_id = $1
+        ) AS sales_return_lines_count,
+        (
+          SELECT COUNT(*)::int 
+          FROM purchase_return_lines prl
+          JOIN unique_items ui ON prl.unique_item_id = ui.id
+          JOIN primary_items pi ON ui.primary_item_id = pi.id
+          WHERE pi.base_id = $1
+        ) AS purchase_return_lines_count,
+        (
+          SELECT COUNT(*)::int 
+          FROM primary_items pi 
+          WHERE pi.base_id = $1
+        ) AS primary_items_count
+      `,
+      [id]
+    );
+
+    const {
+      sales_invoice_lines_count,
+      purchase_invoice_lines_count,
+      sales_order_lines_count,
+      sales_return_lines_count,
+      purchase_return_lines_count,
+      primary_items_count,
+    } = checkRes.rows[0];
+
+    if (sales_invoice_lines_count > 0 || purchase_invoice_lines_count > 0 || sales_return_lines_count > 0 || purchase_return_lines_count > 0) {
+      res.status(400).json({
+        error: `Cannot delete base "${current.name}" (${current.code}): Sales or Purchase Invoices have already been created with products under this category/base.`
+      });
+      return;
+    }
+
+    if (sales_order_lines_count > 0) {
+      res.status(400).json({
+        error: `Cannot delete base "${current.name}" (${current.code}): Active Sales Orders reference products with this base.`
+      });
+      return;
+    }
+
+    if (primary_items_count > 0) {
+      res.status(400).json({
+        error: `Cannot delete base "${current.name}" (${current.code}): It is currently linked to ${primary_items_count} primary item(s). Remove the primary items before deleting this base.`
+      });
+      return;
+    }
+
+    // Delete base-category compatibility mappings
+    await db.delete(baseCategories).where(and(eq(baseCategories.baseId, id), eq(baseCategories.businessId, bizId)));
+
+    // Delete base record
+    await db.delete(bases).where(and(eq(bases.id, id), eq(bases.businessId, bizId)));
+
+    await recordAuditLog({
+      businessId: bizId,
+      userId: req.user!.id,
+      action: 'DELETE',
+      module: 'INVENTORY',
+      entityType: 'Base',
+      entityId: id,
+      previousValue: current,
+      req,
+    });
+
+    res.json({
+      success: true,
+      message: `Base "${current.name}" (${current.code}) and its category compatibility mappings were deleted successfully from database.`
+    });
+  } catch (error: any) {
+    res.status(500).json({ error: error.message || 'Failed to delete base' });
+  }
+});
+
+router.post('/bases/bulk-delete', requireAnyPermission(['master:delete', 'master:edit']), async (req: Request, res: Response): Promise<void> => {
+  try {
+    const bizId = req.user!.currentBusinessId;
+    const { ids } = req.body;
+    if (!Array.isArray(ids) || ids.length === 0) {
+      res.status(400).json({ error: 'Please provide an array of base IDs to delete.' });
+      return;
+    }
+
+    let deletedCount = 0;
+    const errors: string[] = [];
+
+    for (const id of ids) {
+      try {
+        const [current] = await db
+          .select()
+          .from(bases)
+          .where(and(eq(bases.id, id), or(eq(bases.businessId, bizId), sql`${bases.businessId} IS NULL`)))
+          .limit(1);
+
+        if (!current) {
+          errors.push(`Base ID ${id} not found.`);
+          continue;
+        }
+
+        if (!current.businessId) {
+          errors.push(`Base "${current.name}" (${current.code}) is a protected system standard base and cannot be deleted.`);
+          continue;
+        }
+
+        const checkRes = await pool.query(
+          `SELECT 
+            (SELECT COUNT(*)::int FROM sales_invoice_lines sil JOIN unique_items ui ON sil.unique_item_id = ui.id JOIN primary_items pi ON ui.primary_item_id = pi.id WHERE pi.base_id = $1) AS sales_invoice_lines_count,
+            (SELECT COUNT(*)::int FROM purchase_invoice_lines pil JOIN unique_items ui ON pil.unique_item_id = ui.id JOIN primary_items pi ON ui.primary_item_id = pi.id WHERE pi.base_id = $1) AS purchase_invoice_lines_count,
+            (SELECT COUNT(*)::int FROM sales_order_lines sol JOIN unique_items ui ON sol.unique_item_id = ui.id JOIN primary_items pi ON ui.primary_item_id = pi.id WHERE pi.base_id = $1) AS sales_order_lines_count,
+            (SELECT COUNT(*)::int FROM sales_return_lines srl JOIN unique_items ui ON srl.unique_item_id = ui.id JOIN primary_items pi ON ui.primary_item_id = pi.id WHERE pi.base_id = $1) AS sales_return_lines_count,
+            (SELECT COUNT(*)::int FROM purchase_return_lines prl JOIN unique_items ui ON prl.unique_item_id = ui.id JOIN primary_items pi ON ui.primary_item_id = pi.id WHERE pi.base_id = $1) AS purchase_return_lines_count,
+            (SELECT COUNT(*)::int FROM primary_items pi WHERE pi.base_id = $1) AS primary_items_count
+          `,
+          [id]
+        );
+
+        const {
+          sales_invoice_lines_count,
+          purchase_invoice_lines_count,
+          sales_order_lines_count,
+          sales_return_lines_count,
+          purchase_return_lines_count,
+          primary_items_count,
+        } = checkRes.rows[0];
+
+        if (sales_invoice_lines_count > 0 || purchase_invoice_lines_count > 0 || sales_return_lines_count > 0 || purchase_return_lines_count > 0) {
+          errors.push(`"${current.name}" (${current.code}) has recorded sales or purchase invoices / returns.`);
+          continue;
+        }
+
+        if (sales_order_lines_count > 0) {
+          errors.push(`"${current.name}" (${current.code}) has active sales orders.`);
+          continue;
+        }
+
+        if (primary_items_count > 0) {
+          errors.push(`"${current.name}" (${current.code}) is linked to ${primary_items_count} primary item(s).`);
+          continue;
+        }
+
+        await db.delete(baseCategories).where(and(eq(baseCategories.baseId, id), eq(baseCategories.businessId, bizId)));
+        await db.delete(bases).where(and(eq(bases.id, id), eq(bases.businessId, bizId)));
+
+        await recordAuditLog({
+          businessId: bizId,
+          userId: req.user!.id,
+          action: 'DELETE',
+          module: 'INVENTORY',
+          entityType: 'Base',
+          entityId: id,
+          previousValue: current,
+          req,
+        });
+
+        deletedCount++;
+      } catch (itemErr: any) {
+        errors.push(`Failed to delete base ${id}: ${itemErr.message}`);
+      }
+    }
+
+    res.json({
+      success: true,
+      totalRequested: ids.length,
+      deletedCount,
+      failedCount: errors.length,
+      errors,
+      message: deletedCount === ids.length
+        ? `Successfully deleted ${deletedCount} base(s).`
+        : `Deleted ${deletedCount} of ${ids.length} base(s). ${errors.length} item(s) could not be deleted.`
+    });
+  } catch (error: any) {
+    res.status(500).json({ error: error.message || 'Failed to perform bulk delete of bases' });
+  }
+});
+
 // ==========================================
 // 4. PRIMARY ITEMS CRUD
 // ==========================================
@@ -615,6 +1300,297 @@ router.patch('/primary-items/:id', requirePermission('master:edit'), async (req:
   }
 });
 
+router.delete('/primary-items/:id', requireAnyPermission(['master:delete', 'master:edit']), async (req: Request, res: Response): Promise<void> => {
+  try {
+    const bizId = req.user!.currentBusinessId;
+    const { id } = req.params;
+
+    const [current] = await db
+      .select()
+      .from(primaryItems)
+      .where(and(eq(primaryItems.id, id), eq(primaryItems.businessId, bizId)))
+      .limit(1);
+
+    if (!current) {
+      res.status(404).json({ error: 'Primary Item not found' });
+      return;
+    }
+
+    // Check if any invoices (sales or purchase) or documents reference unique items under this primary item
+    const checkRes = await pool.query(
+      `SELECT 
+        (
+          SELECT COUNT(*)::int 
+          FROM sales_invoice_lines sil
+          JOIN unique_items ui ON sil.unique_item_id = ui.id
+          WHERE ui.primary_item_id = $1
+        ) AS sales_invoice_lines_count,
+        (
+          SELECT COUNT(*)::int 
+          FROM purchase_invoice_lines pil
+          JOIN unique_items ui ON pil.unique_item_id = ui.id
+          WHERE ui.primary_item_id = $1
+        ) AS purchase_invoice_lines_count,
+        (
+          SELECT COUNT(*)::int 
+          FROM sales_order_lines sol
+          JOIN unique_items ui ON sol.unique_item_id = ui.id
+          WHERE ui.primary_item_id = $1
+        ) AS sales_order_lines_count,
+        (
+          SELECT COUNT(*)::int 
+          FROM sales_return_lines srl
+          JOIN unique_items ui ON srl.unique_item_id = ui.id
+          WHERE ui.primary_item_id = $1
+        ) AS sales_return_lines_count,
+        (
+          SELECT COUNT(*)::int 
+          FROM purchase_return_lines prl
+          JOIN unique_items ui ON prl.unique_item_id = ui.id
+          WHERE ui.primary_item_id = $1
+        ) AS purchase_return_lines_count,
+        (
+          SELECT COUNT(*)::int 
+          FROM unique_items ui 
+          WHERE ui.primary_item_id = $1
+        ) AS unique_items_count
+      `,
+      [id]
+    );
+
+    const {
+      sales_invoice_lines_count,
+      purchase_invoice_lines_count,
+      sales_order_lines_count,
+      sales_return_lines_count,
+      purchase_return_lines_count,
+      unique_items_count,
+    } = checkRes.rows[0];
+
+    if (sales_invoice_lines_count > 0 || purchase_invoice_lines_count > 0 || sales_return_lines_count > 0 || purchase_return_lines_count > 0) {
+      res.status(400).json({
+        error: `Cannot delete Primary Item "${current.name}" (${current.code}): Sales or Purchase Invoices / Returns have already been recorded with this item. Invoiced records are immutable to preserve financial audit trails.`
+      });
+      return;
+    }
+
+    if (sales_order_lines_count > 0) {
+      res.status(400).json({
+        error: `Cannot delete Primary Item "${current.name}" (${current.code}): Active Sales Orders reference this item. Cancel or complete the orders first.`
+      });
+      return;
+    }
+
+    // Clean up dependent child master data in sequence
+    await pool.query(
+      `DELETE FROM stock_ledger 
+       WHERE batch_id IN (
+         SELECT ob.id FROM optical_batches ob
+         JOIN unique_items ui ON ob.unique_item_id = ui.id
+         WHERE ui.primary_item_id = $1
+       )`,
+      [id]
+    );
+
+    await pool.query(
+      `DELETE FROM stock_reservations 
+       WHERE batch_id IN (
+         SELECT ob.id FROM optical_batches ob
+         JOIN unique_items ui ON ob.unique_item_id = ui.id
+         WHERE ui.primary_item_id = $1
+       )`,
+      [id]
+    );
+
+    await pool.query(
+      `DELETE FROM optical_stocks 
+       WHERE batch_id IN (
+         SELECT ob.id FROM optical_batches ob
+         JOIN unique_items ui ON ob.unique_item_id = ui.id
+         WHERE ui.primary_item_id = $1
+       )`,
+      [id]
+    );
+
+    await pool.query(
+      `DELETE FROM optical_batches 
+       WHERE unique_item_id IN (
+         SELECT id FROM unique_items WHERE primary_item_id = $1
+       )`,
+      [id]
+    );
+
+    await pool.query(
+      `DELETE FROM party_item_prices 
+       WHERE unique_item_id IN (
+         SELECT id FROM unique_items WHERE primary_item_id = $1
+       )`,
+      [id]
+    );
+
+    await pool.query(
+      `DELETE FROM unique_items WHERE primary_item_id = $1`,
+      [id]
+    );
+
+    await db.delete(primaryItems).where(and(eq(primaryItems.id, id), eq(primaryItems.businessId, bizId)));
+
+    await recordAuditLog({
+      businessId: bizId,
+      userId: req.user!.id,
+      action: 'DELETE',
+      module: 'INVENTORY',
+      entityType: 'PrimaryItem',
+      entityId: id,
+      previousValue: current,
+      req,
+    });
+
+    res.json({
+      success: true,
+      message: `Primary Item "${current.name}" (${current.code}) ${unique_items_count > 0 ? `and ${unique_items_count} child SKU item(s)` : ''} deleted successfully from database.`
+    });
+  } catch (error: any) {
+    res.status(500).json({ error: error.message || 'Failed to delete primary item' });
+  }
+});
+
+router.post('/primary-items/bulk-delete', requireAnyPermission(['master:delete', 'master:edit']), async (req: Request, res: Response): Promise<void> => {
+  try {
+    const bizId = req.user!.currentBusinessId;
+    const { ids } = req.body;
+    if (!Array.isArray(ids) || ids.length === 0) {
+      res.status(400).json({ error: 'Please provide an array of Primary Item IDs to delete.' });
+      return;
+    }
+
+    let deletedCount = 0;
+    const errors: string[] = [];
+
+    for (const id of ids) {
+      try {
+        const [current] = await db
+          .select()
+          .from(primaryItems)
+          .where(and(eq(primaryItems.id, id), eq(primaryItems.businessId, bizId)))
+          .limit(1);
+
+        if (!current) {
+          errors.push(`Primary Item ID ${id} not found.`);
+          continue;
+        }
+
+        const checkRes = await pool.query(
+          `SELECT 
+            (SELECT COUNT(*)::int FROM sales_invoice_lines sil JOIN unique_items ui ON sil.unique_item_id = ui.id WHERE ui.primary_item_id = $1) AS sales_invoice_lines_count,
+            (SELECT COUNT(*)::int FROM purchase_invoice_lines pil JOIN unique_items ui ON pil.unique_item_id = ui.id WHERE ui.primary_item_id = $1) AS purchase_invoice_lines_count,
+            (SELECT COUNT(*)::int FROM sales_order_lines sol JOIN unique_items ui ON sol.unique_item_id = ui.id WHERE ui.primary_item_id = $1) AS sales_order_lines_count,
+            (SELECT COUNT(*)::int FROM sales_return_lines srl JOIN unique_items ui ON srl.unique_item_id = ui.id WHERE ui.primary_item_id = $1) AS sales_return_lines_count,
+            (SELECT COUNT(*)::int FROM purchase_return_lines prl JOIN unique_items ui ON prl.unique_item_id = ui.id WHERE ui.primary_item_id = $1) AS purchase_return_lines_count
+          `,
+          [id]
+        );
+
+        const {
+          sales_invoice_lines_count,
+          purchase_invoice_lines_count,
+          sales_order_lines_count,
+          sales_return_lines_count,
+          purchase_return_lines_count,
+        } = checkRes.rows[0];
+
+        if (sales_invoice_lines_count > 0 || purchase_invoice_lines_count > 0 || sales_return_lines_count > 0 || purchase_return_lines_count > 0) {
+          errors.push(`"${current.name}" (${current.code}) has recorded sales/purchase invoices or returns.`);
+          continue;
+        }
+
+        if (sales_order_lines_count > 0) {
+          errors.push(`"${current.name}" (${current.code}) has active sales orders.`);
+          continue;
+        }
+
+        // Clean up child tables
+        await pool.query(
+          `DELETE FROM stock_ledger 
+           WHERE batch_id IN (
+             SELECT ob.id FROM optical_batches ob
+             JOIN unique_items ui ON ob.unique_item_id = ui.id
+             WHERE ui.primary_item_id = $1
+           )`,
+          [id]
+        );
+
+        await pool.query(
+          `DELETE FROM stock_reservations 
+           WHERE batch_id IN (
+             SELECT ob.id FROM optical_batches ob
+             JOIN unique_items ui ON ob.unique_item_id = ui.id
+             WHERE ui.primary_item_id = $1
+           )`,
+          [id]
+        );
+
+        await pool.query(
+          `DELETE FROM optical_stocks 
+           WHERE batch_id IN (
+             SELECT ob.id FROM optical_batches ob
+             JOIN unique_items ui ON ob.unique_item_id = ui.id
+             WHERE ui.primary_item_id = $1
+           )`,
+          [id]
+        );
+
+        await pool.query(
+          `DELETE FROM optical_batches 
+           WHERE unique_item_id IN (
+             SELECT id FROM unique_items WHERE primary_item_id = $1
+           )`,
+          [id]
+        );
+
+        await pool.query(
+          `DELETE FROM party_item_prices 
+           WHERE unique_item_id IN (
+             SELECT id FROM unique_items WHERE primary_item_id = $1
+           )`,
+          [id]
+        );
+
+        await pool.query(`DELETE FROM unique_items WHERE primary_item_id = $1`, [id]);
+        await db.delete(primaryItems).where(and(eq(primaryItems.id, id), eq(primaryItems.businessId, bizId)));
+
+        await recordAuditLog({
+          businessId: bizId,
+          userId: req.user!.id,
+          action: 'DELETE',
+          module: 'INVENTORY',
+          entityType: 'PrimaryItem',
+          entityId: id,
+          previousValue: current,
+          req,
+        });
+
+        deletedCount++;
+      } catch (itemErr: any) {
+        errors.push(`Failed to delete primary item ${id}: ${itemErr.message}`);
+      }
+    }
+
+    res.json({
+      success: true,
+      totalRequested: ids.length,
+      deletedCount,
+      failedCount: errors.length,
+      errors,
+      message: deletedCount === ids.length
+        ? `Successfully deleted ${deletedCount} primary item(s).`
+        : `Deleted ${deletedCount} of ${ids.length} primary item(s). ${errors.length} item(s) could not be deleted.`
+    });
+  } catch (error: any) {
+    res.status(500).json({ error: error.message || 'Failed to perform bulk delete of primary items' });
+  }
+});
+
 // ==========================================
 // 5. UNIQUE ITEMS CRUD
 // ==========================================
@@ -773,6 +1749,254 @@ router.patch('/unique-items/:id', requirePermission('master:edit'), async (req: 
     res.json({ success: true, uniqueItem: updated });
   } catch (error: any) {
     res.status(500).json({ error: error.message || 'Failed to update unique item' });
+  }
+});
+
+router.delete('/unique-items/:id', requireAnyPermission(['master:delete', 'master:edit']), async (req: Request, res: Response): Promise<void> => {
+  try {
+    const bizId = req.user!.currentBusinessId;
+    const { id } = req.params;
+
+    const [current] = await db
+      .select()
+      .from(uniqueItems)
+      .where(and(eq(uniqueItems.id, id), eq(uniqueItems.businessId, bizId)))
+      .limit(1);
+
+    if (!current) {
+      res.status(404).json({ error: 'Unique Item not found' });
+      return;
+    }
+
+    // Check if any invoices (sales or purchase) or documents reference this unique item
+    const checkRes = await pool.query(
+      `SELECT 
+        (
+          SELECT COUNT(*)::int 
+          FROM sales_invoice_lines sil
+          WHERE sil.unique_item_id = $1
+        ) AS sales_invoice_lines_count,
+        (
+          SELECT COUNT(*)::int 
+          FROM purchase_invoice_lines pil
+          WHERE pil.unique_item_id = $1
+        ) AS purchase_invoice_lines_count,
+        (
+          SELECT COUNT(*)::int 
+          FROM sales_order_lines sol
+          WHERE sol.unique_item_id = $1
+        ) AS sales_order_lines_count,
+        (
+          SELECT COUNT(*)::int 
+          FROM sales_return_lines srl
+          WHERE srl.unique_item_id = $1
+        ) AS sales_return_lines_count,
+        (
+          SELECT COUNT(*)::int 
+          FROM purchase_return_lines prl
+          WHERE prl.unique_item_id = $1
+        ) AS purchase_return_lines_count,
+        (
+          SELECT COUNT(*)::int 
+          FROM optical_batches ob
+          WHERE ob.unique_item_id = $1
+        ) AS optical_batches_count
+      `,
+      [id]
+    );
+
+    const {
+      sales_invoice_lines_count,
+      purchase_invoice_lines_count,
+      sales_order_lines_count,
+      sales_return_lines_count,
+      purchase_return_lines_count,
+      optical_batches_count,
+    } = checkRes.rows[0];
+
+    if (sales_invoice_lines_count > 0 || purchase_invoice_lines_count > 0 || sales_return_lines_count > 0 || purchase_return_lines_count > 0) {
+      res.status(400).json({
+        error: `Cannot delete Unique Item "${current.name}" (${current.code}): Sales or Purchase Invoices / Returns have already been recorded with this SKU item. Invoiced items cannot be deleted to preserve financial audit trails.`
+      });
+      return;
+    }
+
+    if (sales_order_lines_count > 0) {
+      res.status(400).json({
+        error: `Cannot delete Unique Item "${current.name}" (${current.code}): Active Sales Orders reference this SKU item. Cancel or complete the orders first.`
+      });
+      return;
+    }
+
+    // Clean up dependent child master data in sequence
+    await pool.query(
+      `DELETE FROM stock_ledger 
+       WHERE batch_id IN (
+         SELECT id FROM optical_batches WHERE unique_item_id = $1
+       )`,
+      [id]
+    );
+
+    await pool.query(
+      `DELETE FROM stock_reservations 
+       WHERE batch_id IN (
+         SELECT id FROM optical_batches WHERE unique_item_id = $1
+       )`,
+      [id]
+    );
+
+    await pool.query(
+      `DELETE FROM optical_stocks 
+       WHERE batch_id IN (
+         SELECT id FROM optical_batches WHERE unique_item_id = $1
+       )`,
+      [id]
+    );
+
+    await pool.query(
+      `DELETE FROM optical_batches WHERE unique_item_id = $1`,
+      [id]
+    );
+
+    await pool.query(
+      `DELETE FROM party_item_prices WHERE unique_item_id = $1`,
+      [id]
+    );
+
+    await db.delete(uniqueItems).where(and(eq(uniqueItems.id, id), eq(uniqueItems.businessId, bizId)));
+
+    await recordAuditLog({
+      businessId: bizId,
+      userId: req.user!.id,
+      action: 'DELETE',
+      module: 'INVENTORY',
+      entityType: 'UniqueItem',
+      entityId: id,
+      previousValue: current,
+      req,
+    });
+
+    res.json({
+      success: true,
+      message: `Unique Item "${current.name}" (${current.code}) ${optical_batches_count > 0 ? `and ${optical_batches_count} optical power batch(es)` : ''} deleted successfully from database.`
+    });
+  } catch (error: any) {
+    res.status(500).json({ error: error.message || 'Failed to delete unique item' });
+  }
+});
+
+router.post('/unique-items/bulk-delete', requireAnyPermission(['master:delete', 'master:edit']), async (req: Request, res: Response): Promise<void> => {
+  try {
+    const bizId = req.user!.currentBusinessId;
+    const { ids } = req.body;
+    if (!Array.isArray(ids) || ids.length === 0) {
+      res.status(400).json({ error: 'Please provide an array of Unique Item IDs to delete.' });
+      return;
+    }
+
+    let deletedCount = 0;
+    const errors: string[] = [];
+
+    for (const id of ids) {
+      try {
+        const [current] = await db
+          .select()
+          .from(uniqueItems)
+          .where(and(eq(uniqueItems.id, id), eq(uniqueItems.businessId, bizId)))
+          .limit(1);
+
+        if (!current) {
+          errors.push(`Unique Item ID ${id} not found.`);
+          continue;
+        }
+
+        const checkRes = await pool.query(
+          `SELECT 
+            (SELECT COUNT(*)::int FROM sales_invoice_lines sil WHERE sil.unique_item_id = $1) AS sales_invoice_lines_count,
+            (SELECT COUNT(*)::int FROM purchase_invoice_lines pil WHERE pil.unique_item_id = $1) AS purchase_invoice_lines_count,
+            (SELECT COUNT(*)::int FROM sales_order_lines sol WHERE sol.unique_item_id = $1) AS sales_order_lines_count,
+            (SELECT COUNT(*)::int FROM sales_return_lines srl WHERE srl.unique_item_id = $1) AS sales_return_lines_count,
+            (SELECT COUNT(*)::int FROM purchase_return_lines prl WHERE prl.unique_item_id = $1) AS purchase_return_lines_count
+          `,
+          [id]
+        );
+
+        const {
+          sales_invoice_lines_count,
+          purchase_invoice_lines_count,
+          sales_order_lines_count,
+          sales_return_lines_count,
+          purchase_return_lines_count,
+        } = checkRes.rows[0];
+
+        if (sales_invoice_lines_count > 0 || purchase_invoice_lines_count > 0 || sales_return_lines_count > 0 || purchase_return_lines_count > 0) {
+          errors.push(`"${current.name}" (${current.code}) has recorded sales/purchase invoices or returns.`);
+          continue;
+        }
+
+        if (sales_order_lines_count > 0) {
+          errors.push(`"${current.name}" (${current.code}) has active sales orders.`);
+          continue;
+        }
+
+        // Clean up child tables
+        await pool.query(
+          `DELETE FROM stock_ledger 
+           WHERE batch_id IN (
+             SELECT id FROM optical_batches WHERE unique_item_id = $1
+           )`,
+          [id]
+        );
+
+        await pool.query(
+          `DELETE FROM stock_reservations 
+           WHERE batch_id IN (
+             SELECT id FROM optical_batches WHERE unique_item_id = $1
+           )`,
+          [id]
+        );
+
+        await pool.query(
+          `DELETE FROM optical_stocks 
+           WHERE batch_id IN (
+             SELECT id FROM optical_batches WHERE unique_item_id = $1
+           )`,
+          [id]
+        );
+
+        await pool.query(`DELETE FROM optical_batches WHERE unique_item_id = $1`, [id]);
+        await pool.query(`DELETE FROM party_item_prices WHERE unique_item_id = $1`, [id]);
+        await db.delete(uniqueItems).where(and(eq(uniqueItems.id, id), eq(uniqueItems.businessId, bizId)));
+
+        await recordAuditLog({
+          businessId: bizId,
+          userId: req.user!.id,
+          action: 'DELETE',
+          module: 'INVENTORY',
+          entityType: 'UniqueItem',
+          entityId: id,
+          previousValue: current,
+          req,
+        });
+
+        deletedCount++;
+      } catch (itemErr: any) {
+        errors.push(`Failed to delete unique item ${id}: ${itemErr.message}`);
+      }
+    }
+
+    res.json({
+      success: true,
+      totalRequested: ids.length,
+      deletedCount,
+      failedCount: errors.length,
+      errors,
+      message: deletedCount === ids.length
+        ? `Successfully deleted ${deletedCount} unique item(s).`
+        : `Deleted ${deletedCount} of ${ids.length} unique item(s). ${errors.length} item(s) could not be deleted.`
+    });
+  } catch (error: any) {
+    res.status(500).json({ error: error.message || 'Failed to perform bulk delete of unique items' });
   }
 });
 
@@ -975,6 +2199,222 @@ router.patch('/batches/:id/status', requirePermission('master:edit'), async (req
     res.json({ success: true, batch: updated });
   } catch (error: any) {
     res.status(500).json({ error: error.message || 'Failed to update batch status' });
+  }
+});
+
+router.delete('/batches/:id', requireAnyPermission(['master:delete', 'master:edit']), async (req: Request, res: Response): Promise<void> => {
+  try {
+    const bizId = req.user!.currentBusinessId;
+    const { id } = req.params;
+
+    const [current] = await db
+      .select({
+        id: opticalBatches.id,
+        barcode: opticalBatches.barcode,
+        sph: opticalBatches.sph,
+        cyl: opticalBatches.cyl,
+        axis: opticalBatches.axis,
+        add: opticalBatches.add,
+        side: opticalBatches.side,
+        identityKey: opticalBatches.identityKey,
+        businessId: opticalBatches.businessId,
+      })
+      .from(opticalBatches)
+      .where(and(eq(opticalBatches.id, id), eq(opticalBatches.businessId, bizId)))
+      .limit(1);
+
+    if (!current) {
+      res.status(404).json({ error: 'Optical Batch not found' });
+      return;
+    }
+
+    // Check if any invoices (sales or purchase batches, lots, returns, or order line batches) reference this batch
+    const checkRes = await pool.query(
+      `SELECT 
+        (
+          SELECT COUNT(*)::int 
+          FROM sales_invoice_line_batches silb
+          WHERE silb.batch_id = $1
+        ) AS sales_invoice_batches_count,
+        (
+          SELECT COUNT(*)::int 
+          FROM purchase_invoice_line_batches pilb
+          WHERE pilb.batch_id = $1
+        ) AS purchase_invoice_batches_count,
+        (
+          SELECT COUNT(*)::int 
+          FROM purchase_lots pl
+          WHERE pl.batch_id = $1
+        ) AS purchase_lots_count,
+        (
+          SELECT COUNT(*)::int 
+          FROM sales_return_line_batches srlb
+          WHERE srlb.batch_id = $1
+        ) AS sales_return_batches_count,
+        (
+          SELECT COUNT(*)::int 
+          FROM purchase_return_line_batches prlb
+          WHERE prlb.batch_id = $1
+        ) AS purchase_return_batches_count,
+        (
+          SELECT COUNT(*)::int 
+          FROM sales_order_line_batches solb
+          WHERE solb.batch_id = $1
+        ) AS sales_order_batches_count
+      `,
+      [id]
+    );
+
+    const {
+      sales_invoice_batches_count,
+      purchase_invoice_batches_count,
+      purchase_lots_count,
+      sales_return_batches_count,
+      purchase_return_batches_count,
+      sales_order_batches_count,
+    } = checkRes.rows[0];
+
+    if (sales_invoice_batches_count > 0 || purchase_invoice_batches_count > 0 || purchase_lots_count > 0 || sales_return_batches_count > 0 || purchase_return_batches_count > 0) {
+      res.status(400).json({
+        error: `Cannot delete Optical Batch (${current.barcode}, SPH ${current.sph} CYL ${current.cyl}): Sales or Purchase Invoices / Lots / Returns have already recorded transactions with this optical power batch. Invoiced batches cannot be deleted.`
+      });
+      return;
+    }
+
+    if (sales_order_batches_count > 0) {
+      res.status(400).json({
+        error: `Cannot delete Optical Batch (${current.barcode}): Active Sales Orders reference this optical batch power. Cancel or complete the orders first.`
+      });
+      return;
+    }
+
+    // Delete associated stock ledger, reservations, optical stock, and batch record
+    await pool.query(`DELETE FROM stock_ledger WHERE batch_id = $1`, [id]);
+    await pool.query(`DELETE FROM stock_reservations WHERE batch_id = $1`, [id]);
+    await pool.query(`DELETE FROM optical_stocks WHERE batch_id = $1`, [id]);
+    await db.delete(opticalBatches).where(and(eq(opticalBatches.id, id), eq(opticalBatches.businessId, bizId)));
+
+    await recordAuditLog({
+      businessId: bizId,
+      userId: req.user!.id,
+      action: 'DELETE',
+      module: 'INVENTORY',
+      entityType: 'OpticalBatch',
+      entityId: id,
+      previousValue: current,
+      req,
+    });
+
+    res.json({
+      success: true,
+      message: `Optical Batch (${current.barcode}, SPH: ${current.sph}, CYL: ${current.cyl}) deleted successfully from database.`
+    });
+  } catch (error: any) {
+    res.status(500).json({ error: error.message || 'Failed to delete optical batch' });
+  }
+});
+
+router.post('/batches/bulk-delete', requireAnyPermission(['master:delete', 'master:edit']), async (req: Request, res: Response): Promise<void> => {
+  try {
+    const bizId = req.user!.currentBusinessId;
+    const { ids } = req.body;
+    if (!Array.isArray(ids) || ids.length === 0) {
+      res.status(400).json({ error: 'Please provide an array of Optical Batch IDs to delete.' });
+      return;
+    }
+
+    let deletedCount = 0;
+    const errors: string[] = [];
+
+    for (const id of ids) {
+      try {
+        const [current] = await db
+          .select({
+            id: opticalBatches.id,
+            barcode: opticalBatches.barcode,
+            sph: opticalBatches.sph,
+            cyl: opticalBatches.cyl,
+            axis: opticalBatches.axis,
+            add: opticalBatches.add,
+            side: opticalBatches.side,
+            identityKey: opticalBatches.identityKey,
+            businessId: opticalBatches.businessId,
+          })
+          .from(opticalBatches)
+          .where(and(eq(opticalBatches.id, id), eq(opticalBatches.businessId, bizId)))
+          .limit(1);
+
+        if (!current) {
+          errors.push(`Optical Batch ID ${id} not found.`);
+          continue;
+        }
+
+        const checkRes = await pool.query(
+          `SELECT 
+            (SELECT COUNT(*)::int FROM sales_invoice_line_batches silb WHERE silb.batch_id = $1) AS sales_invoice_batches_count,
+            (SELECT COUNT(*)::int FROM purchase_invoice_line_batches pilb WHERE pilb.batch_id = $1) AS purchase_invoice_batches_count,
+            (SELECT COUNT(*)::int FROM purchase_lots pl WHERE pl.batch_id = $1) AS purchase_lots_count,
+            (SELECT COUNT(*)::int FROM sales_return_line_batches srlb WHERE srlb.batch_id = $1) AS sales_return_batches_count,
+            (SELECT COUNT(*)::int FROM purchase_return_line_batches prlb WHERE prlb.batch_id = $1) AS purchase_return_batches_count,
+            (SELECT COUNT(*)::int FROM sales_order_line_batches solb WHERE solb.batch_id = $1) AS sales_order_batches_count
+          `,
+          [id]
+        );
+
+        const {
+          sales_invoice_batches_count,
+          purchase_invoice_batches_count,
+          purchase_lots_count,
+          sales_return_batches_count,
+          purchase_return_batches_count,
+          sales_order_batches_count,
+        } = checkRes.rows[0];
+
+        if (sales_invoice_batches_count > 0 || purchase_invoice_batches_count > 0 || purchase_lots_count > 0 || sales_return_batches_count > 0 || purchase_return_batches_count > 0) {
+          errors.push(`"${current.barcode}" (SPH ${current.sph} CYL ${current.cyl}) has recorded sales/purchase invoices, lots or returns.`);
+          continue;
+        }
+
+        if (sales_order_batches_count > 0) {
+          errors.push(`"${current.barcode}" has active sales orders.`);
+          continue;
+        }
+
+        // Clean up stock ledger, reservations, stock, and batch
+        await pool.query(`DELETE FROM stock_ledger WHERE batch_id = $1`, [id]);
+        await pool.query(`DELETE FROM stock_reservations WHERE batch_id = $1`, [id]);
+        await pool.query(`DELETE FROM optical_stocks WHERE batch_id = $1`, [id]);
+        await db.delete(opticalBatches).where(and(eq(opticalBatches.id, id), eq(opticalBatches.businessId, bizId)));
+
+        await recordAuditLog({
+          businessId: bizId,
+          userId: req.user!.id,
+          action: 'DELETE',
+          module: 'INVENTORY',
+          entityType: 'OpticalBatch',
+          entityId: id,
+          previousValue: current,
+          req,
+        });
+
+        deletedCount++;
+      } catch (itemErr: any) {
+        errors.push(`Failed to delete optical batch ${id}: ${itemErr.message}`);
+      }
+    }
+
+    res.json({
+      success: true,
+      totalRequested: ids.length,
+      deletedCount,
+      failedCount: errors.length,
+      errors,
+      message: deletedCount === ids.length
+        ? `Successfully deleted ${deletedCount} optical batch(es).`
+        : `Deleted ${deletedCount} of ${ids.length} optical batch(es). ${errors.length} item(s) could not be deleted.`
+    });
+  } catch (error: any) {
+    res.status(500).json({ error: error.message || 'Failed to perform bulk delete of optical batches' });
   }
 });
 
