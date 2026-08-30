@@ -12,6 +12,7 @@ export const LoginPage: React.FC = () => {
   const [databaseConnected, setDatabaseConnected] = useState<boolean>(true);
   const [dbErrorMessage, setDbErrorMessage] = useState<string | null>(null);
   const [dbTip, setDbTip] = useState<string | null>(null);
+  const [dbHost, setDbHost] = useState<string | null>(null);
 
   // Standard Login State
   const [identifier, setIdentifier] = useState<string>('');
@@ -46,6 +47,7 @@ export const LoginPage: React.FC = () => {
     setIsCheckingBootstrap(true);
     setDbErrorMessage(null);
     setDbTip(null);
+    setDbHost(null);
     try {
       const data = await apiRequest('/api/auth/bootstrap-status');
       setDatabaseConnected(data.databaseConnected);
@@ -53,11 +55,12 @@ export const LoginPage: React.FC = () => {
       if (!data.databaseConnected) {
         setDbErrorMessage(data.error || 'Database connection unavailable. Please check the server configuration.');
         setDbTip(data.tip || null);
+        setDbHost(data.host || null);
       }
     } catch (err: any) {
       setDatabaseConnected(false);
       setDbErrorMessage('Database connection unavailable. Please check the server configuration.');
-      setDbTip('Verify NETLIFY_DB_URL or DATABASE_URL in your Netlify site settings.');
+      setDbTip('Verify NETLIFY_DB_URL or DATABASE_URL in your site settings.');
     } finally {
       setIsCheckingBootstrap(false);
     }
@@ -154,13 +157,20 @@ export const LoginPage: React.FC = () => {
             <div className="flex items-start gap-3">
               <AlertCircle className="w-5 h-5 text-red-400 shrink-0 mt-0.5" />
               <div className="space-y-1.5 flex-1">
-                <h4 className="font-semibold text-white">Database Connection Notice</h4>
+                <div className="flex items-center justify-between gap-2">
+                  <h4 className="font-semibold text-white">Database Connection Notice</h4>
+                  {dbHost && (
+                    <span className="text-[10px] font-mono px-2 py-0.5 rounded bg-red-900/60 border border-red-800 text-red-300">
+                      Host: {dbHost}
+                    </span>
+                  )}
+                </div>
                 <p className="text-xs text-red-300 leading-relaxed">
                   {dbErrorMessage || 'Database connection unavailable. Please check the server configuration.'}
                 </p>
                 {dbTip && (
-                  <div className="mt-2 p-2.5 rounded-lg bg-red-900/50 border border-red-800/60 text-[11px] text-red-200 font-mono">
-                    💡 Tip: {dbTip}
+                  <div className="mt-2 p-2.5 rounded-lg bg-red-900/50 border border-red-800/60 text-[11px] text-red-200 leading-relaxed">
+                    💡 <span className="font-semibold">Action Required:</span> {dbTip}
                   </div>
                 )}
               </div>

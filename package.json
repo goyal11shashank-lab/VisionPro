@@ -21,6 +21,8 @@
   },
   "dependencies": {
     "@google/genai": "^2.4.0",
+    "@neon/config": "^1.1.0",
+    "@neon/sdk": "^3.0.0",
     "@netlify/database": "^2.0.0",
     "@tailwindcss/vite": "^4.1.14",
     "@types/bcryptjs": "^3.0.0",

@@ -61,6 +61,8 @@ router.get('/bootstrap-status', async (req: Request, res: Response): Promise<voi
         provider: dbStatus.provider,
         error: dbStatus.error || 'Database connection unavailable. Please check the server configuration.',
         tip: dbStatus.tip,
+        host: dbStatus.host,
+        code: dbStatus.code,
       });
       return;
     }

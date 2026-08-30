@@ -381,6 +381,10 @@ export const CreatePurchaseInvoicePage: React.FC<{
 
   // Save / Post Invoice
   const handleSaveInvoice = async (andPost: boolean = false) => {
+    if (existingStatus === 'CANCELLED') {
+      setError('Cannot edit this Purchase Invoice because it has been CANCELLED. Cancelled invoices are permanently read-only.');
+      return;
+    }
     if (!supplierPartyId) {
       setError('Please select a supplier');
       return;
@@ -512,26 +516,43 @@ export const CreatePurchaseInvoicePage: React.FC<{
         </div>
 
         <div className="flex items-center gap-3">
-          <button
-            type="button"
-            onClick={() => handleSaveInvoice(false)}
-            disabled={submitting}
-            className="flex items-center gap-2 px-4 py-2.5 rounded-xl border border-slate-200 bg-white hover:bg-slate-50 text-slate-700 text-xs font-bold transition-colors shadow-xs"
-          >
-            <Save className="w-4 h-4 text-slate-500" />
-            <span>{editInvoiceId ? 'Save Changes (Draft)' : 'Save as Draft'}</span>
-          </button>
-          <button
-            type="button"
-            onClick={() => handleSaveInvoice(true)}
-            disabled={submitting}
-            className="flex items-center gap-2 px-5 py-2.5 rounded-xl bg-purple-600 hover:bg-purple-700 text-white text-xs font-bold transition-colors shadow-xs"
-          >
-            <Send className="w-4 h-4" />
-            <span>Save & Post Inward</span>
-          </button>
+          {existingStatus === 'CANCELLED' ? (
+            <div className="px-3.5 py-2 rounded-xl bg-rose-50 border border-rose-200 text-rose-700 text-xs font-semibold">
+              Read-Only (Invoice is Cancelled)
+            </div>
+          ) : (
+            <>
+              <button
+                type="button"
+                onClick={() => handleSaveInvoice(false)}
+                disabled={submitting}
+                className="flex items-center gap-2 px-4 py-2.5 rounded-xl border border-slate-200 bg-white hover:bg-slate-50 text-slate-700 text-xs font-bold transition-colors shadow-xs disabled:opacity-50"
+              >
+                <Save className="w-4 h-4 text-slate-500" />
+                <span>{editInvoiceId ? 'Save Changes (Draft)' : 'Save as Draft'}</span>
+              </button>
+              <button
+                type="button"
+                onClick={() => handleSaveInvoice(true)}
+                disabled={submitting}
+                className="flex items-center gap-2 px-5 py-2.5 rounded-xl bg-purple-600 hover:bg-purple-700 text-white text-xs font-bold transition-colors shadow-xs disabled:opacity-50"
+              >
+                <Send className="w-4 h-4" />
+                <span>Save & Post Inward</span>
+              </button>
+            </>
+          )}
         </div>
       </div>
+
+      {existingStatus === 'CANCELLED' && (
+        <div className="p-4 rounded-xl bg-rose-50 border border-rose-200 text-rose-800 text-xs font-medium flex items-center gap-2.5">
+          <XCircle className="w-4 h-4 text-rose-600 shrink-0" />
+          <span>
+            This Purchase Invoice is <strong>CANCELLED</strong> and its stock has been reversed. All fields are locked for editing.
+          </span>
+        </div>
+      )}
 
       {error && (
         <div className="p-4 rounded-xl bg-rose-50 border border-rose-200 text-rose-800 text-sm flex items-center gap-2.5">

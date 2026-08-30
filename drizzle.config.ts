@@ -3,9 +3,11 @@ import * as dotenv from 'dotenv';
 dotenv.config();
 
 const dbUrl = 
+  process.env.DATABASE_URL_UNPOOLED || 
+  process.env.DATABASE_URL || 
+  process.env.DEV_DATABASE_URL || 
   process.env.NETLIFY_DB_URL || 
   process.env.NETLIFY_DATABASE_URL || 
-  process.env.DATABASE_URL || 
   'postgresql://postgres:postgres@localhost:5432/optical_erp';
 
 export default defineConfig({

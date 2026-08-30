@@ -21,6 +21,7 @@ import { SupplierLedgerPage } from './pages/parties/SupplierLedgerPage.js';
 import { CustomerLedgerPage } from './pages/parties/CustomerLedgerPage.js';
 import { SalesOrdersPage } from './pages/sales/SalesOrdersPage.js';
 import { SalesInvoicesPage } from './pages/sales/SalesInvoicesPage.js';
+import { NormalSalesVoucherPage } from './pages/sales/NormalSalesVoucherPage.js';
 import { SalesReturnsPage } from './pages/sales/SalesReturnsPage.js';
 import { PurchaseReturnsPage } from './pages/purchases/PurchaseReturnsPage.js';
 import { CustomerReceiptsPage } from './pages/accounts/CustomerReceiptsPage.js';
@@ -82,6 +83,12 @@ const AppContent: React.FC = () => {
         return 'Optical Batches & Permanent Barcodes';
       case '/sales/pos':
         return 'Optical POS & Billing';
+      case '/sales/voucher/new':
+      case '/sales/voucher':
+      case '/sales/new':
+        return 'Normal Sales Voucher';
+      case '/sales/invoices':
+        return 'Sales Invoices Register';
       case '/sales/prescriptions':
         return 'Prescriptions (Rx) Management';
       case '/sales/orders':
@@ -177,8 +184,13 @@ const AppContent: React.FC = () => {
       case '/sales/orders':
         return <SalesOrdersPage />;
       case '/sales/invoices':
+        return <SalesInvoicesPage onNavigate={setCurrentPath} />;
       case '/sales/pos':
-        return <SalesInvoicesPage />;
+        return <SalesInvoicesPage initialOpenPos={true} onNavigate={setCurrentPath} />;
+      case '/sales/voucher/new':
+      case '/sales/voucher':
+      case '/sales/new':
+        return <NormalSalesVoucherPage onNavigate={setCurrentPath} />;
       case '/sales/returns':
         return <SalesReturnsPage />;
       case '/sales/customer-ledger':

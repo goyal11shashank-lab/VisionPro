@@ -523,12 +523,307 @@ export async function seedInitialDatabase() {
     });
   }
 
+  // 12. Seed Controlled Development Dataset (Parties, Purchase, Sales, Inventory, Ledgers)
+  console.log('[Database Seed] Seeding controlled development dataset...');
+  await seedDevelopmentTestData(defaultBusiness.id);
+
   console.log('[Database Seed] Database initialization and seeding completed successfully.');
   return {
     success: true,
     businessId: defaultBusiness.id,
     businessName: defaultBusiness.name,
   };
+}
+
+/**
+ * Stage 3: Controlled Development / Test Dataset
+ * Inserts idempotent test parties, optical stock batches, purchase invoices (active & cancelled),
+ * sales invoices (active & cancelled), payments, and ledger entries for end-to-end testing.
+ */
+export async function seedDevelopmentTestData(businessId: string) {
+  const { parties, uniqueItems, opticalBatches, opticalStocks, stockLedger, purchaseInvoices, purchaseInvoiceLines, salesInvoices, salesInvoiceLines, payments, supplierLedgers, customerLedgers } = await import('./schema.js');
+  const { findOrCreateOpticalBatch } = await import('../services/opticalMasterService.js');
+  const { PurchaseService } = await import('../services/purchaseService.js');
+  const { SalesService } = await import('../services/salesService.js');
+
+  // --- 1. Test Parties (Clearly labeled as test data) ---
+  const testParties = [
+    {
+      partyCode: 'CUST-TEST-001',
+      name: 'Test Customer 001',
+      displayName: 'Test Customer 001 (Active Retail)',
+      partyType: 'CUSTOMER',
+      mobile: '9876543210',
+      email: 'test.cust001@example.com',
+      city: 'Mumbai',
+      state: 'Maharashtra',
+      gstin: '27AABCT0001C1Z1',
+      status: 'ACTIVE',
+    },
+    {
+      partyCode: 'CUST-TEST-002',
+      name: 'Test Customer 002',
+      displayName: 'Test Customer 002 (Corporate Optical)',
+      partyType: 'CUSTOMER',
+      mobile: '9876543211',
+      email: 'test.cust002@example.com',
+      city: 'Pune',
+      state: 'Maharashtra',
+      gstin: '27AABCT0002C1Z2',
+      status: 'ACTIVE',
+    },
+    {
+      partyCode: 'SUPP-TEST-001',
+      name: 'Test Supplier 001',
+      displayName: 'Test Supplier 001 (Lens Manufacturer)',
+      partyType: 'SUPPLIER',
+      mobile: '9876543220',
+      email: 'test.supp001@example.com',
+      city: 'Mumbai',
+      state: 'Maharashtra',
+      gstin: '27AABST0001S1Z3',
+      status: 'ACTIVE',
+    },
+    {
+      partyCode: 'SUPP-TEST-002',
+      name: 'Test Supplier 002',
+      displayName: 'Test Supplier 002 (Imported Blanks)',
+      partyType: 'SUPPLIER',
+      mobile: '9876543221',
+      email: 'test.supp002@example.com',
+      city: 'Delhi',
+      state: 'Delhi',
+      gstin: '07AABST0002S1Z4',
+      status: 'ACTIVE',
+    },
+    {
+      partyCode: 'DUAL-TEST-001',
+      name: 'Test Dual Party 001',
+      displayName: 'Test Dual Party 001 (Distributor & Client)',
+      partyType: 'BOTH',
+      mobile: '9876543230',
+      email: 'test.dual001@example.com',
+      city: 'Nagpur',
+      state: 'Maharashtra',
+      gstin: '27AABDT0001D1Z5',
+      status: 'ACTIVE',
+    },
+    {
+      partyCode: 'CUST-DEL-001',
+      name: 'Test Customer Delete 001',
+      displayName: 'Test Customer Delete 001 (Deletable - No History)',
+      partyType: 'CUSTOMER',
+      mobile: '9876543240',
+      email: 'test.custdel001@example.com',
+      city: 'Mumbai',
+      state: 'Maharashtra',
+      status: 'ACTIVE',
+    },
+    {
+      partyCode: 'SUPP-PROT-001',
+      name: 'Test Supplier Protected 001',
+      displayName: 'Test Supplier Protected 001 (Protected - Has Invoices)',
+      partyType: 'SUPPLIER',
+      mobile: '9876543250',
+      email: 'test.suppprot001@example.com',
+      city: 'Mumbai',
+      state: 'Maharashtra',
+      gstin: '27AABPT0001P1Z6',
+      status: 'ACTIVE',
+    },
+  ];
+
+  const partyMap = new Map<string, string>();
+  for (const p of testParties) {
+    let existing = (await db.select().from(parties).where(and(eq(parties.businessId, businessId), eq(parties.partyCode, p.partyCode))).limit(1))[0];
+    if (!existing) {
+      const [created] = await db.insert(parties).values({
+        businessId,
+        ...p,
+      }).returning();
+      existing = created;
+    }
+    partyMap.set(p.partyCode, existing.id);
+  }
+
+  // --- 2. Resolve Sample Unique Items ---
+  const allUniqueItems = await db.select().from(uniqueItems).where(eq(uniqueItems.businessId, businessId));
+  const uItemHCSV = allUniqueItems.find(u => u.code === 'HC_SV_STD') || allUniqueItems[0];
+  const uItemBCGSV = allUniqueItems.find(u => u.code === 'BCG_SV_STD') || allUniqueItems[0];
+  const uItemPGHCPROG = allUniqueItems.find(u => u.code === 'PGHC_PROG_STD') || allUniqueItems[0];
+
+  if (!uItemHCSV) {
+    console.warn('[Database Seed] No unique items available to seed test stock.');
+    return;
+  }
+
+  // --- 3. Seed Representative Optical Batches & Stock ---
+  const sampleBatches = [
+    { item: uItemHCSV, sph: -2.50, cyl: -1.00, axis: 0, add: 0, side: 'NONE' as const },
+    { item: uItemBCGSV || uItemHCSV, sph: -2.00, cyl: -0.50, axis: 0, add: 0, side: 'NONE' as const },
+    { item: uItemPGHCPROG || uItemHCSV, sph: -2.50, cyl: -1.00, axis: 90, add: 2.00, side: 'BE' as const },
+  ];
+
+  const createdBatchIds: string[] = [];
+  for (const b of sampleBatches) {
+    const res = await findOrCreateOpticalBatch({
+      businessId,
+      uniqueItemId: b.item.id,
+      sph: b.sph,
+      cyl: b.cyl,
+      axis: b.axis,
+      add: b.add,
+      side: b.side,
+    });
+    createdBatchIds.push(res.batch.id);
+  }
+
+  // --- 4. Seed Active & Cancelled Purchase Invoices via PurchaseService ---
+  const supp1Id = partyMap.get('SUPP-TEST-001') || partyMap.get('SUPP-PROT-001')!;
+  const suppProtId = partyMap.get('SUPP-PROT-001')!;
+
+  // 4A. Active Purchase Invoice (Protected - supplies stock to batches)
+  const existingActivePI = (await db.select().from(purchaseInvoices).where(and(eq(purchaseInvoices.businessId, businessId), eq(purchaseInvoices.supplierInvoiceNumber, 'TEST-SUPP-INV-001'))).limit(1))[0];
+  if (!existingActivePI) {
+    try {
+      const createdPI = await PurchaseService.createPurchaseInvoice(businessId, {
+        supplierPartyId: suppProtId,
+        invoiceDate: new Date(),
+        supplierInvoiceNumber: 'TEST-SUPP-INV-001',
+        supplierInvoiceDate: new Date(),
+        gstMode: 'INTRA_STATE',
+        notes: 'Controlled test purchase invoice - active stock receipt',
+        lines: [
+          {
+            uniqueItemId: uItemHCSV.id,
+            quantity: 10,
+            rate: 100,
+            gstRate: 5,
+            batches: [
+              {
+                batchId: createdBatchIds[0],
+                sph: -2.50,
+                cyl: -1.00,
+                quantity: 10,
+                rate: 100,
+              },
+            ],
+          },
+        ],
+      });
+      if (createdPI && createdPI.id) {
+        await PurchaseService.postPurchaseInvoice(businessId, createdPI.id);
+      }
+    } catch (e: any) {
+      console.log('[Database Seed] Purchase invoice notice:', e.message);
+    }
+  }
+
+  // 4B. Cancelled Purchase Invoice
+  const existingCancelledPI = (await db.select().from(purchaseInvoices).where(and(eq(purchaseInvoices.businessId, businessId), eq(purchaseInvoices.supplierInvoiceNumber, 'TEST-SUPP-INV-CANCEL-001'))).limit(1))[0];
+  if (!existingCancelledPI) {
+    try {
+      const createdPI = await PurchaseService.createPurchaseInvoice(businessId, {
+        supplierPartyId: supp1Id,
+        invoiceDate: new Date(),
+        supplierInvoiceNumber: 'TEST-SUPP-INV-CANCEL-001',
+        supplierInvoiceDate: new Date(),
+        gstMode: 'INTRA_STATE',
+        notes: 'Controlled test purchase invoice - to be cancelled',
+        lines: [
+          {
+            uniqueItemId: uItemHCSV.id,
+            quantity: 5,
+            rate: 100,
+            gstRate: 5,
+            batches: [
+              {
+                batchId: createdBatchIds[0],
+                sph: -2.50,
+                cyl: -1.00,
+                quantity: 5,
+                rate: 100,
+              },
+            ],
+          },
+        ],
+      });
+
+      if (createdPI && createdPI.id) {
+        await PurchaseService.postPurchaseInvoice(businessId, createdPI.id);
+        await PurchaseService.cancelPurchaseInvoice(businessId, createdPI.id, 'Test dataset cancellation verification');
+      }
+    } catch (e: any) {
+      console.log('[Database Seed] Cancelled purchase notice:', e.message);
+    }
+  }
+
+  // --- 5. Seed Active & Cancelled Sales Invoices via SalesService ---
+  const cust1Id = partyMap.get('CUST-TEST-001')!;
+
+  // 5A. Active Sales Invoice (Credit sale)
+  const existingActiveSI = (await db.select().from(salesInvoices).where(and(eq(salesInvoices.businessId, businessId), eq(salesInvoices.notes, 'Controlled test sales invoice - active retail credit'))).limit(1))[0];
+  if (!existingActiveSI && createdBatchIds[0]) {
+    try {
+      await SalesService.createSalesInvoice(businessId, {
+        partyId: cust1Id,
+        invoiceDate: new Date(),
+        gstMode: 'INTRA_STATE',
+        notes: 'Controlled test sales invoice - active retail credit',
+        lines: [
+          {
+            uniqueItemId: uItemHCSV.id,
+            quantity: 2,
+            rate: 250,
+            gstRate: 5,
+            batches: [
+              {
+                batchId: createdBatchIds[0],
+                quantity: 2,
+              },
+            ],
+          },
+        ],
+      });
+    } catch (e: any) {
+      console.log('[Database Seed] Sales invoice notice:', e.message);
+    }
+  }
+
+  // 5B. Cancelled Sales Invoice
+  const existingCancelledSI = (await db.select().from(salesInvoices).where(and(eq(salesInvoices.businessId, businessId), eq(salesInvoices.notes, 'Controlled test sales invoice - to be cancelled'))).limit(1))[0];
+  if (!existingCancelledSI && createdBatchIds[0]) {
+    try {
+      const createdSI = await SalesService.createSalesInvoice(businessId, {
+        partyId: cust1Id,
+        invoiceDate: new Date(),
+        gstMode: 'INTRA_STATE',
+        notes: 'Controlled test sales invoice - to be cancelled',
+        lines: [
+          {
+            uniqueItemId: uItemHCSV.id,
+            quantity: 1,
+            rate: 250,
+            gstRate: 5,
+            batches: [
+              {
+                batchId: createdBatchIds[0],
+                quantity: 1,
+              },
+            ],
+          },
+        ],
+      });
+
+      if (createdSI && createdSI.id) {
+        await SalesService.cancelSalesInvoice(businessId, createdSI.id, 'Test dataset sales cancellation verification');
+      }
+    } catch (e: any) {
+      console.log('[Database Seed] Cancelled sales notice:', e.message);
+    }
+  }
+
+  console.log('[Database Seed] Controlled test dataset setup completed.');
 }
 
 // Standalone execution support via `npm run db:seed`
@@ -543,3 +838,4 @@ if (typeof process !== 'undefined' && process.argv && process.argv[1] && process
       process.exit(1);
     });
 }
+

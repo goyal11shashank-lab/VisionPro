@@ -800,9 +800,9 @@ export const OpticalBatchesPage: React.FC = () => {
 
       {/* Bulk Delete Modal */}
       {showBulkDeleteModal && (
-        <div id="modal-bulk-delete-optical-batches" className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/60 backdrop-blur-xs p-4">
-          <div className="bg-white rounded-2xl max-w-lg w-full p-6 shadow-xl border border-rose-100 animate-in fade-in zoom-in-95 duration-150">
-            <div className="flex items-start gap-4">
+        <div id="modal-bulk-delete-optical-batches" className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/60 backdrop-blur-xs p-4 overflow-y-auto">
+          <div className="bg-white rounded-2xl max-w-lg w-full max-h-[90vh] flex flex-col p-6 shadow-2xl border border-rose-100 animate-in fade-in zoom-in-95 duration-150 overflow-hidden">
+            <div className="flex items-start gap-4 overflow-y-auto flex-1 pr-1 overscroll-contain">
               <div className="p-3 bg-rose-100 text-rose-600 rounded-full shrink-0">
                 <AlertTriangle className="h-6 w-6" />
               </div>
@@ -814,19 +814,14 @@ export const OpticalBatchesPage: React.FC = () => {
                   You are about to permanently delete <span className="font-semibold text-slate-800">{selectedIds.length}</span> optical batch power records.
                 </p>
 
-                {/* List preview */}
-                <div className="mt-3 max-h-36 overflow-y-auto bg-slate-50 p-2.5 rounded-lg border border-slate-200 text-xs space-y-1">
-                  {selectedBatches.slice(0, 10).map(b => (
-                    <div key={b.id} className="flex items-center justify-between text-slate-700">
+                {/* List preview with scrollable container */}
+                <div className="mt-3 max-h-48 overflow-y-auto bg-slate-50 p-2.5 rounded-lg border border-slate-200 text-xs space-y-1.5 overscroll-contain">
+                  {selectedBatches.map(b => (
+                    <div key={b.id} className="flex items-center justify-between text-slate-700 py-0.5 border-b border-slate-100 last:border-0">
                       <span className="font-mono font-semibold text-indigo-700 bg-indigo-50 px-1.5 py-0.5 rounded">{b.barcode}</span>
-                      <span className="text-slate-600 truncate max-w-[200px]">{b.uniqueItemName} (SPH: {Number(b.sph).toFixed(2)})</span>
+                      <span className="text-slate-600 truncate max-w-[220px]">{b.uniqueItemName} (SPH: {Number(b.sph).toFixed(2)})</span>
                     </div>
                   ))}
-                  {selectedBatches.length > 10 && (
-                    <p className="text-slate-400 italic pt-1 text-center">
-                      ...and {selectedBatches.length - 10} more
-                    </p>
-                  )}
                 </div>
 
                 <div className="mt-3 p-3 bg-amber-50 border border-amber-200 rounded-lg text-xs text-amber-800 space-y-1">
@@ -847,7 +842,7 @@ export const OpticalBatchesPage: React.FC = () => {
               </div>
             </div>
 
-            <div className="flex items-center justify-end gap-3 mt-6 pt-4 border-t border-slate-100">
+            <div className="flex items-center justify-end gap-3 mt-6 pt-4 border-t border-slate-100 shrink-0">
               <button
                 type="button"
                 disabled={bulkDeleting}

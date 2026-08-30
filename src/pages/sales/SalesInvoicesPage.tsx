@@ -14,6 +14,7 @@ import {
   Building2,
   AlertCircle,
   FileText,
+  FileSpreadsheet,
   Trash2,
   RotateCcw,
   Sparkles,
@@ -84,8 +85,14 @@ interface SalesInvoice {
   createdAt: string;
 }
 
-export const SalesInvoicesPage: React.FC<{ initialConvertOrderId?: string }> = ({
+export const SalesInvoicesPage: React.FC<{
+  initialConvertOrderId?: string;
+  initialOpenPos?: boolean;
+  onNavigate?: (path: string) => void;
+}> = ({
   initialConvertOrderId,
+  initialOpenPos,
+  onNavigate,
 }) => {
   const { currentBusiness, hasPermission } = useAuth();
 
@@ -157,6 +164,13 @@ export const SalesInvoicesPage: React.FC<{ initialConvertOrderId?: string }> = (
       openConvertModal(initialConvertOrderId);
     }
   }, [initialConvertOrderId]);
+
+  // Handle Initial Direct POS Open
+  useEffect(() => {
+    if (initialOpenPos) {
+      handleOpenDirectCreate();
+    }
+  }, [initialOpenPos]);
 
   const loadFormData = async () => {
     if (!currentBusiness) return;
@@ -707,12 +721,21 @@ export const SalesInvoicesPage: React.FC<{ initialConvertOrderId?: string }> = (
           </button>
 
           <button
-            id="btn-create-direct-invoice"
+            id="btn-create-pos-invoice"
             onClick={handleOpenDirectCreate}
             className="flex items-center gap-2 px-4 py-2.5 bg-emerald-600 hover:bg-emerald-700 text-white font-medium rounded-lg shadow-sm transition"
           >
-            <Plus className="w-4 h-4" />
-            Direct Invoice (POS)
+            <Sparkles className="w-4 h-4" />
+            POS
+          </button>
+
+          <button
+            id="btn-create-normal-voucher"
+            onClick={() => onNavigate ? onNavigate('/sales/voucher/new') : (window.location.href = '/sales/voucher/new')}
+            className="flex items-center gap-2 px-4 py-2.5 bg-blue-600 hover:bg-blue-700 text-white font-medium rounded-lg shadow-sm transition"
+          >
+            <FileSpreadsheet className="w-4 h-4" />
+            Normal Sales Voucher
           </button>
         </div>
       </div>

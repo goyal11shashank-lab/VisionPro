@@ -305,4 +305,92 @@ export class PartyService {
 
     return updated;
   }
+
+  /**
+   * Check references and safely delete a party
+   */
+  static async deleteParty(businessId: string, partyId: string, userId?: string) {
+    const existing = await this.getPartyById(businessId, partyId);
+
+    const checkRes = await pool.query(
+      `SELECT 
+        (SELECT COUNT(*)::int FROM sales_invoices WHERE party_id = $1) AS sales_invoices_count,
+        (SELECT COUNT(*)::int FROM sales_orders WHERE party_id = $1) AS sales_orders_count,
+        (SELECT COUNT(*)::int FROM sales_returns WHERE party_id = $1) AS sales_returns_count,
+        (SELECT COUNT(*)::int FROM purchase_invoices WHERE supplier_party_id = $1) AS purchase_invoices_count,
+        (SELECT COUNT(*)::int FROM purchase_returns WHERE supplier_party_id = $1) AS purchase_returns_count,
+        (SELECT COUNT(*)::int FROM customer_ledgers WHERE party_id = $1) AS customer_ledgers_count,
+        (SELECT COUNT(*)::int FROM supplier_ledgers WHERE party_id = $1) AS supplier_ledgers_count,
+        (SELECT COUNT(*)::int FROM payments WHERE party_id = $1) AS payments_count,
+        (SELECT COUNT(*)::int FROM payment_allocations WHERE party_id = $1) AS payment_allocations_count`,
+      [partyId]
+    );
+
+    const counts = checkRes.rows[0] || {};
+    const refDetails: string[] = [];
+    if (counts.sales_invoices_count > 0) refDetails.push(`${counts.sales_invoices_count} sales invoices`);
+    if (counts.sales_orders_count > 0) refDetails.push(`${counts.sales_orders_count} sales orders`);
+    if (counts.sales_returns_count > 0) refDetails.push(`${counts.sales_returns_count} sales returns`);
+    if (counts.purchase_invoices_count > 0) refDetails.push(`${counts.purchase_invoices_count} purchase bills`);
+    if (counts.purchase_returns_count > 0) refDetails.push(`${counts.purchase_returns_count} purchase returns`);
+    if (counts.customer_ledgers_count > 0) refDetails.push(`${counts.customer_ledgers_count} customer ledger entries`);
+    if (counts.supplier_ledgers_count > 0) refDetails.push(`${counts.supplier_ledgers_count} supplier ledger entries`);
+    if (counts.payments_count > 0) refDetails.push(`${counts.payments_count} payment vouchers`);
+    if (counts.payment_allocations_count > 0) refDetails.push(`${counts.payment_allocations_count} payment allocations`);
+
+    if (refDetails.length > 0) {
+      throw new Error(
+        `Cannot delete party "${existing.name}" (${existing.partyCode}) because they are referenced in ${refDetails.join(', ')}. To deactivate this party instead, set their status to INACTIVE.`
+      );
+    }
+
+    await pool.query('DELETE FROM party_item_prices WHERE party_id = $1', [partyId]);
+    await pool.query('DELETE FROM parties WHERE id = $1 AND business_id = $2', [partyId, businessId]);
+
+    await AuditService.log({
+      businessId,
+      userId,
+      module: 'parties',
+      action: 'delete',
+      entityType: 'party',
+      entityId: partyId,
+      previousValue: existing,
+    });
+
+    return {
+      success: true,
+      message: `Party "${existing.name}" (${existing.partyCode}) was permanently deleted.`,
+    };
+  }
+
+  /**
+   * Bulk deletes parties with safety checks
+   */
+  static async bulkDeleteParties(businessId: string, partyIds: string[], userId?: string) {
+    if (!Array.isArray(partyIds) || partyIds.length === 0) {
+      throw new Error('Please provide an array of party IDs to delete.');
+    }
+
+    let deletedCount = 0;
+    const errors: string[] = [];
+
+    for (const id of partyIds) {
+      try {
+        await this.deleteParty(businessId, id, userId);
+        deletedCount++;
+      } catch (err: any) {
+        errors.push(err.message || `Failed to delete party ID ${id}`);
+      }
+    }
+
+    return {
+      success: deletedCount > 0,
+      deletedCount,
+      errors,
+      message:
+        deletedCount === partyIds.length
+          ? `Successfully deleted all ${deletedCount} selected parties.`
+          : `Deleted ${deletedCount} of ${partyIds.length} parties. ${errors.length} could not be deleted due to dependencies.`,
+    };
+  }
 }

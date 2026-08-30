@@ -34,7 +34,7 @@ router.get('/', async (req: Request, res: Response): Promise<void> => {
     version: '1.0.0',
     timestamp: new Date().toISOString(),
     database: {
-      provider: dbStatus.provider || 'Netlify Database (PostgreSQL)',
+      provider: dbStatus.provider || 'PostgreSQL',
       connected: dbStatus.connected,
       version: dbStatus.version,
       error: dbStatus.error,
@@ -42,7 +42,7 @@ router.get('/', async (req: Request, res: Response): Promise<void> => {
       tables,
     },
     deployment: {
-      platform: process.env.NETLIFY ? 'Netlify Functions' : 'Container Server (Vite + Express)',
+      platform: process.env.NETLIFY ? 'Netlify Functions' : 'Hostinger / Node.js Server (Express)',
       nodeEnv: process.env.NODE_ENV || 'development',
     },
   });

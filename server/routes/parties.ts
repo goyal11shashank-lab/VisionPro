@@ -140,4 +140,43 @@ router.put(
   }
 );
 
+/**
+ * POST /api/parties/bulk-delete
+ * Delete multiple parties
+ */
+router.post(
+  '/bulk-delete',
+  requireAnyPermission(['parties:delete', 'parties.delete', 'parties:edit', 'parties.edit', 'purchase:delete', 'purchase:edit']),
+  async (req: Request, res: Response) => {
+    try {
+      const businessId = req.user!.currentBusinessId;
+      const { ids } = req.body;
+      const result = await PartyService.bulkDeleteParties(businessId, ids, req.user!.id);
+      res.json(result);
+    } catch (err: any) {
+      console.error('[POST /api/parties/bulk-delete Error]', err);
+      res.status(400).json({ error: 'BULK_DELETE_PARTIES_FAILED', message: err.message });
+    }
+  }
+);
+
+/**
+ * DELETE /api/parties/:id
+ * Delete single party
+ */
+router.delete(
+  '/:id',
+  requireAnyPermission(['parties:delete', 'parties.delete', 'parties:edit', 'parties.edit', 'purchase:delete', 'purchase:edit']),
+  async (req: Request, res: Response) => {
+    try {
+      const businessId = req.user!.currentBusinessId;
+      const result = await PartyService.deleteParty(businessId, req.params.id, req.user!.id);
+      res.json(result);
+    } catch (err: any) {
+      console.error('[DELETE /api/parties/:id Error]', err);
+      res.status(400).json({ error: 'DELETE_PARTY_FAILED', message: err.message });
+    }
+  }
+);
+
 export default router;

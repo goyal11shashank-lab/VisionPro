@@ -46,6 +46,13 @@ interface NavItem {
   path: string;
   isUpcoming?: boolean;
   permission?: string;
+  subItems?: {
+    id: string;
+    label: string;
+    icon: React.ElementType;
+    path: string;
+    permission?: string;
+  }[];
 }
 
 interface NavSection {
@@ -65,7 +72,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
 
   const [openSections, setOpenSections] = useState<Record<string, boolean>>({
     'Master Data': true,
-    Sales: false,
+    Sales: true,
     Purchase: false,
     Inventory: false,
     Parties: false,
@@ -73,8 +80,16 @@ export const Sidebar: React.FC<SidebarProps> = ({
     Administration: false,
   });
 
+  const [openSubNavs, setOpenSubNavs] = useState<Record<string, boolean>>({
+    'sales-create-invoice': true,
+  });
+
   const toggleSection = (section: string) => {
     setOpenSections(prev => ({ ...prev, [section]: !prev[section] }));
+  };
+
+  const toggleSubNav = (itemId: string) => {
+    setOpenSubNavs(prev => ({ ...prev, [itemId]: !prev[itemId] }));
   };
 
   const sections: NavSection[] = [
@@ -94,8 +109,19 @@ export const Sidebar: React.FC<SidebarProps> = ({
       title: 'Sales',
       icon: ShoppingCart,
       items: [
+        {
+          id: 'sales-create-invoice',
+          label: 'Create Sales Invoice',
+          icon: Receipt,
+          path: '/sales/pos',
+          permission: 'sales:view',
+          subItems: [
+            { id: 'sales-pos', label: 'POS', icon: Sparkles, path: '/sales/pos', permission: 'sales:view' },
+            { id: 'sales-normal-voucher', label: 'Normal Sales Voucher', icon: FileSpreadsheet, path: '/sales/voucher/new', permission: 'sales:view' },
+          ],
+        },
+        { id: 'sales-invoices', label: 'Sales Invoices Register', icon: Receipt, path: '/sales/invoices', permission: 'sales:view' },
         { id: 'sales-orders', label: 'Sales Orders', icon: ShoppingCart, path: '/sales/orders', permission: 'sales:view' },
-        { id: 'sales-invoices', label: 'Sales Invoices', icon: Receipt, path: '/sales/invoices', permission: 'sales:view' },
         { id: 'sales-returns', label: 'Sales Returns', icon: RotateCcw, path: '/sales/returns', permission: 'sales:view' },
         { id: 'sales-ledger', label: 'Customer Ledger', icon: BookOpen, path: '/sales/customer-ledger', permission: 'sales:view' },
       ],
@@ -245,11 +271,69 @@ export const Sidebar: React.FC<SidebarProps> = ({
                   <div className="mt-0.5 space-y-0.5">
                     {section.items.map(item => {
                       const ItemIcon = item.icon;
-                      const isActive = currentPath === item.path;
+                      const hasSub = item.subItems && item.subItems.length > 0;
+                      const isSubOpen = hasSub ? !!openSubNavs[item.id] : false;
+                      const isParentActive = hasSub
+                        ? item.subItems?.some(s => currentPath === s.path)
+                        : currentPath === item.path;
 
                       // Permission check (if specified)
                       if (item.permission && !hasPermission(item.permission)) {
                         return null;
+                      }
+
+                      if (hasSub) {
+                        return (
+                          <div key={item.id} className="space-y-0.5">
+                            <button
+                              id={`nav-${item.id}`}
+                              onClick={() => toggleSubNav(item.id)}
+                              className={`w-full flex items-center justify-between px-3 py-2 rounded-md text-xs transition-all group ${
+                                isParentActive
+                                  ? 'bg-white/10 text-white font-semibold'
+                                  : 'text-slate-300/80 hover:bg-white/5 hover:text-white'
+                              }`}
+                            >
+                              <div className="flex items-center gap-2.5 truncate">
+                                <ItemIcon className={`w-3.5 h-3.5 shrink-0 ${isParentActive ? 'text-blue-400' : 'text-slate-400 group-hover:text-slate-200'}`} />
+                                <span className="truncate">{item.label}</span>
+                              </div>
+                              {isSubOpen ? (
+                                <ChevronDown className="w-3 h-3 text-slate-400 shrink-0" />
+                              ) : (
+                                <ChevronRight className="w-3 h-3 text-slate-400 shrink-0" />
+                              )}
+                            </button>
+
+                            {isSubOpen && (
+                              <div className="pl-6 space-y-0.5 border-l border-white/10 ml-4 my-0.5">
+                                {item.subItems?.map(sub => {
+                                  const SubIcon = sub.icon;
+                                  const isSubActive = currentPath === sub.path;
+                                  if (sub.permission && !hasPermission(sub.permission)) return null;
+
+                                  return (
+                                    <button
+                                      key={sub.id}
+                                      id={`nav-${sub.id}`}
+                                      onClick={() => handleItemClick(sub.path)}
+                                      className={`w-full flex items-center justify-between px-2.5 py-1.5 rounded-md text-[11px] transition-all group ${
+                                        isSubActive
+                                          ? 'bg-blue-600/30 text-blue-300 font-semibold border-l-2 border-blue-400 pl-2'
+                                          : 'text-slate-400 hover:bg-white/5 hover:text-slate-200'
+                                      }`}
+                                    >
+                                      <div className="flex items-center gap-2 truncate">
+                                        <SubIcon className={`w-3 h-3 shrink-0 ${isSubActive ? 'text-blue-400' : 'text-slate-500 group-hover:text-slate-300'}`} />
+                                        <span className="truncate">{sub.label}</span>
+                                      </div>
+                                    </button>
+                                  );
+                                })}
+                              </div>
+                            )}
+                          </div>
+                        );
                       }
 
                       return (
@@ -258,13 +342,13 @@ export const Sidebar: React.FC<SidebarProps> = ({
                           id={`nav-${item.id}`}
                           onClick={() => handleItemClick(item.path)}
                           className={`w-full flex items-center justify-between px-3 py-2 rounded-md text-xs transition-all group ${
-                            isActive
+                            isParentActive
                               ? 'bg-white/10 text-white font-semibold border-l-[3px] border-blue-500 pl-2.5'
                               : 'text-slate-300/70 hover:bg-white/5 hover:text-white'
                           }`}
                         >
                           <div className="flex items-center gap-2.5 truncate">
-                            <ItemIcon className={`w-3.5 h-3.5 shrink-0 ${isActive ? 'text-blue-400' : 'text-slate-400 group-hover:text-slate-200'}`} />
+                            <ItemIcon className={`w-3.5 h-3.5 shrink-0 ${isParentActive ? 'text-blue-400' : 'text-slate-400 group-hover:text-slate-200'}`} />
                             <span className="truncate">{item.label}</span>
                           </div>
                           {item.isUpcoming && (
