@@ -1,5 +1,4 @@
 import path from 'path';
-import { fileURLToPath } from 'url';
 import { createExpressApp } from './server/app.js';
 import { checkDatabaseConnection } from './server/db/index.js';
 import { seedInitialDatabase } from './server/db/seed.js';
@@ -8,8 +7,6 @@ import dotenv from 'dotenv';
 
 dotenv.config();
 
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = path.dirname(__filename);
 
 async function startServer() {
   const app = createExpressApp();
