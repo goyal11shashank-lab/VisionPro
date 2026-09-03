@@ -51,6 +51,8 @@ function getImportPermission(type: ImportType): string {
       return 'import.sales_invoice';
     case 'OPENING_STOCK':
       return 'import.opening_stock';
+    case 'OPTICAL_BATCH':
+      return 'inventory:create';
     default:
       return 'import.view';
   }
@@ -63,13 +65,13 @@ function getImportPermission(type: ImportType): string {
 router.get(
   '/templates/:type',
   authenticateToken,
-  requireAnyPermission(['import.view', 'import:view']),
+  requireAnyPermission(['import.view', 'import:view', 'inventory:view', 'inventory:create']),
   async (req: Request, res: Response) => {
     try {
       const type = (req.params.type || '').toUpperCase() as ImportType;
       const def = TEMPLATE_DEFINITIONS[type];
       if (!def) {
-        return res.status(400).json({ error: `Invalid import type "${req.params.type}". Supported types: PARTY, PURCHASE, SALES_ORDER, SALES_INVOICE, OPENING_STOCK` });
+        return res.status(400).json({ error: `Invalid import type "${req.params.type}". Supported types: PARTY, PURCHASE, SALES_ORDER, SALES_INVOICE, OPENING_STOCK, OPTICAL_BATCH` });
       }
 
       const buffer = ExcelTemplateService.generateTemplateWorkbook(type);
@@ -131,7 +133,7 @@ router.post(
 
       const importType = (req.body.importType || '').toUpperCase() as ImportType;
       if (!TEMPLATE_DEFINITIONS[importType]) {
-        return res.status(400).json({ error: `Invalid importType "${importType}". Allowed: PARTY, PURCHASE, SALES_ORDER, SALES_INVOICE, OPENING_STOCK` });
+        return res.status(400).json({ error: `Invalid importType "${importType}". Allowed: PARTY, PURCHASE, SALES_ORDER, SALES_INVOICE, OPENING_STOCK, OPTICAL_BATCH` });
       }
 
       // Read spreadsheet buffer

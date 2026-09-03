@@ -32,7 +32,7 @@ router.get(
       const result = await PaymentService.getCustomerOutstanding(businessId, {
         search: search as string,
       });
-      res.json(result);
+      res.json({ success: true, customers: result, data: result });
     } catch (err: any) {
       console.error('[GET /api/payments/outstanding/customers Error]', err);
       res.status(400).json({ error: 'FETCH_CUSTOMER_OUTSTANDING_FAILED', message: err.message });
@@ -60,7 +60,7 @@ router.get(
       const result = await PaymentService.getSupplierOutstanding(businessId, {
         search: search as string,
       });
-      res.json(result);
+      res.json({ success: true, suppliers: result, data: result });
     } catch (err: any) {
       console.error('[GET /api/payments/outstanding/suppliers Error]', err);
       res.status(400).json({ error: 'FETCH_SUPPLIER_OUTSTANDING_FAILED', message: err.message });

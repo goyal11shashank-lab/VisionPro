@@ -53,36 +53,24 @@ export function isValidPostgresConnectionString(str: string | null | undefined):
 /**
  * Resolves the canonical PostgreSQL connection string for the application.
  * 
- * ENVIRONMENT-AWARE RESOLUTION:
- * 1. Development (NODE_ENV !== 'production'):
- *    - Prioritizes DEV_DATABASE_URL / LOCAL_DATABASE_URL.
- *    - Fallbacks to DATABASE_URL if valid.
- * 2. Production (Hostinger / Node.js / Cloud environments):
- *    - Prioritizes standard DATABASE_URL (standard for Hostinger Node.js Web Apps).
- *    - Fallbacks to NETLIFY_DB_URL / NETLIFY_DATABASE_URL / Netlify SDK when deployed on Netlify.
- *    - Fallbacks to PG_URL / POSTGRES_URL / PGDATABASE_URL.
- * 
- * IMPORTANT:
- * - The connection URL remains strictly server-side and is never exposed to the client.
+ * Uses Neon PostgreSQL as the primary database source of truth.
+ * Prioritizes DATABASE_URL and DATABASE_URL_UNPOOLED.
  */
 export function resolveDatabaseConfig(): DbConfigResolution {
   const envKeys = Object.keys(process.env);
-  const isDev = process.env.NODE_ENV !== 'production';
 
   const candidateNames = [
-    'DEV_DATABASE_URL',
-    'dev_database_url',
-    'LOCAL_DATABASE_URL',
-    'local_database_url',
     'DATABASE_URL',
     'database_url',
-    'NETLIFY_DB_URL',
-    'netlify_db_url',
-    'NETLIFY_DATABASE_URL',
-    'netlify_database_url',
+    'DATABASE_URL_UNPOOLED',
+    'database_url_unpooled',
+    'NEON_DATABASE_URL',
+    'neon_database_url',
     'PG_URL',
     'POSTGRES_URL',
     'PGDATABASE_URL',
+    'DEV_DATABASE_URL',
+    'LOCAL_DATABASE_URL',
   ];
 
   const allCheckedVariables: CheckedEnvVar[] = candidateNames.map((name) => {
@@ -94,27 +82,10 @@ export function resolveDatabaseConfig(): DbConfigResolution {
     };
   });
 
-  // 1. In development, prioritize explicit valid DEV_DATABASE_URL / LOCAL_DATABASE_URL if configured
-  if (isDev) {
-    for (const name of ['DEV_DATABASE_URL', 'dev_database_url', 'LOCAL_DATABASE_URL', 'local_database_url']) {
-      const val = process.env[name];
-      if (val && isValidPostgresConnectionString(val)) {
-        return {
-          connectionString: val.trim(),
-          detectedVariable: name,
-          allCheckedVariables,
-        };
-      }
-    }
-  }
-
-  // 2. Standard Production / Hostinger / Cloud PostgreSQL primary check: DATABASE_URL
-  for (const name of ['DATABASE_URL', 'database_url']) {
+  // 1. Primary check: DATABASE_URL, DATABASE_URL_UNPOOLED, NEON_DATABASE_URL
+  for (const name of candidateNames) {
     const val = process.env[name];
     if (val && isValidPostgresConnectionString(val)) {
-      if (isDev && val.includes('ep-broad-glade-ay3fklhk.c-5.us-east-2.db.netlify.com')) {
-        continue;
-      }
       return {
         connectionString: val.trim(),
         detectedVariable: name,
@@ -123,22 +94,7 @@ export function resolveDatabaseConfig(): DbConfigResolution {
     }
   }
 
-  // 3. If deployed on Netlify or with Netlify DB variables configured, check Netlify options
-  for (const name of ['NETLIFY_DB_URL', 'netlify_db_url', 'NETLIFY_DATABASE_URL', 'netlify_database_url']) {
-    const val = process.env[name];
-    if (val && isValidPostgresConnectionString(val)) {
-      if (isDev && val.includes('ep-broad-glade-ay3fklhk.c-5.us-east-2.db.netlify.com')) {
-        continue;
-      }
-      return {
-        connectionString: val.trim(),
-        detectedVariable: name,
-        allCheckedVariables,
-      };
-    }
-  }
-
-  // 4. Netlify SDK getConnectionString() fallback if NETLIFY environment is active
+  // 2. Netlify SDK getConnectionString() fallback if available
   if (process.env.NETLIFY) {
     try {
       const netlifyUrl = getConnectionString();
@@ -154,26 +110,11 @@ export function resolveDatabaseConfig(): DbConfigResolution {
     }
   }
 
-  // 5. Check other standard PostgreSQL aliases (PG_URL, POSTGRES_URL, PGDATABASE_URL)
-  for (const name of ['PG_URL', 'POSTGRES_URL', 'PGDATABASE_URL']) {
-    const val = process.env[name];
-    if (val && isValidPostgresConnectionString(val)) {
-      return {
-        connectionString: val.trim(),
-        detectedVariable: name,
-        allCheckedVariables,
-      };
-    }
-  }
-
-  // 6. Fallback scan for any variable key matching case-insensitively
-  for (const name of ['database_url', 'dev_database_url', 'netlify_db_url', 'netlify_database_url']) {
+  // 3. Fallback scan for any variable key matching case-insensitively
+  for (const name of ['database_url', 'database_url_unpooled', 'neon_database_url', 'postgres_url']) {
     const match = envKeys.find((k) => k.toLowerCase() === name);
     if (match && process.env[match] && isValidPostgresConnectionString(process.env[match])) {
       const val = process.env[match]!.trim();
-      if (isDev && val.includes('ep-broad-glade-ay3fklhk.c-5.us-east-2.db.netlify.com')) {
-        continue;
-      }
       return {
         connectionString: val,
         detectedVariable: match,
@@ -306,9 +247,9 @@ export async function checkDatabaseConnection(): Promise<{
       console.log('------------------------------------');
       return {
         connected: false,
-        provider: 'PostgreSQL (Local / Development)',
-        error: 'Local development PostgreSQL connection string unavailable. No valid DEV_DATABASE_URL or LOCAL_DATABASE_URL detected in environment variables.',
-        tip: 'In Settings > Environment Variables, provide DEV_DATABASE_URL or LOCAL_DATABASE_URL with an active local or accessible PostgreSQL connection string (e.g. postgresql://user:pass@host:5432/dbname), then click "Retry Connection".',
+        provider: 'Neon PostgreSQL',
+        error: 'PostgreSQL connection string unavailable. No valid DATABASE_URL or DATABASE_URL_UNPOOLED detected in environment variables.',
+        tip: 'In Settings > Environment Variables, provide DATABASE_URL with your Neon PostgreSQL connection string (e.g. postgresql://user:pass@ep-xxx.us-east-2.aws.neon.tech/neondb?sslmode=require), then click "Retry Connection".',
         host: safeInfo.dbHost,
       };
     }
@@ -318,10 +259,11 @@ export async function checkDatabaseConnection(): Promise<{
     console.log(`PostgreSQL Engine:     ${result.rows[0]?.version || 'PostgreSQL'}`);
     console.log('------------------------------------');
 
-    const isLocalhost = safeInfo.dbHost === 'localhost' || safeInfo.dbHost === '127.0.0.1' || !safeInfo.dbHost;
-    const providerName = isLocalhost 
-      ? 'PostgreSQL (Local / Development)' 
-      : (process.env.NETLIFY ? 'Netlify Database (PostgreSQL)' : 'PostgreSQL');
+    const isNeon = (safeInfo.dbHost || '').includes('neon.tech');
+    const isLocalhost = safeInfo.dbHost === 'localhost' || safeInfo.dbHost === '127.0.0.1';
+    const providerName = isNeon 
+      ? 'Neon PostgreSQL' 
+      : (isLocalhost ? 'PostgreSQL (Local)' : 'PostgreSQL');
 
     return {
       connected: true,
@@ -341,24 +283,25 @@ export async function checkDatabaseConnection(): Promise<{
     if (err?.routine) console.error(`Error Routine:         ${err.routine}`);
     console.log('------------------------------------');
 
-    let tip = 'Verify that the database password and host are correct, and SSL is enabled if connecting to remote cloud PostgreSQL.';
+    let tip = 'Verify that the database password and host are correct, and SSL is enabled (sslmode=require) for Neon PostgreSQL.';
     let formattedError = errMsg;
 
     if (isEndpointDisabled) {
-      formattedError = 'The database compute endpoint has been disabled or suspended by the provider.';
-      tip = 'Provide an active PostgreSQL connection string in DATABASE_URL (or DEV_DATABASE_URL in development), then click "Retry Connection".';
+      formattedError = 'The Neon database compute endpoint has been disabled or suspended.';
+      tip = 'Check your Neon console or provide an active PostgreSQL connection string in DATABASE_URL, then click "Retry Connection".';
     } else if (errCode === 'EAI_AGAIN' || errMsg.includes('getaddrinfo') || errMsg.includes('ENOTFOUND')) {
       formattedError = `Database host could not be resolved (${safeInfo.dbHost || 'invalid host'}). Please check the connection URL.`;
-      tip = 'Check your connection string hostname or provide an active PostgreSQL URL in DATABASE_URL.';
+      tip = 'Check your connection string hostname or provide an active Neon PostgreSQL URL in DATABASE_URL.';
     } else if (errCode === 'ECONNREFUSED') {
       formattedError = `Connection refused at ${safeInfo.dbHost || 'localhost'}:${safeInfo.dbPort || '5432'}. Database server is offline or unreachable.`;
-      tip = 'Ensure the target PostgreSQL instance is running and accepting connections on the specified port.';
+      tip = 'Ensure the target PostgreSQL instance is running and accepting connections.';
     }
 
+    const isNeon = (safeInfo.dbHost || '').includes('neon.tech');
     const isLocalhost = safeInfo.dbHost === 'localhost' || safeInfo.dbHost === '127.0.0.1';
-    const providerName = isLocalhost 
-      ? 'PostgreSQL (Local / Development)' 
-      : (process.env.NETLIFY ? 'Netlify Database (PostgreSQL)' : 'PostgreSQL');
+    const providerName = isNeon 
+      ? 'Neon PostgreSQL' 
+      : (isLocalhost ? 'PostgreSQL (Local)' : 'PostgreSQL');
 
     return {
       connected: false,

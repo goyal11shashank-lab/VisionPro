@@ -386,8 +386,8 @@ export const DashboardPage: React.FC<Props> = ({ onNavigate }) => {
                 No inventory batches registered yet.
               </div>
             ) : (
-              stockByCategory.map((cat: any) => (
-                <div key={cat.categoryId} className="space-y-1">
+              stockByCategory.map((cat: any, idx: number) => (
+                <div key={cat.categoryId ? `cat-${cat.categoryId}` : `cat-idx-${idx}-${cat.categoryName || 'item'}`} className="space-y-1">
                   <div className="flex items-center justify-between text-xs">
                     <span className="font-semibold text-slate-800">{cat.categoryName}</span>
                     <span className="font-bold text-slate-900">{cat.physicalStock} prs</span>
@@ -443,13 +443,15 @@ export const DashboardPage: React.FC<Props> = ({ onNavigate }) => {
                 </thead>
                 <tbody className="divide-y divide-slate-50">
                   {topSelling.map((item: any, i: number) => (
-                    <tr key={i} className="hover:bg-slate-50/60">
+                    <tr key={item.id ? `top-item-${item.id}` : `top-sku-${item.sku || item.name || i}-${i}`} className="hover:bg-slate-50/60">
                       <td className="py-2.5 px-3 font-semibold text-slate-900">{item.name}</td>
                       <td className="py-2.5 px-3 font-mono text-slate-500 text-[11px]">{item.sku}</td>
                       <td className="py-2.5 px-3 text-slate-600">{item.category}</td>
-                      <td className="py-2.5 px-3 text-right font-bold text-blue-600">{item.totalQuantity}</td>
+                      <td className="py-2.5 px-3 text-right font-bold text-blue-600">
+                        {item.totalQuantity ?? item.quantitySold ?? 0}
+                      </td>
                       <td className="py-2.5 px-3 text-right font-bold text-emerald-600">
-                        {currencySymbol}{Number(item.totalAmount).toLocaleString()}
+                        {currencySymbol}{Number(item.totalAmount ?? item.netSales ?? 0).toLocaleString()}
                       </td>
                     </tr>
                   ))}
@@ -493,8 +495,8 @@ export const DashboardPage: React.FC<Props> = ({ onNavigate }) => {
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-50">
-                {recentTransactions.map((tx: any) => (
-                  <tr key={tx.id} className="hover:bg-slate-50/60">
+                {recentTransactions.map((tx: any, i: number) => (
+                  <tr key={tx.id ? `tx-${tx.id}` : `tx-doc-${tx.docNumber || i}-${i}`} className="hover:bg-slate-50/60">
                     <td className="py-2.5 px-3 text-slate-500 font-mono">
                       {new Date(tx.createdAt).toLocaleDateString()}
                     </td>
@@ -508,7 +510,7 @@ export const DashboardPage: React.FC<Props> = ({ onNavigate }) => {
                     <td className="py-2.5 px-3 font-mono font-bold text-slate-900">{tx.docNumber}</td>
                     <td className="py-2.5 px-3 font-semibold text-slate-800">{tx.partyName}</td>
                     <td className="py-2.5 px-3 text-right font-bold text-slate-900">
-                      {currencySymbol}{Number(tx.grandTotal).toLocaleString()}
+                      {currencySymbol}{Number(tx.grandTotal ?? tx.amount ?? 0).toLocaleString()}
                     </td>
                     <td className="py-2.5 px-3 text-center">
                       <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-emerald-100 text-emerald-700">

@@ -87,6 +87,23 @@ export const FIELD_DEFINITIONS: Record<ImportType, ColumnDefinition[]> = {
     { key: 'reason', label: 'Reason', required: false, aliases: ['reason', 'cause', 'type'] },
     { key: 'remarks', label: 'Remarks', required: false, aliases: ['remarks', 'notes', 'location', 'shelf', 'comments'] },
   ],
+  OPTICAL_BATCH: [
+    { key: 'unique_item', label: 'Unique Item', required: true, aliases: ['unique item', 'unique_item', 'uniqueitem', 'item', 'product', 'lens model', 'item code'] },
+    { key: 'batch_name', label: 'Batch Name / Powers', required: true, aliases: ['batch name', 'batch_name', 'batch', 'power', 'powers', 'optical power', 'batch power', 'lens power'] },
+    { key: 'sku', label: 'SKU', required: true, aliases: ['sku', 'sku code', 'batch sku', 'item sku', 'code', 'product code'] },
+    { key: 'opening_stock_quantity', label: 'Opening Stock Quantity', required: true, aliases: ['opening stock quantity', 'opening_stock_quantity', 'opening stock', 'quantity', 'qty', 'opening qty', 'pairs', 'stock'] },
+    { key: 'purchase_cost', label: 'Purchase Cost', required: true, aliases: ['purchase cost', 'purchase_cost', 'cost', 'cost price', 'purchase rate', 'rate', 'buy price', 'buy rate'] },
+    { key: 'selling_price', label: 'Selling Price', required: true, aliases: ['selling price', 'selling_price', 'sale price', 'mrp', 'sale rate', 'price', 'selling rate'] },
+    { key: 'unit', label: 'Unit', required: true, aliases: ['unit', 'uom', 'unit of measure', 'unit of measurement', 'units'] },
+    { key: 'barcode', label: 'Barcode', required: false, aliases: ['barcode', 'bar code', 'code 128', 'barcode_no', 'barcode number'] },
+    { key: 'supplier', label: 'Supplier', required: false, aliases: ['supplier', 'supplier name', 'vendor', 'vendor name', 'party', 'supplier code'] },
+    { key: 'purchase_date', label: 'Purchase Date', required: false, aliases: ['purchase date', 'purchase_date', 'date', 'inward date', 'entry date'] },
+    { key: 'batch_reference', label: 'Batch Reference / Lot', required: false, aliases: ['batch reference', 'batch_reference', 'lot number', 'lot no', 'lot', 'reference', 'batch no'] },
+    { key: 'expiry_date', label: 'Expiry Date', required: false, aliases: ['expiry date', 'expiry_date', 'exp date', 'expiration date', 'expiry'] },
+    { key: 'location', label: 'Location', required: false, aliases: ['location', 'bin', 'rack', 'shelf', 'warehouse location', 'storage'] },
+    { key: 'reorder_level', label: 'Reorder Level', required: false, aliases: ['reorder level', 'reorder_level', 'min stock', 'minimum stock', 'reorder qty', 'alert level'] },
+    { key: 'remarks', label: 'Remarks', required: false, aliases: ['remarks', 'notes', 'comments', 'description'] },
+  ],
 };
 
 export class ColumnMappingService {

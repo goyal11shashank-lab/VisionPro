@@ -218,6 +218,8 @@ export class DashboardService {
       supplierOutstanding: 0,
       totalReceivables: 0,
       totalPayables: 0,
+      customerCount: 0,
+      supplierCount: 0,
       customerOverdue: 0,
       customerCurrent: 0,
       supplierOverdue: 0,
@@ -239,6 +241,20 @@ export class DashboardService {
       );
       const custOut = parseFloat(custOutRes.rows[0]?.total_balance) || 0;
 
+      // Count distinct customers with positive balance
+      const custCountRes = await pool.query(
+        `SELECT COUNT(DISTINCT party_id) AS count
+         FROM (
+           SELECT DISTINCT ON (party_id) party_id, balance 
+           FROM customer_ledgers 
+           WHERE business_id = $1 
+           ORDER BY party_id, created_at DESC
+         ) sub
+         WHERE sub.balance > 0`,
+        [businessId]
+      );
+      const custCount = parseInt(custCountRes.rows[0]?.count, 10) || 0;
+
       // Fetch latest supplier ledger balances
       const suppOutRes = await pool.query(
         `SELECT COALESCE(SUM(sub.balance), 0) AS total_balance
@@ -253,6 +269,20 @@ export class DashboardService {
       );
       const suppOut = parseFloat(suppOutRes.rows[0]?.total_balance) || 0;
 
+      // Count distinct suppliers with positive balance
+      const suppCountRes = await pool.query(
+        `SELECT COUNT(DISTINCT party_id) AS count
+         FROM (
+           SELECT DISTINCT ON (party_id) party_id, balance 
+           FROM supplier_ledgers 
+           WHERE business_id = $1 
+           ORDER BY party_id, created_at DESC
+         ) sub
+         WHERE sub.balance > 0`,
+        [businessId]
+      );
+      const suppCount = parseInt(suppCountRes.rows[0]?.count, 10) || 0;
+
       // Overdue vs Current for customer invoices
       const custAgingRes = await pool.query(
         `SELECT 
@@ -265,7 +295,12 @@ export class DashboardService {
              WHEN (si.invoice_date + COALESCE(NULLIF(regexp_replace(p.credit_days, '[^0-9]', '', 'g'), '')::integer, 0) * INTERVAL '1 day') >= CURRENT_DATE 
              THEN (si.grand_total - COALESCE(pa_sub.paid_amount, 0)) 
              ELSE 0 
-           END), 0) AS current_amount
+           END), 0) AS current_amount,
+           COUNT(DISTINCT CASE 
+             WHEN (si.invoice_date + COALESCE(NULLIF(regexp_replace(p.credit_days, '[^0-9]', '', 'g'), '')::integer, 0) * INTERVAL '1 day') < CURRENT_DATE 
+             THEN si.party_id 
+             ELSE NULL 
+           END) AS overdue_customers_count
          FROM sales_invoices si
          JOIN parties p ON si.party_id = p.id
          LEFT JOIN LATERAL (
@@ -276,6 +311,7 @@ export class DashboardService {
          ) pa_sub ON true
          WHERE si.business_id = $1 
            AND si.status = 'POSTED' 
+           AND (si.payment_status != 'PAID' OR si.payment_status IS NULL)
            AND (si.grand_total - COALESCE(pa_sub.paid_amount, 0)) > 0`,
         [businessId]
       );
@@ -292,7 +328,12 @@ export class DashboardService {
              WHEN (pi.invoice_date + COALESCE(NULLIF(regexp_replace(p.credit_days, '[^0-9]', '', 'g'), '')::integer, 0) * INTERVAL '1 day') >= CURRENT_DATE 
              THEN (pi.grand_total - COALESCE(pa_sub.paid_amount, 0)) 
              ELSE 0 
-           END), 0) AS current_amount
+           END), 0) AS current_amount,
+           COUNT(DISTINCT CASE 
+             WHEN (pi.invoice_date + COALESCE(NULLIF(regexp_replace(p.credit_days, '[^0-9]', '', 'g'), '')::integer, 0) * INTERVAL '1 day') < CURRENT_DATE 
+             THEN pi.supplier_party_id 
+             ELSE NULL 
+           END) AS overdue_suppliers_count
          FROM purchase_invoices pi
          JOIN parties p ON pi.supplier_party_id = p.id
          LEFT JOIN LATERAL (
@@ -303,6 +344,7 @@ export class DashboardService {
          ) pa_sub ON true
          WHERE pi.business_id = $1 
            AND pi.status = 'POSTED' 
+           AND (pi.payment_status != 'PAID' OR pi.payment_status IS NULL)
            AND (pi.grand_total - COALESCE(pa_sub.paid_amount, 0)) > 0`,
         [businessId]
       );
@@ -315,11 +357,16 @@ export class DashboardService {
         supplierOutstanding: suppOut,
         totalReceivables: custOut,
         totalPayables: suppOut,
+        customerCount: custCount,
+        supplierCount: suppCount,
         customerOverdue: parseFloat(ca.overdue_amount) || 0,
         customerCurrent: parseFloat(ca.current_amount) || 0,
         supplierOverdue: parseFloat(sa.overdue_amount) || 0,
         supplierCurrent: parseFloat(sa.current_amount) || 0,
       };
+
+      var overdueCustCount = parseInt(ca.overdue_customers_count, 10) || 0;
+      var overdueSuppCount = parseInt(sa.overdue_suppliers_count, 10) || 0;
     }
 
     // 5. SALES SUMMARIES: Today, This Week, This Month
@@ -471,7 +518,9 @@ export class DashboardService {
         sku: r.sku,
         category: r.category,
         quantitySold: parseFloat(r.quantity_sold) || 0,
+        totalQuantity: parseFloat(r.quantity_sold) || 0,
         netSales: parseFloat(r.total_sales) || 0,
+        totalAmount: parseFloat(r.total_sales) || 0,
       }));
     }
 
@@ -502,7 +551,9 @@ export class DashboardService {
         sku: r.sku,
         category: r.category,
         quantityPurchased: parseFloat(r.quantity_purchased) || 0,
+        totalQuantity: parseFloat(r.quantity_purchased) || 0,
         netPurchases: parseFloat(r.total_purchases) || 0,
+        totalAmount: parseFloat(r.total_purchases) || 0,
       }));
     }
 
@@ -675,6 +726,7 @@ export class DashboardService {
       docNumber: string;
       partyName?: string;
       amount?: number;
+      grandTotal?: number;
       status: string;
       createdAt: Date;
     }> = [];
@@ -690,12 +742,14 @@ export class DashboardService {
         [businessId]
       );
       recentSalesRes.rows.forEach(r => {
+        const val = parseFloat(r.grand_total) || 0;
         recentTransactions.push({
           id: r.id,
           type: 'SALES_INVOICE',
           docNumber: r.invoice_number,
           partyName: r.party_name,
-          amount: parseFloat(r.grand_total) || 0,
+          amount: val,
+          grandTotal: val,
           status: r.status,
           createdAt: r.created_at,
         });
@@ -713,12 +767,14 @@ export class DashboardService {
         [businessId]
       );
       recentPurchRes.rows.forEach(r => {
+        const val = parseFloat(r.grand_total) || 0;
         recentTransactions.push({
           id: r.id,
           type: 'PURCHASE_INVOICE',
           docNumber: r.invoice_number,
           partyName: r.party_name,
-          amount: parseFloat(r.grand_total) || 0,
+          amount: val,
+          grandTotal: val,
           status: r.status,
           createdAt: r.created_at,
         });
@@ -736,12 +792,14 @@ export class DashboardService {
         [businessId]
       );
       recentPayRes.rows.forEach(r => {
+        const val = parseFloat(r.amount) || 0;
         recentTransactions.push({
           id: r.id,
           type: r.payment_type,
           docNumber: r.payment_number,
           partyName: r.party_name,
-          amount: parseFloat(r.amount) || 0,
+          amount: val,
+          grandTotal: val,
           status: r.status,
           createdAt: r.created_at,
         });
@@ -768,6 +826,10 @@ export class DashboardService {
       alerts: {
         negativeStockAlerts,
         lowStockAlerts,
+        negativeStockCount: stockKPIs.negativeStockBatches || negativeStockAlerts.length,
+        lowStockCount: stockKPIs.lowStockBatches || lowStockAlerts.length,
+        overdueCustomerCount: overdueCustCount || 0,
+        overdueSupplierCount: overdueSuppCount || 0,
         activeReservationsCount,
         highOutstandingCustomers,
       },

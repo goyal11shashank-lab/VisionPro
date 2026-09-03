@@ -1462,7 +1462,23 @@ export class PaymentService {
           si.party_id,
           COUNT(si.id) as unpaid_count,
           MIN(si.invoice_date) as oldest_invoice_date,
-          SUM(si.grand_total - COALESCE(pa.paid, 0)) as total_unpaid_amount
+          COALESCE(SUM(si.grand_total - COALESCE(pa.paid, 0)), 0) as total_unpaid_amount,
+          COALESCE(SUM(CASE 
+            WHEN CURRENT_DATE - si.invoice_date <= 30 THEN (si.grand_total - COALESCE(pa.paid, 0))
+            ELSE 0
+          END), 0) as bucket_0_30,
+          COALESCE(SUM(CASE 
+            WHEN CURRENT_DATE - si.invoice_date BETWEEN 31 AND 60 THEN (si.grand_total - COALESCE(pa.paid, 0))
+            ELSE 0
+          END), 0) as bucket_31_60,
+          COALESCE(SUM(CASE 
+            WHEN CURRENT_DATE - si.invoice_date BETWEEN 61 AND 90 THEN (si.grand_total - COALESCE(pa.paid, 0))
+            ELSE 0
+          END), 0) as bucket_61_90,
+          COALESCE(SUM(CASE 
+            WHEN CURRENT_DATE - si.invoice_date > 90 THEN (si.grand_total - COALESCE(pa.paid, 0))
+            ELSE 0
+          END), 0) as bucket_over_90
         FROM sales_invoices si
         LEFT JOIN (
           SELECT document_id, SUM(allocated_amount) as paid
@@ -1471,6 +1487,7 @@ export class PaymentService {
           GROUP BY document_id
         ) pa ON pa.document_id = si.id
         WHERE si.business_id = $1 AND si.status = 'POSTED' AND (si.payment_status != 'PAID' OR si.payment_status IS NULL)
+          AND (si.grand_total - COALESCE(pa.paid, 0)) > 0
         GROUP BY si.party_id
       )
       SELECT 
@@ -1478,11 +1495,17 @@ export class PaymentService {
         p.name as party_name,
         p.mobile as phone,
         p.email,
+        p.city,
         p.credit_limit,
+        p.credit_days,
         COALESCE(ll.balance, '0.00') as current_balance,
         COALESCE(ui.unpaid_count, 0) as unpaid_invoices_count,
         ui.oldest_invoice_date,
-        COALESCE(ui.total_unpaid_amount, 0) as total_unpaid_amount
+        COALESCE(ui.total_unpaid_amount, 0) as total_unpaid_amount,
+        COALESCE(ui.bucket_0_30, 0) as bucket_0_30,
+        COALESCE(ui.bucket_31_60, 0) as bucket_31_60,
+        COALESCE(ui.bucket_61_90, 0) as bucket_61_90,
+        COALESCE(ui.bucket_over_90, 0) as bucket_over_90
       FROM parties p
       LEFT JOIN LatestLedger ll ON ll.party_id = p.id
       LEFT JOIN UnpaidInvoices ui ON ui.party_id = p.id
@@ -1496,13 +1519,23 @@ export class PaymentService {
     return res.rows.map(r => ({
       partyId: r.party_id,
       partyName: r.party_name,
+      partyPhone: r.phone,
+      partyCity: r.city,
       phone: r.phone,
       email: r.email,
       creditLimit: r.credit_limit ? parseFloat(r.credit_limit) : 0,
-      currentBalance: parseFloat(r.current_balance),
-      unpaidInvoicesCount: parseInt(r.unpaid_invoices_count, 10),
+      creditDays: r.credit_days ? parseInt(r.credit_days, 10) : 0,
+      totalBalance: parseFloat(r.current_balance) || 0,
+      currentBalance: parseFloat(r.current_balance) || 0,
+      unpaidInvoicesCount: parseInt(r.unpaid_invoices_count, 10) || 0,
       oldestInvoiceDate: r.oldest_invoice_date,
-      totalUnpaidAmount: parseFloat(r.total_unpaid_amount),
+      totalUnpaidAmount: parseFloat(r.total_unpaid_amount) || 0,
+      aging: {
+        bucket0To30: parseFloat(r.bucket_0_30) || 0,
+        bucket31To60: parseFloat(r.bucket_31_60) || 0,
+        bucket61To90: parseFloat(r.bucket_61_90) || 0,
+        bucketOver90: parseFloat(r.bucket_over_90) || 0,
+      },
     }));
   }
 
@@ -1524,7 +1557,23 @@ export class PaymentService {
           pi.supplier_party_id as party_id,
           COUNT(pi.id) as unpaid_count,
           MIN(pi.invoice_date) as oldest_bill_date,
-          SUM(pi.grand_total - COALESCE(pa.paid, 0)) as total_unpaid_amount
+          COALESCE(SUM(pi.grand_total - COALESCE(pa.paid, 0)), 0) as total_unpaid_amount,
+          COALESCE(SUM(CASE 
+            WHEN CURRENT_DATE - pi.invoice_date <= 30 THEN (pi.grand_total - COALESCE(pa.paid, 0))
+            ELSE 0
+          END), 0) as bucket_0_30,
+          COALESCE(SUM(CASE 
+            WHEN CURRENT_DATE - pi.invoice_date BETWEEN 31 AND 60 THEN (pi.grand_total - COALESCE(pa.paid, 0))
+            ELSE 0
+          END), 0) as bucket_31_60,
+          COALESCE(SUM(CASE 
+            WHEN CURRENT_DATE - pi.invoice_date BETWEEN 61 AND 90 THEN (pi.grand_total - COALESCE(pa.paid, 0))
+            ELSE 0
+          END), 0) as bucket_61_90,
+          COALESCE(SUM(CASE 
+            WHEN CURRENT_DATE - pi.invoice_date > 90 THEN (pi.grand_total - COALESCE(pa.paid, 0))
+            ELSE 0
+          END), 0) as bucket_over_90
         FROM purchase_invoices pi
         LEFT JOIN (
           SELECT document_id, SUM(allocated_amount) as paid
@@ -1533,6 +1582,7 @@ export class PaymentService {
           GROUP BY document_id
         ) pa ON pa.document_id = pi.id
         WHERE pi.business_id = $1 AND pi.status = 'POSTED' AND (pi.payment_status != 'PAID' OR pi.payment_status IS NULL)
+          AND (pi.grand_total - COALESCE(pa.paid, 0)) > 0
         GROUP BY pi.supplier_party_id
       )
       SELECT 
@@ -1540,10 +1590,17 @@ export class PaymentService {
         p.name as party_name,
         p.mobile as phone,
         p.email,
+        p.city,
+        p.credit_limit,
+        p.credit_days,
         COALESCE(ll.balance, '0.00') as current_balance,
         COALESCE(ub.unpaid_count, 0) as unpaid_bills_count,
         ub.oldest_bill_date,
-        COALESCE(ub.total_unpaid_amount, 0) as total_unpaid_amount
+        COALESCE(ub.total_unpaid_amount, 0) as total_unpaid_amount,
+        COALESCE(ub.bucket_0_30, 0) as bucket_0_30,
+        COALESCE(ub.bucket_31_60, 0) as bucket_31_60,
+        COALESCE(ub.bucket_61_90, 0) as bucket_61_90,
+        COALESCE(ub.bucket_over_90, 0) as bucket_over_90
       FROM parties p
       LEFT JOIN LatestLedger ll ON ll.party_id = p.id
       LEFT JOIN UnpaidBills ub ON ub.party_id = p.id
@@ -1557,12 +1614,24 @@ export class PaymentService {
     return res.rows.map(r => ({
       partyId: r.party_id,
       partyName: r.party_name,
+      partyPhone: r.phone,
+      partyCity: r.city,
       phone: r.phone,
       email: r.email,
-      currentBalance: parseFloat(r.current_balance),
-      unpaidBillsCount: parseInt(r.unpaid_bills_count, 10),
+      creditLimit: r.credit_limit ? parseFloat(r.credit_limit) : 0,
+      creditDays: r.credit_days ? parseInt(r.credit_days, 10) : 0,
+      totalBalance: parseFloat(r.current_balance) || 0,
+      currentBalance: parseFloat(r.current_balance) || 0,
+      unpaidInvoicesCount: parseInt(r.unpaid_bills_count, 10) || 0,
+      unpaidBillsCount: parseInt(r.unpaid_bills_count, 10) || 0,
       oldestBillDate: r.oldest_bill_date,
-      totalUnpaidAmount: parseFloat(r.total_unpaid_amount),
+      totalUnpaidAmount: parseFloat(r.total_unpaid_amount) || 0,
+      aging: {
+        bucket0To30: parseFloat(r.bucket_0_30) || 0,
+        bucket31To60: parseFloat(r.bucket_31_60) || 0,
+        bucket61To90: parseFloat(r.bucket_61_90) || 0,
+        bucketOver90: parseFloat(r.bucket_over_90) || 0,
+      },
     }));
   }
 

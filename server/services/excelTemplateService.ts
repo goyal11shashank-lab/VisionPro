@@ -1,17 +1,110 @@
 import * as XLSX from 'xlsx';
 
-export type ImportType = 'PARTY' | 'PURCHASE' | 'SALES_ORDER' | 'SALES_INVOICE' | 'OPENING_STOCK';
+export type ImportType = 'PARTY' | 'PURCHASE' | 'SALES_ORDER' | 'SALES_INVOICE' | 'OPENING_STOCK' | 'OPTICAL_BATCH';
 
 export interface TemplateDefinition {
   type: ImportType;
   title: string;
   fileName: string;
   columns: string[];
-  sampleRow: Record<string, any>;
+  sampleRow?: Record<string, any>;
+  sampleRows?: Record<string, any>[];
   instructions: { field: string; requirement: string; description: string; allowedValues?: string }[];
 }
 
 export const TEMPLATE_DEFINITIONS: Record<ImportType, TemplateDefinition> = {
+  OPTICAL_BATCH: {
+    type: 'OPTICAL_BATCH',
+    title: 'Optical Batches & Powers Import Template',
+    fileName: 'Optical_Batches_Import_Template.xlsx',
+    columns: [
+      'unique_item',
+      'batch_name',
+      'sku',
+      'opening_stock_quantity',
+      'purchase_cost',
+      'selling_price',
+      'unit',
+      'barcode',
+      'supplier',
+      'purchase_date',
+      'batch_reference',
+      'expiry_date',
+      'location',
+      'reorder_level',
+      'remarks',
+    ],
+    sampleRows: [
+      {
+        'unique_item': 'HC_SV_-6/-2',
+        'batch_name': '-6.00/-2.00',
+        'sku': 'SKU-SV-M600-M200',
+        'opening_stock_quantity': 10,
+        'purchase_cost': 150.00,
+        'selling_price': 250.00,
+        'unit': 'prs',
+        'barcode': 'OPT-SV-000101',
+        'supplier': 'Vision Tech Distributors',
+        'purchase_date': '2026-04-01',
+        'batch_reference': 'LOT-2026-A1',
+        'expiry_date': '2029-12-31',
+        'location': 'Rack A-1',
+        'reorder_level': 5,
+        'remarks': 'Opening inventory batch for single vision lens',
+      },
+      {
+        'unique_item': 'HC_KT_+1.75/-2.00',
+        'batch_name': '+1.75/-2.00/90/+2.00',
+        'sku': 'SKU-KT-P175-M200-90-P200',
+        'opening_stock_quantity': 5,
+        'purchase_cost': 280.00,
+        'selling_price': 450.00,
+        'unit': 'pairs',
+        'barcode': '',
+        'supplier': 'Essilor India Pvt Ltd',
+        'purchase_date': '2026-04-01',
+        'batch_reference': 'LOT-KT-09',
+        'expiry_date': '2029-12-31',
+        'location': 'Rack B-2',
+        'reorder_level': 2,
+        'remarks': 'Bifocal Kryptok batch with axis and add power',
+      },
+      {
+        'unique_item': 'HC_PROG_+1.00/-0.50',
+        'batch_name': '+1.00/-0.50/180/+1.50/R',
+        'sku': 'SKU-PROG-P100-M050-180-P150-R',
+        'opening_stock_quantity': 2,
+        'purchase_cost': 650.00,
+        'selling_price': 1100.00,
+        'unit': 'prs',
+        'barcode': '',
+        'supplier': 'Hoya Lens India',
+        'purchase_date': '2026-04-01',
+        'batch_reference': 'LOT-PROG-01',
+        'expiry_date': '2029-12-31',
+        'location': 'Rack C-1',
+        'reorder_level': 1,
+        'remarks': 'Right eye progressive optical batch',
+      },
+    ],
+    instructions: [
+      { field: 'unique_item', requirement: 'Required', description: 'Unique Item code or commercial name. MUST already exist in the software (e.g. HC_SV_-6/-2). New items are NEVER auto-created.' },
+      { field: 'batch_name', requirement: 'Required', description: 'Optical power representation. Formats: SPH/CYL (e.g. -6.00/-2.00), SPH/CYL/AXIS/ADD (e.g. +1.75/-2.00/90/+2.00), or SPH/CYL/AXIS/ADD/SIDE (e.g. +1.00/-0.50/180/+1.50/R).' },
+      { field: 'sku', requirement: 'Required', description: 'Unique SKU identifier for the batch. Must be unique within the business and file.' },
+      { field: 'opening_stock_quantity', requirement: 'Required', description: 'Initial stock quantity in pairs (positive numeric, e.g. 10, 0.5, 1.5).' },
+      { field: 'purchase_cost', requirement: 'Required', description: 'Procurement / purchase rate per pair (positive numeric).' },
+      { field: 'selling_price', requirement: 'Required', description: 'Selling price / MRP per pair. Uses existing Unique Item price architecture.' },
+      { field: 'unit', requirement: 'Required', description: 'Unit of measurement (prs, pairs, pcs, pieces).' },
+      { field: 'barcode', requirement: 'Optional', description: 'Code 128 permanent barcode. If left blank, the system automatically generates an authoritative barcode (e.g. OPT-SV-XXXXXX).' },
+      { field: 'supplier', requirement: 'Optional', description: 'Supplier name or party code if associating with an opening procurement source.' },
+      { field: 'purchase_date', requirement: 'Optional', description: 'Acquisition / inward date in YYYY-MM-DD format. Defaults to current date.' },
+      { field: 'batch_reference', requirement: 'Optional', description: 'Manufacturer lot number or factory batch reference.' },
+      { field: 'expiry_date', requirement: 'Optional', description: 'Product expiry or warranty date in YYYY-MM-DD format.' },
+      { field: 'location', requirement: 'Optional', description: 'Warehouse bin, rack, or shelf storage location.' },
+      { field: 'reorder_level', requirement: 'Optional', description: 'Minimum stock alert threshold (numeric).' },
+      { field: 'remarks', requirement: 'Optional', description: 'Internal batch notes or comments.' },
+    ],
+  },
   PARTY: {
     type: 'PARTY',
     title: 'Parties / Customers & Suppliers Import Template',
@@ -263,9 +356,9 @@ export class ExcelTemplateService {
     const wb = XLSX.utils.book_new();
 
     // Sheet 1: Data Entry / Template Sheet
-    const dataRows = [
-      def.sampleRow,
-    ];
+    const dataRows = def.sampleRows && def.sampleRows.length > 0
+      ? def.sampleRows
+      : def.sampleRow ? [def.sampleRow] : [];
     const wsData = XLSX.utils.json_to_sheet(dataRows, { header: def.columns });
 
     // Set column widths

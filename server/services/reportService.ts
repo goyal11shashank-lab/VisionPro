@@ -1165,6 +1165,7 @@ export class ReportService {
          p.party_code,
          p.mobile,
          p.credit_days,
+         p.credit_limit,
          COALESCE((
            SELECT balance
            FROM ${ledgerTable} l
@@ -1218,21 +1219,40 @@ export class ReportService {
       [businessId]
     );
 
+    const mappedParties = dataRes.rows.map(r => ({
+      id: r.party_id,
+      partyId: r.party_id,
+      name: r.party_name,
+      partyName: r.party_name,
+      party_code: r.party_code,
+      partyCode: r.party_code,
+      mobile: r.mobile,
+      credit_days: parseInt(r.credit_days, 10) || 0,
+      creditDays: parseInt(r.credit_days, 10) || 0,
+      credit_limit: parseFloat(r.credit_limit) || 0,
+      creditLimit: parseFloat(r.credit_limit) || 0,
+      totalInvoiced: parseFloat(r.total_invoiced) || 0,
+      totalReturned: parseFloat(r.total_returned) || 0,
+      current_balance: parseFloat(r.current_balance) || 0,
+      currentBalance: parseFloat(r.current_balance) || 0,
+      outstanding_balance: parseFloat(r.current_balance) || 0,
+      outstandingBalance: parseFloat(r.current_balance) || 0,
+      overdue_balance: parseFloat(r.overdue_balance) || 0,
+      overdueBalance: parseFloat(r.overdue_balance) || 0,
+    }));
+
+    const totalOverdue = dataRes.rows.reduce(
+      (sum, r) => sum + (parseFloat(r.overdue_balance) || 0),
+      0
+    );
+
     return {
-      data: dataRes.rows.map(r => ({
-        partyId: r.party_id,
-        partyName: r.party_name,
-        partyCode: r.party_code,
-        mobile: r.mobile,
-        creditDays: parseInt(r.credit_days, 10) || 0,
-        totalInvoiced: parseFloat(r.total_invoiced) || 0,
-        totalReturned: parseFloat(r.total_returned) || 0,
-        currentBalance: parseFloat(r.current_balance) || 0,
-        overdueBalance: parseFloat(r.overdue_balance) || 0,
-      })),
+      data: mappedParties,
+      parties: mappedParties,
       summary: {
         totalParties,
         totalOutstanding: parseFloat(sumRes.rows[0]?.total_outstanding) || 0,
+        totalOverdue,
       },
       pagination: {
         page,

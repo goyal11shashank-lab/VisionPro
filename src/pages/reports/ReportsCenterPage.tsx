@@ -246,6 +246,21 @@ export const ReportsCenterPage: React.FC<{ initialTab?: ReportTab }> = ({ initia
     }
   };
 
+  // Check whether report data has records
+  const hasReportRecords = () => {
+    if (!reportData) return false;
+    if (Array.isArray(reportData)) return reportData.length > 0;
+    if (Array.isArray(reportData.data) && reportData.data.length > 0) return true;
+    if (Array.isArray(reportData.parties) && reportData.parties.length > 0) return true;
+    if (Array.isArray(reportData.rows) && reportData.rows.length > 0) return true;
+    if (Array.isArray(reportData.invoices) && reportData.invoices.length > 0) return true;
+    if (Array.isArray(reportData.lines) && reportData.lines.length > 0) return true;
+    if (Array.isArray(reportData.returns) && reportData.returns.length > 0) return true;
+    if (Array.isArray(reportData.entries) && reportData.entries.length > 0) return true;
+    if (Array.isArray(reportData.products) && reportData.products.length > 0) return true;
+    return false;
+  };
+
   return (
     <div className="space-y-6">
       {/* Top Header Card */}
@@ -538,7 +553,7 @@ export const ReportsCenterPage: React.FC<{ initialTab?: ReportTab }> = ({ initia
             <AlertTriangle className="w-8 h-8 mx-auto" />
             <p className="text-sm font-semibold">{error}</p>
           </div>
-        ) : !reportData || (reportData.data && reportData.data.length === 0) || (reportData.rows && reportData.rows.length === 0) || (reportData.parties && reportData.parties.length === 0) ? (
+        ) : !hasReportRecords() ? (
           <div className="py-16 text-center text-slate-400 space-y-2">
             <FileSpreadsheet className="w-8 h-8 mx-auto text-slate-300 stroke-1" />
             <p className="text-sm font-medium text-slate-700">No records found matching criteria</p>
@@ -758,7 +773,7 @@ export const ReportsCenterPage: React.FC<{ initialTab?: ReportTab }> = ({ initia
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-slate-100">
-                  {reportData.parties.map((p: any) => (
+                  {(reportData.parties || reportData.data || []).map((p: any) => (
                     <tr key={p.id} className="hover:bg-slate-50/70 transition-colors">
                       <td className="py-2.5 px-4 font-mono font-semibold text-slate-600">{p.party_code}</td>
                       <td className="py-2.5 px-4 font-bold text-slate-900">{p.name}</td>

@@ -524,8 +524,10 @@ export async function seedInitialDatabase() {
   }
 
   // 12. Seed Controlled Development Dataset (Parties, Purchase, Sales, Inventory, Ledgers)
-  console.log('[Database Seed] Seeding controlled development dataset...');
-  await seedDevelopmentTestData(defaultBusiness.id);
+  if (process.env.SEED_TEST_DATA === 'true') {
+    console.log('[Database Seed] Seeding controlled development dataset for test environment...');
+    await seedDevelopmentTestData(defaultBusiness.id);
+  }
 
   console.log('[Database Seed] Database initialization and seeding completed successfully.');
   return {

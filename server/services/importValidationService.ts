@@ -191,6 +191,20 @@ export class ImportValidationService {
           );
           break;
         }
+        case 'OPTICAL_BATCH': {
+          resolvedData = await this.validateOpticalBatchRow(
+            businessId,
+            rowNumber,
+            mapped,
+            itemMapByName,
+            itemMapByCode,
+            categoryMapById,
+            partyMapByName,
+            partyMapByCode,
+            rowErrors
+          );
+          break;
+        }
       }
 
       const hasFatalErrors = rowErrors.some(e => e.severity === 'ERROR');
@@ -650,6 +664,345 @@ export class ImportValidationService {
   }
 
   /**
+   * Validates a single Optical Batch & Powers import row.
+   * STRICT CONSTRAINT: Unique Item MUST already exist in the database.
+   * Reuses validateOpticalPower from opticalMasterService.
+   */
+  private static async validateOpticalBatchRow(
+    businessId: string,
+    rowNumber: number,
+    mapped: Record<string, any>,
+    itemMapByName: Map<string, any>,
+    itemMapByCode: Map<string, any>,
+    categoryMapById: Map<string, any>,
+    partyMapByName: Map<string, any>,
+    partyMapByCode: Map<string, any>,
+    errors: ImportError[]
+  ): Promise<Record<string, any>> {
+    const resolved: Record<string, any> = {};
+
+    // 1. Unique Item (Required - MUST already exist in database)
+    const uniqueItemInput = mapped.unique_item || mapped.uniqueItem || mapped.item || mapped.sku_name;
+    if (!uniqueItemInput || String(uniqueItemInput).trim() === '') {
+      errors.push({
+        row: rowNumber,
+        field: 'unique_item',
+        value: uniqueItemInput,
+        severity: 'ERROR',
+        message: 'Unique Item is required.',
+      });
+      return resolved;
+    }
+
+    const itemKey = String(uniqueItemInput).trim().toLowerCase();
+    const item = itemMapByCode.get(itemKey) || itemMapByName.get(itemKey);
+
+    if (!item) {
+      errors.push({
+        row: rowNumber,
+        field: 'unique_item',
+        value: uniqueItemInput,
+        severity: 'ERROR',
+        message: `Unique Item "${uniqueItemInput}" does not exist in the database. Create the Unique Item in the software before importing batches.`,
+      });
+      return resolved;
+    }
+
+    resolved.uniqueItem = item;
+    const category = categoryMapById.get(item.categoryId);
+    const catCode = (category?.code || 'SV').toUpperCase();
+    resolved.category = category || { id: item.categoryId, code: catCode, name: catCode };
+
+    // 2. Batch Name & Optical Power Validation
+    const batchNameInput = mapped.batch_name || mapped.batchName || mapped.power || mapped.powers;
+    const parsedPowers = this.parseOpticalPowerValues(batchNameInput, mapped, catCode);
+
+    if (!parsedPowers) {
+      errors.push({
+        row: rowNumber,
+        field: 'batch_name',
+        value: batchNameInput,
+        severity: 'ERROR',
+        message: 'Valid optical batch power is required (e.g. "-6.00/-2.00", "+1.75/-2.00/90/+2.00", or "+1.00/-0.50/180/+1.50/R").',
+      });
+    } else {
+      try {
+        const validatedPowers = validateOpticalPower(
+          catCode,
+          parsedPowers.sph,
+          parsedPowers.cyl,
+          parsedPowers.axis,
+          parsedPowers.add,
+          parsedPowers.side
+        );
+        resolved.powers = validatedPowers;
+        resolved.identityKey = validatedPowers.identityKey;
+        resolved.fullIdentityKey = `${item.id}:${validatedPowers.identityKey}`;
+      } catch (err: any) {
+        errors.push({
+          row: rowNumber,
+          field: 'batch_name',
+          value: batchNameInput,
+          severity: 'ERROR',
+          message: `Optical power validation failed: ${err.message}`,
+        });
+      }
+    }
+
+    // 3. SKU (Required)
+    const skuInput = mapped.sku || mapped.sku_code || mapped.batch_sku;
+    if (!skuInput || String(skuInput).trim() === '') {
+      errors.push({
+        row: rowNumber,
+        field: 'sku',
+        value: skuInput,
+        severity: 'ERROR',
+        message: 'SKU is required for optical batch.',
+      });
+    } else {
+      resolved.sku = String(skuInput).trim();
+    }
+
+    // 4. Opening Stock Quantity (Required, numeric >= 0)
+    const qtyInput = mapped.opening_stock_quantity !== undefined && mapped.opening_stock_quantity !== ''
+      ? mapped.opening_stock_quantity
+      : mapped.quantity;
+    if (qtyInput === undefined || qtyInput === null || String(qtyInput).trim() === '') {
+      errors.push({
+        row: rowNumber,
+        field: 'opening_stock_quantity',
+        value: qtyInput,
+        severity: 'ERROR',
+        message: 'Opening stock quantity is required.',
+      });
+    } else {
+      const qtyNum = Number(qtyInput);
+      if (isNaN(qtyNum) || qtyNum < 0) {
+        errors.push({
+          row: rowNumber,
+          field: 'opening_stock_quantity',
+          value: qtyInput,
+          severity: 'ERROR',
+          message: `Opening stock quantity must be a positive number or zero (e.g. 10, 0.5, 1.5). Received "${qtyInput}".`,
+        });
+      } else {
+        resolved.openingStockQuantity = qtyNum;
+      }
+    }
+
+    // 5. Purchase Cost (Required, numeric >= 0)
+    const costInput = mapped.purchase_cost !== undefined && mapped.purchase_cost !== ''
+      ? mapped.purchase_cost
+      : mapped.rate;
+    if (costInput === undefined || costInput === null || String(costInput).trim() === '') {
+      errors.push({
+        row: rowNumber,
+        field: 'purchase_cost',
+        value: costInput,
+        severity: 'ERROR',
+        message: 'Purchase cost is required.',
+      });
+    } else {
+      const costNum = Number(costInput);
+      if (isNaN(costNum) || costNum < 0) {
+        errors.push({
+          row: rowNumber,
+          field: 'purchase_cost',
+          value: costInput,
+          severity: 'ERROR',
+          message: 'Purchase cost must be a non-negative number.',
+        });
+      } else {
+        resolved.purchaseCost = costNum;
+      }
+    }
+
+    // 6. Selling Price (Required, numeric >= 0)
+    const priceInput = mapped.selling_price !== undefined && mapped.selling_price !== ''
+      ? mapped.selling_price
+      : mapped.mrp;
+    if (priceInput === undefined || priceInput === null || String(priceInput).trim() === '') {
+      errors.push({
+        row: rowNumber,
+        field: 'selling_price',
+        value: priceInput,
+        severity: 'ERROR',
+        message: 'Selling price is required.',
+      });
+    } else {
+      const priceNum = Number(priceInput);
+      if (isNaN(priceNum) || priceNum < 0) {
+        errors.push({
+          row: rowNumber,
+          field: 'selling_price',
+          value: priceInput,
+          severity: 'ERROR',
+          message: 'Selling price must be a non-negative number.',
+        });
+      } else {
+        resolved.sellingPrice = priceNum;
+      }
+    }
+
+    // 7. Unit (Required, allowed units: prs, pairs, pcs, pieces)
+    const unitInput = mapped.unit || 'prs';
+    const validUnits = ['prs', 'pairs', 'pcs', 'pieces', 'pr', 'pair', 'pc', 'piece'];
+    const normUnit = String(unitInput).trim().toLowerCase();
+    if (!validUnits.includes(normUnit)) {
+      errors.push({
+        row: rowNumber,
+        field: 'unit',
+        value: unitInput,
+        severity: 'ERROR',
+        message: `Unit "${unitInput}" is invalid. Allowed units: prs, pairs, pcs, pieces.`,
+      });
+    } else {
+      resolved.unit = normUnit;
+    }
+
+    // 8. Barcode (Optional)
+    if (mapped.barcode && String(mapped.barcode).trim() !== '') {
+      resolved.barcode = String(mapped.barcode).trim();
+    }
+
+    // 9. Supplier (Optional)
+    if (mapped.supplier && String(mapped.supplier).trim() !== '') {
+      const sKey = String(mapped.supplier).trim().toLowerCase();
+      const party = partyMapByCode.get(sKey) || partyMapByName.get(sKey);
+      if (!party) {
+        errors.push({
+          row: rowNumber,
+          field: 'supplier',
+          value: mapped.supplier,
+          severity: 'WARNING',
+          message: `Supplier "${mapped.supplier}" not found in ERP parties list. Will import batch without linking supplier party.`,
+        });
+      } else {
+        resolved.supplierParty = party;
+      }
+    }
+
+    // 10. Optional Metadata
+    if (mapped.purchase_date || mapped.purchaseDate || mapped.date) {
+      resolved.purchaseDate = String(mapped.purchase_date || mapped.purchaseDate || mapped.date).trim();
+    }
+    if (mapped.batch_reference || mapped.batchReference || mapped.lot) {
+      resolved.batchReference = String(mapped.batch_reference || mapped.batchReference || mapped.lot).trim();
+    }
+    if (mapped.expiry_date || mapped.expiryDate) {
+      resolved.expiryDate = String(mapped.expiry_date || mapped.expiryDate).trim();
+    }
+    if (mapped.location) {
+      resolved.location = String(mapped.location).trim();
+    }
+    if (mapped.reorder_level !== undefined && mapped.reorder_level !== '') {
+      const rl = Number(mapped.reorder_level);
+      if (!isNaN(rl) && rl >= 0) resolved.reorderLevel = rl;
+    }
+    if (mapped.remarks) {
+      resolved.remarks = String(mapped.remarks).trim();
+    }
+
+    // 11. Check if batch already exists in DB
+    if (resolved.uniqueItem && resolved.powers) {
+      const existingBatch = await this.findBatchByPowers(businessId, resolved.uniqueItem.id, {
+        sph: resolved.powers.sphNum.toFixed(2),
+        cyl: resolved.powers.cylNum.toFixed(2),
+        axis: resolved.powers.axisNum,
+        add: resolved.powers.addNum.toFixed(2),
+        side: resolved.powers.sideNormalized,
+      });
+
+      if (existingBatch) {
+        resolved.existingBatch = existingBatch;
+        errors.push({
+          row: rowNumber,
+          field: 'batch_name',
+          value: batchNameInput,
+          severity: 'WARNING',
+          message: `Optical Batch with barcode ${existingBatch.barcode} already exists in database for this power combination. Importing will add to opening stock balance.`,
+        });
+      }
+    }
+
+    return resolved;
+  }
+
+  /**
+   * Helper: Parses optical power parameters from batch_name string or explicit fields.
+   */
+  private static parseOpticalPowerValues(
+    batchNameRaw: any,
+    mapped: Record<string, any>,
+    categoryCode: string
+  ): { sph: string; cyl: string; axis: string | null; add: string | null; side: string | null } | null {
+    const cat = categoryCode.toUpperCase();
+    let sph: string | null = null;
+    let cyl: string | null = null;
+    let axis: string | null = null;
+    let add: string | null = null;
+    let side: string | null = null;
+
+    // Check if explicit power fields are provided in mapped
+    if (mapped.sph !== undefined && mapped.sph !== '') sph = String(mapped.sph).trim();
+    if (mapped.cyl !== undefined && mapped.cyl !== '') cyl = String(mapped.cyl).trim();
+    if (mapped.axis !== undefined && mapped.axis !== '') axis = String(mapped.axis).trim();
+    if (mapped.add !== undefined && mapped.add !== '') add = String(mapped.add).trim();
+    if (mapped.side !== undefined && mapped.side !== '') side = String(mapped.side).trim().toUpperCase();
+
+    // If batch_name string is provided, extract power coordinates
+    const batchName = String(batchNameRaw || '').trim();
+    if (batchName) {
+      if (/SPH[:=\s]/i.test(batchName)) {
+        const sphMatch = batchName.match(/SPH[:=\s]*([+-]?\d+(?:\.\d+)?)/i);
+        const cylMatch = batchName.match(/CYL[:=\s]*([+-]?\d+(?:\.\d+)?)/i);
+        const axisMatch = batchName.match(/AXIS[:=\s]*(\d+(?:\.\d+)?)/i);
+        const addMatch = batchName.match(/ADD[:=\s]*([+-]?\d+(?:\.\d+)?)/i);
+        const sideMatch = batchName.match(/SIDE[:=\s]*(NONE|R|L|BE)/i);
+
+        if (sphMatch && !sph) sph = sphMatch[1];
+        if (cylMatch && !cyl) cyl = cylMatch[1];
+        if (axisMatch && !axis) axis = axisMatch[1];
+        if (addMatch && !add) add = addMatch[1];
+        if (sideMatch && !side) side = sideMatch[1].toUpperCase();
+      } else {
+        // Clean up leading/trailing brackets or prefixes
+        const cleaned = batchName.replace(/^[(\[]|[)\]]$/g, '').trim();
+        const parts = cleaned.split(/[\/\s,]+/).filter(p => p.length > 0);
+
+        if (parts.length >= 1 && !sph) {
+          sph = parts[0];
+        }
+        if (parts.length >= 2 && !cyl) {
+          cyl = parts[1];
+        }
+        if (parts.length >= 3 && !axis && (cat === 'KT' || cat === 'PROG')) {
+          axis = parts[2];
+        }
+        if (parts.length >= 4 && !add && (cat === 'KT' || cat === 'PROG')) {
+          add = parts[3];
+        }
+        if (parts.length >= 5 && !side && cat === 'PROG') {
+          side = parts[4].toUpperCase();
+        } else if (parts.length >= 3 && !side && cat === 'PROG' && ['R', 'L', 'BE'].includes(parts[2].toUpperCase())) {
+          side = parts[2].toUpperCase();
+        }
+      }
+    }
+
+    if (!sph) return null;
+    if (!cyl) cyl = '0.00';
+
+    return {
+      sph,
+      cyl,
+      axis: axis || (cat === 'SV' ? null : '0'),
+      add: add || (cat === 'SV' ? null : '0.00'),
+      side: side || (cat === 'PROG' ? 'BE' : 'NONE'),
+    };
+  }
+
+  /**
    * Helper: Resolves Unique Item and validates optical powers against its category rules.
    */
   private static resolveAndValidateOpticalItem(
@@ -948,13 +1301,66 @@ export class ImportValidationService {
         }
       }
     }
+
+    if (importType === 'OPTICAL_BATCH') {
+      const seenBatches = new Map<string, number>();
+      const seenSkus = new Map<string, number>();
+      const seenBarcodes = new Map<string, number>();
+
+      for (const row of rows) {
+        // Check batch identity key duplication under same unique item
+        if (row.resolvedData?.fullIdentityKey) {
+          const key = row.resolvedData.fullIdentityKey;
+          if (seenBatches.has(key)) {
+            row.isDuplicate = true;
+            row.isValid = false;
+            const prevRow = seenBatches.get(key);
+            const msg = `Duplicate optical batch power for this Unique Item in row ${prevRow}. Each batch must have a distinct optical power configuration.`;
+            row.errors.push({ row: row.rowNumber, field: 'batch_name', value: row.mapped.batch_name || row.mapped.batchName, severity: 'ERROR', message: msg });
+            allErrors.push({ row: row.rowNumber, field: 'batch_name', value: row.mapped.batch_name || row.mapped.batchName, severity: 'ERROR', message: msg });
+          } else {
+            seenBatches.set(key, row.rowNumber);
+          }
+        }
+
+        // Check SKU duplication
+        if (row.resolvedData?.sku) {
+          const sku = row.resolvedData.sku.toLowerCase();
+          if (seenSkus.has(sku)) {
+            row.isDuplicate = true;
+            row.isValid = false;
+            const prevRow = seenSkus.get(sku);
+            const msg = `Duplicate SKU "${row.resolvedData.sku}" detected in file (already on row ${prevRow}). SKUs must be unique.`;
+            row.errors.push({ row: row.rowNumber, field: 'sku', value: row.resolvedData.sku, severity: 'ERROR', message: msg });
+            allErrors.push({ row: row.rowNumber, field: 'sku', value: row.resolvedData.sku, severity: 'ERROR', message: msg });
+          } else {
+            seenSkus.set(sku, row.rowNumber);
+          }
+        }
+
+        // Check Barcode duplication (if provided)
+        if (row.resolvedData?.barcode) {
+          const bc = row.resolvedData.barcode.toLowerCase();
+          if (seenBarcodes.has(bc)) {
+            row.isDuplicate = true;
+            row.isValid = false;
+            const prevRow = seenBarcodes.get(bc);
+            const msg = `Duplicate Barcode "${row.resolvedData.barcode}" detected in file (already on row ${prevRow}). Barcodes must be unique.`;
+            row.errors.push({ row: row.rowNumber, field: 'barcode', value: row.resolvedData.barcode, severity: 'ERROR', message: msg });
+            allErrors.push({ row: row.rowNumber, field: 'barcode', value: row.resolvedData.barcode, severity: 'ERROR', message: msg });
+          } else {
+            seenBarcodes.set(bc, row.rowNumber);
+          }
+        }
+      }
+    }
   }
 
   /**
    * Groups rows into multi-line document structures (for Purchase, Sales Orders, Sales Invoices).
    */
   private static groupIntoDocuments(importType: ImportType, rows: ValidatedRow[]): DocumentGroup[] {
-    if (importType === 'PARTY' || importType === 'OPENING_STOCK') {
+    if (importType === 'PARTY' || importType === 'OPENING_STOCK' || importType === 'OPTICAL_BATCH') {
       return [];
     }
 

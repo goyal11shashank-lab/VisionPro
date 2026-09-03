@@ -116,7 +116,7 @@ export const OutstandingAgingPage: React.FC<{ onNavigate?: (path: string) => voi
         });
         if (res.ok) {
           const data = await res.json();
-          setCustomers(data.customers || []);
+          setCustomers(data.customers || (Array.isArray(data) ? data : data.data || []));
         }
       } else {
         const res = await fetch(`/api/payments/outstanding/suppliers?${params.toString()}`, {
@@ -127,7 +127,7 @@ export const OutstandingAgingPage: React.FC<{ onNavigate?: (path: string) => voi
         });
         if (res.ok) {
           const data = await res.json();
-          setSuppliers(data.suppliers || []);
+          setSuppliers(data.suppliers || (Array.isArray(data) ? data : data.data || []));
         }
       }
     } catch (err) {
@@ -182,11 +182,11 @@ export const OutstandingAgingPage: React.FC<{ onNavigate?: (path: string) => voi
   const totalPayables = suppliers.reduce((sum, s) => sum + (s.totalBalance > 0 ? s.totalBalance : 0), 0);
 
   const totalOverdueCustomers = customers.reduce(
-    (sum, c) => sum + (c.aging.bucket31To60 + c.aging.bucket61To90 + c.aging.bucketOver90),
+    (sum, c) => sum + ((c.aging?.bucket31To60 || 0) + (c.aging?.bucket61To90 || 0) + (c.aging?.bucketOver90 || 0)),
     0
   );
   const totalOverdueSuppliers = suppliers.reduce(
-    (sum, s) => sum + (s.aging.bucket31To60 + s.aging.bucket61To90 + s.aging.bucketOver90),
+    (sum, s) => sum + ((s.aging?.bucket31To60 || 0) + (s.aging?.bucket61To90 || 0) + (s.aging?.bucketOver90 || 0)),
     0
   );
 

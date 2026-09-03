@@ -1,6 +1,6 @@
 import { db, pool } from '../db';
-import { eq } from 'drizzle-orm';
-import { importSessions } from '../db/schema';
+import { eq, and } from 'drizzle-orm';
+import { importSessions, opticalBatches, uniqueItems, stockLedger } from '../db/schema';
 import { ImportType } from './excelTemplateService';
 import { ImportValidationService, ValidatedRow, DocumentGroup, ValidationResult } from './importValidationService';
 import { PartyService } from './partyService';
@@ -364,6 +364,125 @@ export class ImportPostingService {
               executionErrors.push({
                 row: row.rowNumber,
                 message: `Failed to record opening stock for row ${row.rowNumber}: ${err.message}`,
+              });
+            }
+          }
+          break;
+        }
+
+        case 'OPTICAL_BATCH': {
+          for (const row of rows) {
+            if (!row.isValid) {
+              failedRowsCount++;
+              continue;
+            }
+
+            try {
+              const uniqueItem = row.resolvedData?.uniqueItem;
+              if (!uniqueItem) {
+                throw new Error('Unique Item not found or missing from validated row.');
+              }
+
+              const categoryId = uniqueItem.categoryId || row.resolvedData?.category?.id;
+              const powers = row.resolvedData?.powers;
+              if (!powers) {
+                throw new Error('Optical powers not found for row.');
+              }
+
+              // 1. Find or Create Optical Batch
+              const { batch, isNew } = await findOrCreateOpticalBatch({
+                businessId,
+                uniqueItemId: uniqueItem.id,
+                categoryId,
+                sph: powers.sphNum,
+                cyl: powers.cylNum,
+                axis: powers.axisNum,
+                add: powers.addNum,
+                side: powers.sideNormalized,
+                userId,
+              });
+
+              // 2. If user provided a specific barcode and the batch is new
+              if (row.resolvedData?.barcode && isNew && batch.barcode !== row.resolvedData.barcode) {
+                try {
+                  await db
+                    .update(opticalBatches)
+                    .set({ barcode: row.resolvedData.barcode })
+                    .where(eq(opticalBatches.id, batch.id));
+                  batch.barcode = row.resolvedData.barcode;
+                } catch {
+                  // Barcode collision - keep generated permanent barcode
+                }
+              }
+
+              // 3. Opening Stock Quantity
+              const openingQty = Number(row.resolvedData?.openingStockQuantity || 0);
+              if (openingQty > 0) {
+                const existingLedger = await db
+                  .select({ id: stockLedger.id })
+                  .from(stockLedger)
+                  .where(
+                    and(
+                      eq(stockLedger.businessId, businessId),
+                      eq(stockLedger.batchId, batch.id),
+                      eq(stockLedger.transactionType, 'OPENING_STOCK')
+                    )
+                  )
+                  .limit(1);
+
+                if (existingLedger.length === 0) {
+                  await StockService.recordOpeningStock(
+                    businessId,
+                    {
+                      batchId: batch.id,
+                      quantity: openingQty,
+                      date: row.resolvedData?.purchaseDate || undefined,
+                      reason: row.resolvedData?.remarks || row.resolvedData?.batchReference || `Bulk Optical Batch Excel Import (${session.fileName})`,
+                    },
+                    userId
+                  );
+                } else {
+                  await StockService.adjustStock(
+                    businessId,
+                    {
+                      batchId: batch.id,
+                      adjustmentType: 'INCREASE',
+                      quantity: openingQty,
+                      reason: 'OPENING_CORRECTION',
+                      remarks: row.resolvedData?.remarks || `Bulk Optical Batch Excel Import Incremental (${session.fileName})`,
+                    },
+                    userId
+                  );
+                }
+              }
+
+              // 4. Update pricing on Unique Item if supplied
+              const purchaseCost = Number(row.resolvedData?.purchaseCost);
+              const sellingPrice = Number(row.resolvedData?.sellingPrice);
+              if (!isNaN(purchaseCost) && purchaseCost > 0) {
+                await db
+                  .update(uniqueItems)
+                  .set({
+                    lastPurchasePrice: purchaseCost.toFixed(2),
+                    purchaseRate: uniqueItem.purchaseRate === '0.00' || !uniqueItem.purchaseRate ? purchaseCost.toFixed(2) : uniqueItem.purchaseRate,
+                    mrp: (!isNaN(sellingPrice) && sellingPrice > 0 && (uniqueItem.mrp === '0.00' || !uniqueItem.mrp)) ? sellingPrice.toFixed(2) : uniqueItem.mrp,
+                    updatedAt: new Date(),
+                  })
+                  .where(eq(uniqueItems.id, uniqueItem.id));
+              }
+
+              postedDocuments.push({
+                id: batch.id,
+                type: 'OPTICAL_BATCH',
+                documentNumber: batch.barcode,
+                summary: `${uniqueItem.name} | Power: ${powers.identityKey} | SKU: ${row.resolvedData?.sku || '-'} | Qty: ${openingQty}`,
+              });
+              postedRowsCount++;
+            } catch (err: any) {
+              failedRowsCount++;
+              executionErrors.push({
+                row: row.rowNumber,
+                message: `Failed to import optical batch for row ${row.rowNumber}: ${err.message}`,
               });
             }
           }

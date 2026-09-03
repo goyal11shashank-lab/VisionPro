@@ -1,8 +1,9 @@
 import React, { useState, useEffect } from 'react';
-import { Barcode, Plus, Search, RefreshCw, CheckCircle2, XCircle, Trash2, AlertTriangle, ShieldAlert, Filter, Sparkles, Eye, Layers, Copy, Check, Edit3 } from 'lucide-react';
+import { Barcode, Plus, Search, RefreshCw, CheckCircle2, XCircle, Trash2, AlertTriangle, ShieldAlert, Filter, Sparkles, Eye, Layers, Copy, Check, Edit3, FileSpreadsheet } from 'lucide-react';
 import { apiRequest } from '../../api/client.js';
 import { OpticalBatch, UniqueItem, Category } from '../../types/index.js';
 import { useAuth } from '../../context/AuthContext.js';
+import { OpticalBatchImportModal } from '../../components/master/OpticalBatchImportModal.js';
 
 export const OpticalBatchesPage: React.FC = () => {
   const { hasPermission } = useAuth();
@@ -27,6 +28,9 @@ export const OpticalBatchesPage: React.FC = () => {
   const [showBulkDeleteModal, setShowBulkDeleteModal] = useState<boolean>(false);
   const [bulkDeleting, setBulkDeleting] = useState<boolean>(false);
   const [bulkDeleteError, setBulkDeleteError] = useState<string | null>(null);
+
+  // Bulk Excel Import Modal State
+  const [showImportModal, setShowImportModal] = useState<boolean>(false);
 
   // Find or Create Modal State
   const [showModal, setShowModal] = useState<boolean>(false);
@@ -324,14 +328,24 @@ export const OpticalBatchesPage: React.FC = () => {
             Refresh
           </button>
           {hasPermission('master:create') && (
-            <button
-              id="btn-find-or-create-batch"
-              onClick={handleOpenFindOrCreate}
-              className="inline-flex items-center gap-2 px-4 py-2 text-sm font-medium text-white bg-indigo-600 rounded-lg hover:bg-indigo-700 shadow-xs cursor-pointer"
-            >
-              <Plus className="h-4 w-4" />
-              Find / Generate Batch
-            </button>
+            <>
+              <button
+                id="btn-bulk-import-batches"
+                onClick={() => setShowImportModal(true)}
+                className="inline-flex items-center gap-2 px-3.5 py-2 text-sm font-medium text-emerald-700 bg-emerald-50 border border-emerald-300 rounded-lg hover:bg-emerald-100 shadow-xs cursor-pointer transition-colors"
+              >
+                <FileSpreadsheet className="h-4 w-4" />
+                Bulk Import
+              </button>
+              <button
+                id="btn-find-or-create-batch"
+                onClick={handleOpenFindOrCreate}
+                className="inline-flex items-center gap-2 px-4 py-2 text-sm font-medium text-white bg-indigo-600 rounded-lg hover:bg-indigo-700 shadow-xs cursor-pointer"
+              >
+                <Plus className="h-4 w-4" />
+                Find / Generate Batch
+              </button>
+            </>
           )}
         </div>
       </div>
@@ -1027,6 +1041,21 @@ export const OpticalBatchesPage: React.FC = () => {
             </form>
           </div>
         </div>
+      )}
+
+      {/* Bulk Excel Import Modal */}
+      {showImportModal && (
+        <OpticalBatchImportModal
+          isOpen={showImportModal}
+          onClose={() => setShowImportModal(false)}
+          onSuccess={() => {
+            fetchData();
+            setFeedbackMessage({
+              type: 'success',
+              text: 'Bulk Excel import completed successfully. Optical batches and stock registry have been updated.',
+            });
+          }}
+        />
       )}
     </div>
   );

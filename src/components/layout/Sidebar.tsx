@@ -70,26 +70,15 @@ export const Sidebar: React.FC<SidebarProps> = ({
 }) => {
   const { user, currentBusiness, logout, hasPermission } = useAuth();
 
-  const [openSections, setOpenSections] = useState<Record<string, boolean>>({
-    'Master Data': true,
-    Sales: true,
-    Purchase: false,
-    Inventory: false,
-    Parties: false,
-    Accounts: false,
-    Administration: false,
-  });
-
-  const [openSubNavs, setOpenSubNavs] = useState<Record<string, boolean>>({
-    'sales-create-invoice': true,
-  });
+  const [openSection, setOpenSection] = useState<string | null>('Master Data');
+  const [openSubNav, setOpenSubNav] = useState<string | null>('sales-create-invoice');
 
   const toggleSection = (section: string) => {
-    setOpenSections(prev => ({ ...prev, [section]: !prev[section] }));
+    setOpenSection(prev => (prev === section ? null : section));
   };
 
   const toggleSubNav = (itemId: string) => {
-    setOpenSubNavs(prev => ({ ...prev, [itemId]: !prev[itemId] }));
+    setOpenSubNav(prev => (prev === itemId ? null : itemId));
   };
 
   const sections: NavSection[] = [
@@ -246,7 +235,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
 
           {/* Collapsible Module Sections */}
           {sections.map(section => {
-            const isOpen = !!openSections[section.title];
+            const isOpen = openSection === section.title;
             const SectionIcon = section.icon;
 
             return (
@@ -254,25 +243,31 @@ export const Sidebar: React.FC<SidebarProps> = ({
                 <button
                   type="button"
                   onClick={() => toggleSection(section.title)}
-                  className="w-full flex items-center justify-between px-3 py-1.5 text-[11px] font-semibold text-white/40 hover:text-white/70 tracking-wider uppercase transition-colors"
+                  className={`w-full flex items-center justify-between px-3 py-2 text-xs font-bold tracking-wide rounded-lg transition-all border ${
+                    isOpen
+                      ? 'bg-gradient-to-r from-blue-950/80 to-slate-800/90 text-white border-blue-500/40 shadow-sm'
+                      : 'bg-slate-800/40 hover:bg-slate-800/80 text-slate-200 hover:text-white border-white/5'
+                  }`}
                 >
-                  <div className="flex items-center gap-2">
-                    <SectionIcon className="w-3.5 h-3.5 opacity-80" />
-                    <span>{section.title}</span>
+                  <div className="flex items-center gap-2.5">
+                    <div className={`p-1 rounded-md transition-colors ${isOpen ? 'bg-blue-600 text-white shadow-xs' : 'bg-slate-700/60 text-blue-400'}`}>
+                      <SectionIcon className="w-3.5 h-3.5" />
+                    </div>
+                    <span className="uppercase text-[11px] font-bold tracking-wider">{section.title}</span>
                   </div>
                   {isOpen ? (
-                    <ChevronDown className="w-3 h-3 text-slate-500" />
+                    <ChevronDown className="w-3.5 h-3.5 text-blue-400 transition-transform" />
                   ) : (
-                    <ChevronRight className="w-3 h-3 text-slate-500" />
+                    <ChevronRight className="w-3.5 h-3.5 text-slate-400 transition-transform" />
                   )}
                 </button>
 
                 {isOpen && (
-                  <div className="mt-0.5 space-y-0.5">
+                  <div className="mt-1 space-y-0.5 px-0.5">
                     {section.items.map(item => {
                       const ItemIcon = item.icon;
                       const hasSub = item.subItems && item.subItems.length > 0;
-                      const isSubOpen = hasSub ? !!openSubNavs[item.id] : false;
+                      const isSubOpen = hasSub ? openSubNav === item.id : false;
                       const isParentActive = hasSub
                         ? item.subItems?.some(s => currentPath === s.path)
                         : currentPath === item.path;
@@ -383,7 +378,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
             </div>
             <div className="flex items-center justify-between">
               <span className="text-white/40">Database</span>
-              <span className="text-slate-300">Netlify Database</span>
+              <span className="text-slate-300">Neon PostgreSQL</span>
             </div>
           </div>
 
