@@ -236,14 +236,15 @@ CREATE INDEX IF NOT EXISTS "primary_items_coating_idx" ON "primary_items" ("coat
 CREATE INDEX IF NOT EXISTS "primary_items_status_idx" ON "primary_items" ("status");
 CREATE UNIQUE INDEX IF NOT EXISTS "primary_items_biz_code_idx" ON "primary_items" ("business_id", "code");
 
--- 14. Unique Items Table
+-- 14. Unique Items Table (Stock Items)
 CREATE TABLE IF NOT EXISTS "unique_items" (
   "id" UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   "business_id" UUID NOT NULL REFERENCES "businesses"("id") ON DELETE CASCADE,
-  "primary_item_id" UUID NOT NULL REFERENCES "primary_items"("id") ON DELETE CASCADE,
+  "primary_item_id" UUID REFERENCES "primary_items"("id") ON DELETE CASCADE,
   "name" VARCHAR(255) NOT NULL,
   "code" VARCHAR(100) NOT NULL,
   "description" TEXT,
+  "maintain_batches" BOOLEAN NOT NULL DEFAULT FALSE,
   "purchase_rate" NUMERIC(12, 2) DEFAULT 0.00,
   "last_purchase_price" NUMERIC(12, 2) DEFAULT 0.00,
   "mrp" NUMERIC(12, 2) DEFAULT 0.00,
@@ -1162,6 +1163,29 @@ export async function runMigrations(): Promise<{ success: boolean; message: stri
           -- Ensure payment_status exists on purchase_invoices
           IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='purchase_invoices' AND column_name='payment_status') THEN
             ALTER TABLE "purchase_invoices" ADD COLUMN "payment_status" VARCHAR(20) NOT NULL DEFAULT 'UNPAID';
+          END IF;
+          -- Phase 3 Decoupling: Ensure unique_items.primary_item_id is nullable
+          IF EXISTS (
+            SELECT 1 FROM information_schema.columns 
+            WHERE table_name='unique_items' AND column_name='primary_item_id' AND is_nullable='NO'
+          ) THEN
+            ALTER TABLE "unique_items" ALTER COLUMN "primary_item_id" DROP NOT NULL;
+          END IF;
+          -- Maintain Batches Migration: Ensure unique_items.maintain_batches exists and migrate existing data
+          IF NOT EXISTS (
+            SELECT 1 FROM information_schema.columns 
+            WHERE table_name='unique_items' AND column_name='maintain_batches'
+          ) THEN
+            ALTER TABLE "unique_items" ADD COLUMN "maintain_batches" BOOLEAN NOT NULL DEFAULT FALSE;
+            
+            -- Set maintain_batches = TRUE for items with 1 or more optical_batches
+            UPDATE "unique_items"
+            SET "maintain_batches" = TRUE
+            WHERE "id" IN (
+              SELECT DISTINCT "unique_item_id" 
+              FROM "optical_batches"
+              WHERE "unique_item_id" IS NOT NULL
+            );
           END IF;
         END $$;
       `);

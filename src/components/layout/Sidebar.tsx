@@ -90,7 +90,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
         { id: 'master-bases', label: 'Bases & Compatibility', icon: Boxes, path: '/master/bases', permission: 'master:view' },
         { id: 'master-coatings', label: 'Coatings', icon: Sparkles, path: '/master/coatings', permission: 'master:view' },
         { id: 'master-primary-items', label: 'Primary Items', icon: BookOpen, path: '/master/primary-items', permission: 'master:view' },
-        { id: 'master-unique-items', label: 'Unique Items', icon: QrCode, path: '/master/unique-items', permission: 'master:view' },
+        { id: 'master-stock-items', label: 'Stock Items', icon: QrCode, path: '/master/stock-items', permission: 'master:view' },
         { id: 'master-batches', label: 'Optical Batches & Powers', icon: Barcode, path: '/master/batches', permission: 'master:view' },
       ],
     },
@@ -270,7 +270,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
                       const isSubOpen = hasSub ? openSubNav === item.id : false;
                       const isParentActive = hasSub
                         ? item.subItems?.some(s => currentPath === s.path)
-                        : currentPath === item.path;
+                        : (currentPath === item.path || (item.path === '/master/stock-items' && (currentPath === '/master/unique-items' || currentPath === '/unique-items' || currentPath === '/stock-items')));
 
                       // Permission check (if specified)
                       if (item.permission && !hasPermission(item.permission)) {

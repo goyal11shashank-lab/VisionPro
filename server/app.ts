@@ -17,6 +17,7 @@ import paymentRoutes from './routes/payments.js';
 import importExportRoutes from './routes/importExport.js';
 import searchRoutes from './routes/search.js';
 import reportRoutes from './routes/reports.js';
+import stockItemLedgerRoutes from './routes/stockItemLedger.js';
 
 export function createExpressApp() {
   const app = express();
@@ -57,6 +58,8 @@ export function createExpressApp() {
   app.use('/api/exports', importExportRoutes);
   app.use('/api/search', searchRoutes);
   app.use('/api/reports', reportRoutes);
+  app.use('/api/stock-items', stockItemLedgerRoutes);
+  app.use('/api/inventory/stock-items', stockItemLedgerRoutes);
 
   // Global Error Handler
   app.use((err: any, req: Request, res: Response, next: NextFunction) => {

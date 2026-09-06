@@ -77,8 +77,11 @@ const AppContent: React.FC = () => {
         return 'Optical Coatings Master';
       case '/master/primary-items':
         return 'Primary Items Master';
+      case '/master/stock-items':
+      case '/stock-items':
       case '/master/unique-items':
-        return 'Unique Items & Commercial SKUs';
+      case '/unique-items':
+        return 'Stock Items Master';
       case '/master/batches':
         return 'Optical Batches & Permanent Barcodes';
       case '/sales/pos':
@@ -175,7 +178,10 @@ const AppContent: React.FC = () => {
         return <CoatingsPage />;
       case '/master/primary-items':
         return <PrimaryItemsPage />;
+      case '/master/stock-items':
+      case '/stock-items':
       case '/master/unique-items':
+      case '/unique-items':
         return <UniqueItemsPage />;
       case '/master/batches':
         return <OpticalBatchesPage />;

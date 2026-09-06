@@ -20,6 +20,8 @@ import {
 } from 'lucide-react';
 import { apiRequest } from '../../api/client.js';
 import { Party, UniqueItem, OpticalBatch } from '../../types/index.js';
+import { SearchableMasterSelect } from '../../components/common/SearchableMasterSelect.js';
+import { formatOpticalBatchName } from '../../utils/searchNormalization.js';
 
 interface BatchRowState {
   batchId?: string;
@@ -37,6 +39,7 @@ interface LineItemState {
   uniqueItemName: string;
   uniqueItemCode: string;
   categoryCode?: string;
+  maintainBatches?: boolean;
   quantity: number;
   rate: number;
   discountType: 'PERCENTAGE' | 'FIXED' | 'NONE';
@@ -44,6 +47,7 @@ interface LineItemState {
   gstRate: number;
   batches: BatchRowState[];
   isBatchesOpen?: boolean;
+  availableBatches?: OpticalBatch[];
 }
 
 export const CreatePurchaseInvoicePage: React.FC<{
@@ -161,46 +165,75 @@ export const CreatePurchaseInvoicePage: React.FC<{
   };
 
   // Add line item
-  const handleAddLine = () => {
+  const handleAddLine = async () => {
     if (uniqueItemsList.length === 0) return;
     const first = uniqueItemsList[0];
     const defaultRate = Number(first.lastPurchasePrice || first.purchaseRate || 0);
+    const itemMaintainBatches = first.maintainBatches !== false;
+
+    let availableBatches: any[] = [];
+    if (itemMaintainBatches) {
+      try {
+        const bRes = await apiRequest<{ batches: any[] }>(`/api/optical-master/batches?uniqueItemId=${first.id}`);
+        availableBatches = bRes.batches || [];
+      } catch {
+        // ignore
+      }
+    }
 
     const newLine: LineItemState = {
       uniqueItemId: first.id,
       uniqueItemName: first.name,
       uniqueItemCode: first.code,
       categoryCode: first.categoryCode,
+      maintainBatches: itemMaintainBatches,
       quantity: 1,
       rate: defaultRate,
       discountType: 'NONE',
       discountValue: 0,
       gstRate: 12,
-      batches: [
-        {
-          sph: 0,
-          cyl: 0,
-          axis: 0,
-          add: 0,
-          side: 'NONE',
-          quantity: 1,
-          rate: defaultRate,
-        },
-      ],
+      batches: itemMaintainBatches
+        ? [
+            {
+              batchId: availableBatches[0]?.id,
+              sph: Number(availableBatches[0]?.sph ?? 0),
+              cyl: Number(availableBatches[0]?.cyl ?? 0),
+              axis: Number(availableBatches[0]?.axis ?? 0),
+              add: Number(availableBatches[0]?.add ?? 0),
+              side: (availableBatches[0]?.side as any) || 'NONE',
+              quantity: 1,
+              rate: defaultRate,
+            },
+          ]
+        : [],
       isBatchesOpen: false,
+      availableBatches,
     };
-    setLines([...lines, newLine]);
+    setLines(prev => [...prev, newLine]);
   };
 
   const handleRemoveLine = (idx: number) => {
     setLines(lines.filter((_, i) => i !== idx));
   };
 
-  const handleLineItemChange = (idx: number, uItemId: string) => {
+  const handleLineItemChange = async (idx: number, uItemId: string) => {
     const selected = uniqueItemsList.find(u => u.id === uItemId);
     if (!selected) return;
 
     const rate = Number(selected.lastPurchasePrice || selected.purchaseRate || 0);
+    const itemMaintainBatches = selected.maintainBatches !== false;
+
+    let availableBatches: any[] = [];
+    if (itemMaintainBatches) {
+      try {
+        const bRes = await apiRequest<{ batches: any[] }>(`/api/optical-master/batches?uniqueItemId=${selected.id}`);
+        availableBatches = bRes.batches || [];
+      } catch {
+        // ignore
+      }
+    }
+
+    const firstBatch = availableBatches[0];
     const updated = [...lines];
     updated[idx] = {
       ...updated[idx],
@@ -208,9 +241,57 @@ export const CreatePurchaseInvoicePage: React.FC<{
       uniqueItemName: selected.name,
       uniqueItemCode: selected.code,
       categoryCode: selected.categoryCode,
+      maintainBatches: itemMaintainBatches,
       rate,
-      batches: updated[idx].batches.map(b => ({ ...b, rate })),
+      batches: itemMaintainBatches
+        ? (firstBatch
+            ? [
+                {
+                  batchId: firstBatch.id,
+                  sph: Number(firstBatch.sph ?? 0),
+                  cyl: Number(firstBatch.cyl ?? 0),
+                  axis: Number(firstBatch.axis ?? 0),
+                  add: Number(firstBatch.add ?? 0),
+                  side: (firstBatch.side as any) || 'NONE',
+                  quantity: updated[idx].quantity || 1,
+                  rate,
+                },
+              ]
+            : [
+                {
+                  sph: 0,
+                  cyl: 0,
+                  axis: 0,
+                  add: 0,
+                  side: 'NONE',
+                  quantity: updated[idx].quantity || 1,
+                  rate,
+                },
+              ])
+        : [],
+      availableBatches,
     };
+    setLines(updated);
+  };
+
+  const handleLineBatchChange = (lineIdx: number, batchId: string, batchObj?: any) => {
+    const updated = [...lines];
+    const curLine = updated[lineIdx];
+    const b = batchObj || curLine.availableBatches?.find(x => x.id === batchId);
+    if (b) {
+      curLine.batches = [
+        {
+          batchId: b.id,
+          sph: Number(b.sph ?? 0),
+          cyl: Number(b.cyl ?? 0),
+          axis: Number(b.axis ?? 0),
+          add: Number(b.add ?? 0),
+          side: (b.side as any) || 'NONE',
+          quantity: curLine.quantity,
+          rate: curLine.rate,
+        },
+      ];
+    }
     setLines(updated);
   };
 
@@ -570,17 +651,28 @@ export const CreatePurchaseInvoicePage: React.FC<{
             <label className="block text-xs font-semibold text-slate-700 mb-1">
               Supplier / Vendor <span className="text-rose-500">*</span>
             </label>
-            <select
+            <SearchableMasterSelect
+              id="select-purchase-supplier"
+              placeholder="Type supplier / vendor name, code, city..."
               value={supplierPartyId}
-              onChange={e => handleSupplierChange(e.target.value)}
-              className="w-full px-3.5 py-2 text-sm bg-slate-50 border border-slate-200 rounded-xl focus:bg-white focus:ring-2 focus:ring-purple-500/20 focus:border-purple-600"
-            >
-              {suppliers.map(s => (
-                <option key={s.id} value={s.id}>
-                  {s.name} ({s.partyCode}) {s.city ? `— ${s.city}` : ''}
-                </option>
-              ))}
-            </select>
+              options={suppliers.map(s => ({
+                id: s.id,
+                label: s.name,
+                subLabel: `${s.partyCode || 'NO-CODE'}${s.city ? ` • ${s.city}` : ''}${s.gstin ? ` • GST: ${s.gstin}` : ''}`,
+                tag: 'SUPPLIER',
+                badgeColor: 'purple',
+                meta: s,
+              }))}
+              onSelect={opt => handleSupplierChange(opt ? opt.id : '')}
+              onNextFocus={() => {
+                const firstItem = document.getElementById('select-purchase-line-product-0');
+                if (firstItem) {
+                  firstItem.focus();
+                } else {
+                  document.getElementById('input-supplier-bill-no')?.focus();
+                }
+              }}
+            />
           </div>
 
           {/* Invoice Date */}
@@ -700,14 +792,14 @@ export const CreatePurchaseInvoicePage: React.FC<{
             <thead className="bg-slate-50 text-slate-600 font-semibold uppercase border-b border-slate-200">
               <tr>
                 <th className="px-4 py-3">#</th>
-                <th className="px-4 py-3 min-w-[220px]">Unique Item Master</th>
+                <th className="px-4 py-3 min-w-[220px]">Stock Item Master</th>
+                <th className="px-3 py-3 min-w-[240px]">Batch / Power</th>
                 <th className="px-3 py-3 w-24">Qty (Prs)</th>
                 <th className="px-3 py-3 w-28">Rate (₹)</th>
                 <th className="px-3 py-3 w-32">Discount</th>
                 <th className="px-3 py-3 w-24">GST %</th>
                 <th className="px-3 py-3 text-right">Taxable (₹)</th>
                 <th className="px-3 py-3 text-right">Total (₹)</th>
-                <th className="px-4 py-3 text-center">Batch Powers</th>
                 <th className="px-3 py-3 text-center"></th>
               </tr>
             </thead>
@@ -741,29 +833,183 @@ export const CreatePurchaseInvoicePage: React.FC<{
                       <tr className="hover:bg-slate-50/50 bg-white">
                         <td className="px-4 py-3 font-semibold text-slate-400">{idx + 1}</td>
 
-                        {/* Item Select */}
+                        {/* Stock Item Select */}
                         <td className="px-4 py-3">
-                          <select
+                          <SearchableMasterSelect
+                            id={`select-purchase-line-product-${idx}`}
+                            placeholder="Type stock item name/code..."
                             value={line.uniqueItemId}
-                            onChange={e => handleLineItemChange(idx, e.target.value)}
-                            className="w-full px-2.5 py-1.5 text-xs bg-slate-50 border border-slate-200 rounded-lg focus:bg-white"
-                          >
-                            {uniqueItemsList.map(u => (
-                              <option key={u.id} value={u.id}>
-                                {u.name} ({u.code})
-                              </option>
-                            ))}
-                          </select>
+                            options={uniqueItemsList.map(u => ({
+                              id: u.id,
+                              label: u.name,
+                              subLabel: `Code: ${u.code || 'SKU'}${u.categoryCode ? ` • [${u.categoryCode}]` : ''}`,
+                              tag: u.maintainBatches === false ? 'No-Batch' : (u.categoryCode || 'ITEM'),
+                              badgeColor: u.maintainBatches === false ? 'slate' : 'purple',
+                              meta: u,
+                            }))}
+                            onSelect={opt => {
+                              if (opt) {
+                                handleLineItemChange(idx, opt.id);
+                              }
+                            }}
+                            onNextFocus={() => {
+                              const selectedItem = uniqueItemsList.find(u => u.id === line.uniqueItemId);
+                              if (selectedItem && selectedItem.maintainBatches === false) {
+                                const qtyInput = document.getElementById(`input-purchase-line-qty-${idx}`);
+                                qtyInput?.focus();
+                                (qtyInput as HTMLInputElement)?.select?.();
+                              } else {
+                                const batchInput = document.getElementById(`select-purchase-line-batch-${idx}`);
+                                if (batchInput) {
+                                  batchInput.focus();
+                                } else {
+                                  const qtyInput = document.getElementById(`input-purchase-line-qty-${idx}`);
+                                  qtyInput?.focus();
+                                  (qtyInput as HTMLInputElement)?.select?.();
+                                }
+                              }
+                            }}
+                          />
+                        </td>
+
+                        {/* Batch / Power Selector */}
+                        <td className="px-3 py-3">
+                          {line.maintainBatches === false ? (
+                            <div className="py-1 px-2.5 rounded-lg bg-slate-100 text-slate-500 font-mono text-[11px] inline-flex items-center gap-1.5 border border-slate-200">
+                              <span className="w-1.5 h-1.5 rounded-full bg-slate-400"></span>
+                              <span>Direct Item (No Batch)</span>
+                            </div>
+                          ) : (
+                            <div className="space-y-1">
+                              <SearchableMasterSelect
+                                id={`select-purchase-line-batch-${idx}`}
+                                placeholder="Type SPH / CYL / Axis..."
+                                value={line.batches[0]?.batchId || ''}
+                                displayValue={
+                                  line.batches[0]?.sph !== undefined
+                                    ? formatOpticalBatchName({
+                                        sph: line.batches[0].sph,
+                                        cyl: line.batches[0].cyl,
+                                        axis: line.batches[0].axis,
+                                        add: line.batches[0].add,
+                                        side: line.batches[0].side,
+                                        categoryCode: line.batches[0].categoryCode || 'SV',
+                                      })
+                                    : ''
+                                }
+                                options={(line.availableBatches || []).map(b => {
+                                  const cat = b.opticalCategory || b.categoryCode || 'SV';
+                                  const name = formatOpticalBatchName({
+                                    sph: b.sph,
+                                    cyl: b.cyl,
+                                    axis: b.axis,
+                                    add: b.add,
+                                    side: b.side,
+                                    categoryCode: cat,
+                                  });
+                                  return {
+                                    id: b.id,
+                                    label: name,
+                                    subLabel: `Stock: ${b.physicalStock ?? 0} pcs • Barcode: ${b.barcode || 'N/A'}${b.identityKey ? ` • [${b.identityKey}]` : ''}`,
+                                    tag: `Stock: ${b.physicalStock ?? 0}`,
+                                    badgeColor: 'purple',
+                                    meta: {
+                                      ...b,
+                                      sph: b.sph,
+                                      cyl: b.cyl,
+                                      axis: b.axis,
+                                      add: b.add,
+                                      side: b.side,
+                                      categoryCode: cat,
+                                      barcode: b.barcode,
+                                    },
+                                  };
+                                })}
+                                onSearch={async query => {
+                                  try {
+                                    const res = await apiRequest<{ batches: any[] }>(
+                                      `/api/optical-master/batches?uniqueItemId=${line.uniqueItemId}&search=${encodeURIComponent(query)}`
+                                    );
+                                    return (res.batches || []).map(b => {
+                                      const cat = b.opticalCategory || b.categoryCode || 'SV';
+                                      const name = formatOpticalBatchName({
+                                        sph: b.sph,
+                                        cyl: b.cyl,
+                                        axis: b.axis,
+                                        add: b.add,
+                                        side: b.side,
+                                        categoryCode: cat,
+                                      });
+                                      return {
+                                        id: b.id,
+                                        label: name,
+                                        subLabel: `Stock: ${b.physicalStock ?? 0} pcs • Barcode: ${b.barcode || 'N/A'}${b.identityKey ? ` • [${b.identityKey}]` : ''}`,
+                                        tag: `Stock: ${b.physicalStock ?? 0}`,
+                                        badgeColor: 'purple',
+                                        meta: {
+                                          ...b,
+                                          sph: b.sph,
+                                          cyl: b.cyl,
+                                          axis: b.axis,
+                                          add: b.add,
+                                          side: b.side,
+                                          categoryCode: cat,
+                                          barcode: b.barcode,
+                                        },
+                                      };
+                                    });
+                                  } catch {
+                                    return [];
+                                  }
+                                }}
+                                onSelect={opt => {
+                                  if (opt) {
+                                    handleLineBatchChange(idx, opt.id, opt.meta);
+                                  }
+                                }}
+                                onNextFocus={() => {
+                                  const qtyInput = document.getElementById(`input-purchase-line-qty-${idx}`);
+                                  qtyInput?.focus();
+                                  (qtyInput as HTMLInputElement)?.select?.();
+                                }}
+                              />
+                              <div className="flex items-center justify-between text-[10px] text-slate-500">
+                                <span className="font-mono">
+                                  {line.batches.length > 1 ? `${line.batches.length} Batches/Powers` : 'Single Batch'}
+                                </span>
+                                <button
+                                  type="button"
+                                  onClick={() => {
+                                    const updated = [...lines];
+                                    updated[idx].isBatchesOpen = !updated[idx].isBatchesOpen;
+                                    setLines(updated);
+                                  }}
+                                  className="text-purple-600 hover:text-purple-800 font-medium inline-flex items-center gap-0.5"
+                                >
+                                  {line.isBatchesOpen ? 'Hide Matrix' : 'Custom Powers'}
+                                </button>
+                              </div>
+                            </div>
+                          )}
                         </td>
 
                         {/* Quantity */}
                         <td className="px-3 py-3">
                           <input
+                            id={`input-purchase-line-qty-${idx}`}
                             type="number"
                             min="1"
                             step="1"
                             value={line.quantity}
                             onChange={e => handleQuantityChange(idx, Math.max(1, parseFloat(e.target.value) || 1))}
+                            onKeyDown={e => {
+                              if (e.key === 'Enter') {
+                                e.preventDefault();
+                                const rateInput = document.getElementById(`input-purchase-line-rate-${idx}`);
+                                rateInput?.focus();
+                                (rateInput as HTMLInputElement)?.select?.();
+                              }
+                            }}
                             className="w-full px-2 py-1.5 text-xs font-semibold text-center bg-slate-50 border border-slate-200 rounded-lg"
                           />
                         </td>
@@ -771,6 +1017,7 @@ export const CreatePurchaseInvoicePage: React.FC<{
                         {/* Rate */}
                         <td className="px-3 py-3">
                           <input
+                            id={`input-purchase-line-rate-${idx}`}
                             type="number"
                             min="0"
                             step="0.01"
@@ -779,6 +1026,20 @@ export const CreatePurchaseInvoicePage: React.FC<{
                               const updated = [...lines];
                               updated[idx].rate = parseFloat(e.target.value) || 0;
                               setLines(updated);
+                            }}
+                            onKeyDown={e => {
+                              if (e.key === 'Enter') {
+                                e.preventDefault();
+                                if (idx + 1 < lines.length) {
+                                  document.getElementById(`select-purchase-line-product-${idx + 1}`)?.focus();
+                                } else {
+                                  handleAddLine().then(() => {
+                                    setTimeout(() => {
+                                      document.getElementById(`select-purchase-line-product-${idx + 1}`)?.focus();
+                                    }, 50);
+                                  });
+                                }
+                              }
                             }}
                             className="w-full px-2 py-1.5 text-xs font-mono bg-slate-50 border border-slate-200 rounded-lg"
                           />
@@ -843,25 +1104,6 @@ export const CreatePurchaseInvoicePage: React.FC<{
                         {/* Line Total */}
                         <td className="px-3 py-3 text-right font-mono font-bold text-purple-700">
                           ₹{lineTotal.toFixed(2)}
-                        </td>
-
-                        {/* Batch Powers Toggle */}
-                        <td className="px-4 py-3 text-center">
-                          <button
-                            type="button"
-                            onClick={() => {
-                              const updated = [...lines];
-                              updated[idx].isBatchesOpen = !updated[idx].isBatchesOpen;
-                              setLines(updated);
-                            }}
-                            className={`px-2.5 py-1 rounded-lg text-xs font-semibold flex items-center justify-center gap-1 mx-auto ${
-                              line.batches.length > 0
-                                ? 'bg-purple-100 text-purple-800'
-                                : 'bg-slate-100 text-slate-600'
-                            }`}
-                          >
-                            <span>Powers ({line.batches.length})</span>
-                          </button>
                         </td>
 
                         {/* Delete Row */}

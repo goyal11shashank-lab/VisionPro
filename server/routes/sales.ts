@@ -467,7 +467,9 @@ router.get(
     try {
       const businessId = req.user!.currentBusinessId;
       const onlyInStock = req.query.onlyInStock === 'true';
+      const search = typeof req.query.search === 'string' ? req.query.search : undefined;
       const batches = await SalesService.getBatchesForUniqueItem(businessId, req.params.itemId, {
+        search,
         onlyInStock,
       });
       res.json({ batches });

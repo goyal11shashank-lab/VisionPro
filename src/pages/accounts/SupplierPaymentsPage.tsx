@@ -22,6 +22,7 @@ import {
   TrendingDown,
 } from 'lucide-react';
 import { useAuth } from '../../context/AuthContext.js';
+import { getStoredToken } from '../../api/client.js';
 
 interface PaymentAllocation {
   id?: string;
@@ -130,7 +131,7 @@ export const SupplierPaymentsPage: React.FC = () => {
 
       const res = await fetch(`/api/payments?${params.toString()}`, {
         headers: {
-          Authorization: `Bearer ${localStorage.getItem('token')}`,
+          Authorization: `Bearer ${getStoredToken()}`,
           'X-Business-Id': currentBusiness.id,
         },
       });
@@ -151,7 +152,7 @@ export const SupplierPaymentsPage: React.FC = () => {
     try {
       const res = await fetch('/api/parties', {
         headers: {
-          Authorization: `Bearer ${localStorage.getItem('token')}`,
+          Authorization: `Bearer ${getStoredToken()}`,
           'X-Business-Id': currentBusiness.id,
         },
       });
@@ -188,7 +189,7 @@ export const SupplierPaymentsPage: React.FC = () => {
         setLoadingInvoices(true);
         const res = await fetch(`/api/payments/unpaid-invoices/${partyId}?paymentType=PAYMENT`, {
           headers: {
-            Authorization: `Bearer ${localStorage.getItem('token')}`,
+            Authorization: `Bearer ${getStoredToken()}`,
             'X-Business-Id': currentBusiness.id,
           },
         });
@@ -307,7 +308,7 @@ export const SupplierPaymentsPage: React.FC = () => {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
-          Authorization: `Bearer ${localStorage.getItem('token')}`,
+          Authorization: `Bearer ${getStoredToken()}`,
           'X-Business-Id': currentBusiness.id,
         },
         body: JSON.stringify(payload),
@@ -351,7 +352,7 @@ export const SupplierPaymentsPage: React.FC = () => {
       setViewVoucher(voucher);
       const res = await fetch(`/api/payments/${voucher.id}`, {
         headers: {
-          Authorization: `Bearer ${localStorage.getItem('token')}`,
+          Authorization: `Bearer ${getStoredToken()}`,
           'X-Business-Id': currentBusiness.id,
         },
       });
@@ -373,7 +374,7 @@ export const SupplierPaymentsPage: React.FC = () => {
       const res = await fetch(`/api/payments/${voucherId}/post`, {
         method: 'POST',
         headers: {
-          Authorization: `Bearer ${localStorage.getItem('token')}`,
+          Authorization: `Bearer ${getStoredToken()}`,
           'X-Business-Id': currentBusiness.id,
         },
       });
@@ -400,7 +401,7 @@ export const SupplierPaymentsPage: React.FC = () => {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
-          Authorization: `Bearer ${localStorage.getItem('token')}`,
+          Authorization: `Bearer ${getStoredToken()}`,
           'X-Business-Id': currentBusiness.id,
         },
         body: JSON.stringify({ reason: cancelReason }),

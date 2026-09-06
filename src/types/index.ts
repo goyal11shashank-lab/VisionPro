@@ -187,17 +187,20 @@ export interface PrimaryItem {
 export interface UniqueItem {
   id: string;
   businessId: string;
-  primaryItemId: string;
-  primaryItemName?: string;
-  primaryItemCode?: string;
-  categoryId?: string;
-  categoryName?: string;
-  categoryCode?: string;
-  baseName?: string;
-  baseCode?: string;
+  primaryItemId?: string | null;
+  primaryItemName?: string | null;
+  primaryItemCode?: string | null;
+  categoryId?: string | null;
+  categoryName?: string | null;
+  categoryCode?: string | null;
+  baseName?: string | null;
+  baseCode?: string | null;
   name: string;
   code: string;
   description?: string | null;
+  maintainBatches: boolean;
+  opticalCategory?: 'SV' | 'KT' | 'PROG' | 'OTHER' | string;
+  batchesCount?: number;
   purchaseRate: string | number;
   lastPurchasePrice: string | number;
   mrp: string | number;
@@ -206,12 +209,18 @@ export interface UniqueItem {
   updatedAt?: string;
 }
 
+// Domain Model: Stock Item is the primary master concept (replaces Unique Item)
+export type StockItem = UniqueItem;
+
 export interface OpticalBatch {
   id: string;
   businessId: string;
   uniqueItemId: string;
+  stockItemId?: string;
   uniqueItemName?: string;
+  stockItemName?: string;
   uniqueItemCode?: string;
+  stockItemCode?: string;
   primaryItemName?: string;
   categoryId: string;
   categoryName?: string;

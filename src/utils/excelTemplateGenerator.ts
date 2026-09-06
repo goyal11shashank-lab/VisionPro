@@ -78,13 +78,13 @@ export const OPTICAL_BATCH_INSTRUCTIONS = [
     column: 'unique_item',
     requirement: 'Required',
     format: 'HC_SV_-6/-2',
-    description: 'Must already exist in the software. Do NOT create a new Unique Item through Excel.',
+    description: 'Stock Item code/name. Must already exist in the software. Do NOT create a new Stock Item through Excel.',
   },
   {
     column: 'batch_name',
     requirement: 'Required',
     format: '-6.00/-2.00 or +4.00/+2.00',
-    description: 'Batch/power identification belonging to the selected Unique Item.',
+    description: 'Batch/power identification belonging to the selected Stock Item.',
   },
   {
     column: 'sku',

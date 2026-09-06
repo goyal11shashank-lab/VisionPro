@@ -5,7 +5,7 @@
  */
 import { pool, db } from '../db/index.js';
 import { opticalBatches, opticalStocks, stockLedger, categories, uniqueItems, primaryItems, bases, coatings } from '../db/schema.js';
-import { eq, and, sql, ne } from 'drizzle-orm';
+import { eq, and, sql, ne, or } from 'drizzle-orm';
 
 export interface OpticalPowerInput {
   businessId: string;
@@ -26,7 +26,7 @@ export interface ValidatedOpticalIdentity {
   addNum: number;
   sideNormalized: 'NONE' | 'R' | 'L' | 'BE';
   identityKey: string;
-  categoryCode: 'SV' | 'KT' | 'PROG';
+  categoryCode: 'SV' | 'KT' | 'PROG' | 'OTHER';
 }
 
 /**
@@ -53,8 +53,8 @@ export function validateOpticalPower(
   sideRaw?: string | null
 ): ValidatedOpticalIdentity {
   const cat = categoryCode.toUpperCase().trim();
-  if (cat !== 'SV' && cat !== 'KT' && cat !== 'PROG') {
-    throw new Error(`Unsupported optical category: "${categoryCode}". Must be SV, KT, or PROG.`);
+  if (cat !== 'SV' && cat !== 'KT' && cat !== 'PROG' && cat !== 'OTHER') {
+    throw new Error(`Unsupported optical category: "${categoryCode}". Must be SV, KT, PROG, or OTHER.`);
   }
 
   const sphNum = normalizeOpticalNumber(sphRaw);
@@ -63,31 +63,37 @@ export function validateOpticalPower(
   let addNum = normalizeOpticalNumber(addRaw, 0);
   let sideNormalized: 'NONE' | 'R' | 'L' | 'BE' = 'NONE';
 
-  // Rule 1: SPH and CYL are always required
-  if (sphRaw === undefined || sphRaw === null || sphRaw === '') {
-    throw new Error('SPH power is required for optical batch');
-  }
-  if (cylRaw === undefined || cylRaw === null || cylRaw === '') {
-    throw new Error('CYL power is required for optical batch');
+  // Rule 1: SPH and CYL are always required (except OTHER)
+  if (cat !== 'OTHER') {
+    if (sphRaw === undefined || sphRaw === null || sphRaw === '') {
+      throw new Error('SPH power is required for optical batch');
+    }
+    if (cylRaw === undefined || cylRaw === null || cylRaw === '') {
+      throw new Error('CYL power is required for optical batch');
+    }
   }
 
   // Category Specific Rule: Single Vision (SV)
   if (cat === 'SV') {
-    // SV does NOT have axis or add or side
-    if (axisRaw !== undefined && axisRaw !== null && axisRaw !== '' && Number(axisRaw) !== 0) {
-      throw new Error('Single Vision (SV) lenses do not have AXIS. AXIS must not be provided.');
+    // If CYL = 0: AXIS = 0 (do not require user to enter axis when CYL is 0)
+    if (cylNum === 0) {
+      axisNum = 0;
+    } else {
+      // If CYL != 0: AXIS is supported (0 to 180 degrees)
+      if (axisNum < 0 || axisNum > 180) {
+        throw new Error('AXIS must be between 0 and 180 degrees.');
+      }
     }
     if (addRaw !== undefined && addRaw !== null && addRaw !== '' && Number(addRaw) !== 0) {
       throw new Error('Single Vision (SV) lenses do not have ADD power.');
     }
-    axisNum = 0;
     addNum = 0;
     sideNormalized = 'NONE';
   }
 
   // Category Specific Rule: Kryptok Bifocal (KT)
   if (cat === 'KT') {
-    // KT has SPH, CYL, AXIS, ADD. No side.
+    // KT has SPH, CYL, AXIS (when CYL != 0), ADD. No side.
     if (cylNum !== 0) {
       if (axisRaw === undefined || axisRaw === null || axisRaw === '' || isNaN(Number(axisRaw))) {
         throw new Error('AXIS is required for Kryptok (KT) lenses when CYL != 0.');
@@ -103,7 +109,7 @@ export function validateOpticalPower(
 
   // Category Specific Rule: Progressive Lens (PROG)
   if (cat === 'PROG') {
-    // PROG has SPH, CYL, AXIS, ADD, SIDE (R, L, BE)
+    // PROG has SPH, CYL, AXIS (when CYL != 0), ADD, SIDE (R, L, BE)
     if (cylNum !== 0) {
       if (axisRaw === undefined || axisRaw === null || axisRaw === '' || isNaN(Number(axisRaw))) {
         throw new Error('AXIS is required for Progressive (PROG) lenses when CYL != 0.');
@@ -122,6 +128,13 @@ export function validateOpticalPower(
     sideNormalized = sideUpper as 'R' | 'L' | 'BE';
   }
 
+  // Category Specific Rule: OTHER
+  if (cat === 'OTHER') {
+    axisNum = 0;
+    addNum = 0;
+    sideNormalized = 'NONE';
+  }
+
   // Generate canonical, immutable identity key
   const sphStr = sphNum.toFixed(2);
   const cylStr = cylNum.toFixed(2);
@@ -130,11 +143,15 @@ export function validateOpticalPower(
 
   let identityKey = '';
   if (cat === 'SV') {
-    identityKey = `SV:SPH=${sphStr}:CYL=${cylStr}`;
+    identityKey = axisNum > 0
+      ? `SV:SPH=${sphStr}:CYL=${cylStr}:AXIS=${axisStr}`
+      : `SV:SPH=${sphStr}:CYL=${cylStr}`;
   } else if (cat === 'KT') {
     identityKey = `KT:SPH=${sphStr}:CYL=${cylStr}:AXIS=${axisStr}:ADD=${addStr}`;
   } else if (cat === 'PROG') {
     identityKey = `PROG:SPH=${sphStr}:CYL=${cylStr}:AXIS=${axisStr}:ADD=${addStr}:SIDE=${sideNormalized}`;
+  } else {
+    identityKey = `OTHER:SPH=${sphStr}:CYL=${cylStr}`;
   }
 
   return {
@@ -144,7 +161,7 @@ export function validateOpticalPower(
     addNum,
     sideNormalized,
     identityKey,
-    categoryCode: cat as 'SV' | 'KT' | 'PROG',
+    categoryCode: cat as 'SV' | 'KT' | 'PROG' | 'OTHER',
   };
 }
 
@@ -186,13 +203,15 @@ export async function findOrCreateOpticalBatch(input: OpticalPowerInput) {
       id: uniqueItems.id,
       name: uniqueItems.name,
       code: uniqueItems.code,
+      maintainBatches: uniqueItems.maintainBatches,
+      opticalCategory: uniqueItems.opticalCategory,
       primaryItemId: uniqueItems.primaryItemId,
       categoryCode: categories.code,
       categoryId: categories.id,
     })
     .from(uniqueItems)
-    .innerJoin(primaryItems, eq(uniqueItems.primaryItemId, primaryItems.id))
-    .innerJoin(categories, eq(primaryItems.categoryId, categories.id))
+    .leftJoin(primaryItems, eq(uniqueItems.primaryItemId, primaryItems.id))
+    .leftJoin(categories, eq(primaryItems.categoryId, categories.id))
     .where(and(eq(uniqueItems.id, uniqueItemId), eq(uniqueItems.businessId, businessId)))
     .limit(1);
 
@@ -200,12 +219,42 @@ export async function findOrCreateOpticalBatch(input: OpticalPowerInput) {
     throw new Error(`Unique Item ${uniqueItemId} not found for business ${businessId}`);
   }
 
-  const categoryId = input.categoryId || uItem.categoryId;
-  const categoryCode = uItem.categoryCode;
+  // DIRECT BATCH CREATE PROTECTION: Validate maintainBatches is enabled
+  if (!uItem.maintainBatches) {
+    const err: any = new Error('Batch tracking is not enabled for this Stock Item.');
+    err.code = 'BATCH_TRACKING_DISABLED';
+    throw err;
+  }
+
+  // Direct Stock Item Category drives batch parameters
+  const categoryCode = uItem.opticalCategory || uItem.categoryCode || 'SV';
+  let categoryId = input.categoryId || uItem.categoryId;
+
+  // Preserve legacy categoryId foreign key on opticalBatches if present
+  if (!categoryId) {
+    const [matchingCat] = await db
+      .select({ id: categories.id, code: categories.code })
+      .from(categories)
+      .where(and(
+        or(eq(categories.businessId, businessId), sql`${categories.businessId} IS NULL`),
+        eq(categories.code, categoryCode)
+      ))
+      .limit(1);
+    if (matchingCat) {
+      categoryId = matchingCat.id;
+    } else {
+      const [firstCat] = await db
+        .select({ id: categories.id })
+        .from(categories)
+        .where(or(eq(categories.businessId, businessId), sql`${categories.businessId} IS NULL`))
+        .limit(1);
+      if (firstCat) categoryId = firstCat.id;
+    }
+  }
 
   // 2. Validate and produce canonical identity
   const validated = validateOpticalPower(
-    categoryCode,
+    categoryCode || 'SV',
     input.sph,
     input.cyl,
     input.axis,
@@ -440,12 +489,13 @@ export async function updateOpticalBatch(
       id: uniqueItems.id,
       name: uniqueItems.name,
       code: uniqueItems.code,
+      maintainBatches: uniqueItems.maintainBatches,
       categoryId: primaryItems.categoryId,
       categoryCode: categories.code,
     })
     .from(uniqueItems)
-    .innerJoin(primaryItems, eq(uniqueItems.primaryItemId, primaryItems.id))
-    .innerJoin(categories, eq(primaryItems.categoryId, categories.id))
+    .leftJoin(primaryItems, eq(uniqueItems.primaryItemId, primaryItems.id))
+    .leftJoin(categories, eq(primaryItems.categoryId, categories.id))
     .where(and(eq(uniqueItems.id, targetUniqueItemId), eq(uniqueItems.businessId, businessId)))
     .limit(1);
 
@@ -453,7 +503,13 @@ export async function updateOpticalBatch(
     throw new Error(`Unique item ${targetUniqueItemId} not found`);
   }
 
-  const categoryCode = uItem.categoryCode;
+  if (!uItem.maintainBatches) {
+    const err: any = new Error('Batch tracking is not enabled for this Stock Item.');
+    err.code = 'BATCH_TRACKING_DISABLED';
+    throw err;
+  }
+
+  const categoryCode = uItem.categoryCode || 'SV';
 
   const sph = input.sph !== undefined ? input.sph : current.sph;
   const cyl = input.cyl !== undefined ? input.cyl : current.cyl;

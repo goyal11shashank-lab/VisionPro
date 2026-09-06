@@ -9,6 +9,7 @@ import {
 import { eq, and, desc, sql, ilike, or, ne } from 'drizzle-orm';
 import { recordAuditLog } from '../services/auditService.js';
 import { findOrCreateOpticalBatch, OpticalPowerInput, validateOpticalPower, updateOpticalBatch } from '../services/opticalMasterService.js';
+import { rankSearchMatch, formatOpticalBatchName } from '../utils/searchNormalization.js';
 import { z } from 'zod';
 
 const router = Router();
@@ -1680,17 +1681,19 @@ router.post('/primary-items/bulk-delete', requireAnyPermission(['master:delete',
 // ==========================================
 
 const uniqueItemSchema = z.object({
-  primaryItemId: z.string().uuid('Primary Item is required'),
-  name: z.string().min(1, 'Unique item name is required'),
-  code: z.string().min(1, 'Unique item code is required').toUpperCase(),
+  primaryItemId: z.string().uuid('Invalid Primary Item ID').optional().nullable(),
+  name: z.string().trim().min(1, 'Stock item name is required'),
+  code: z.string().trim().min(1, 'Stock item code is required').toUpperCase(),
   description: z.string().optional().nullable(),
+  maintainBatches: z.boolean().default(false),
+  opticalCategory: z.enum(['SV', 'KT', 'PROG', 'OTHER']).default('SV'),
   purchaseRate: z.union([z.number(), z.string()]).default(0),
   lastPurchasePrice: z.union([z.number(), z.string()]).default(0),
   mrp: z.union([z.number(), z.string()]).default(0),
   status: z.enum(['ACTIVE', 'INACTIVE']).default('ACTIVE'),
 });
 
-router.get('/unique-items', requirePermission('master:view'), async (req: Request, res: Response): Promise<void> => {
+router.get(['/unique-items', '/stock-items'], requirePermission('master:view'), async (req: Request, res: Response): Promise<void> => {
   try {
     const bizId = req.user!.currentBusinessId;
     const { primaryItemId, search } = req.query;
@@ -1701,6 +1704,9 @@ router.get('/unique-items', requirePermission('master:view'), async (req: Reques
         name: uniqueItems.name,
         code: uniqueItems.code,
         description: uniqueItems.description,
+        maintainBatches: uniqueItems.maintainBatches,
+        opticalCategory: uniqueItems.opticalCategory,
+        batchesCount: sql<number>`(SELECT COUNT(*)::int FROM "optical_batches" WHERE "optical_batches"."unique_item_id" = ${uniqueItems.id})`,
         purchaseRate: uniqueItems.purchaseRate,
         lastPurchasePrice: uniqueItems.lastPurchasePrice,
         mrp: uniqueItems.mrp,
@@ -1712,40 +1718,53 @@ router.get('/unique-items', requirePermission('master:view'), async (req: Reques
         primaryItemCode: primaryItems.code,
         categoryId: primaryItems.categoryId,
         categoryName: categories.name,
-        categoryCode: categories.code,
+        categoryCode: sql<string>`COALESCE(${uniqueItems.opticalCategory}, ${categories.code}, 'SV')`,
         baseName: bases.name,
         baseCode: bases.code,
       })
       .from(uniqueItems)
-      .innerJoin(primaryItems, eq(uniqueItems.primaryItemId, primaryItems.id))
-      .innerJoin(categories, eq(primaryItems.categoryId, categories.id))
-      .innerJoin(bases, eq(primaryItems.baseId, bases.id))
+      .leftJoin(primaryItems, eq(uniqueItems.primaryItemId, primaryItems.id))
+      .leftJoin(categories, eq(primaryItems.categoryId, categories.id))
+      .leftJoin(bases, eq(primaryItems.baseId, bases.id))
       .where(eq(uniqueItems.businessId, bizId))
       .orderBy(desc(uniqueItems.createdAt));
 
     let filtered = rows;
     if (primaryItemId) filtered = filtered.filter(r => r.primaryItemId === primaryItemId);
     if (search && typeof search === 'string') {
-      const s = search.toLowerCase();
-      filtered = filtered.filter(r => r.name.toLowerCase().includes(s) || r.code.toLowerCase().includes(s) || r.primaryItemName.toLowerCase().includes(s));
+      filtered = rankSearchMatch(filtered, search, r => ({
+        id: r.id,
+        name: r.name,
+        code: r.code,
+        categoryCode: r.opticalCategory || r.categoryCode,
+        rawText: `${r.primaryItemName || ''} ${r.primaryItemCode || ''} ${r.description || ''}`,
+      }));
     }
 
-    res.json({ success: true, uniqueItems: filtered });
+    res.json({ success: true, uniqueItems: filtered, stockItems: filtered });
   } catch (error: any) {
-    res.status(500).json({ error: error.message || 'Failed to fetch unique items' });
+    res.status(500).json({ error: error.message || 'Failed to fetch stock items' });
   }
 });
 
-router.post('/unique-items', requirePermission('master:create'), async (req: Request, res: Response): Promise<void> => {
+router.post(['/unique-items', '/stock-items'], requirePermission('master:create'), async (req: Request, res: Response): Promise<void> => {
   try {
     const bizId = req.user!.currentBusinessId;
-    const parsed = uniqueItemSchema.safeParse(req.body);
+    const rawCat = req.body.opticalCategory || req.body.optical_category || req.body.category || req.body.itemCategory || req.body.item_category;
+    const bodyToParse = {
+      ...req.body,
+      maintainBatches: req.body.maintainBatches !== undefined ? req.body.maintainBatches : req.body.maintain_batches,
+      opticalCategory: rawCat && ['SV', 'KT', 'PROG', 'OTHER'].includes(String(rawCat).toUpperCase())
+        ? String(rawCat).toUpperCase()
+        : 'SV',
+    };
+    const parsed = uniqueItemSchema.safeParse(bodyToParse);
     if (!parsed.success) {
-      res.status(400).json({ error: parsed.error.issues[0]?.message || 'Invalid unique item data' });
+      res.status(400).json({ error: parsed.error.issues[0]?.message || 'Invalid stock item data' });
       return;
     }
 
-    const { primaryItemId, name, code, description, purchaseRate, lastPurchasePrice, mrp, status } = parsed.data;
+    const { primaryItemId, name, code, description, maintainBatches, opticalCategory, purchaseRate, lastPurchasePrice, mrp, status } = parsed.data;
 
     const existing = await db
       .select()
@@ -1754,7 +1773,7 @@ router.post('/unique-items', requirePermission('master:create'), async (req: Req
       .limit(1);
 
     if (existing.length > 0) {
-      res.status(409).json({ error: `Unique Item with code "${code}" already exists.` });
+      res.status(409).json({ error: `Stock Item with code "${code}" already exists.` });
       return;
     }
 
@@ -1762,10 +1781,12 @@ router.post('/unique-items', requirePermission('master:create'), async (req: Req
       .insert(uniqueItems)
       .values({
         businessId: bizId,
-        primaryItemId,
-        name,
-        code,
-        description,
+        primaryItemId: primaryItemId ? primaryItemId : null,
+        name: name.trim(),
+        code: code.trim().toUpperCase(),
+        description: description || null,
+        maintainBatches: Boolean(maintainBatches),
+        opticalCategory,
         purchaseRate: String(purchaseRate),
         lastPurchasePrice: String(lastPurchasePrice),
         mrp: String(mrp),
@@ -1786,20 +1807,20 @@ router.post('/unique-items', requirePermission('master:create'), async (req: Req
       req,
     });
 
-    res.status(201).json({ success: true, uniqueItem: created });
+    res.status(201).json({ success: true, uniqueItem: created, stockItem: created });
   } catch (error: any) {
-    res.status(500).json({ error: error.message || 'Failed to create unique item' });
+    res.status(500).json({ error: error.message || 'Failed to create stock item' });
   }
 });
 
-router.patch('/unique-items/:id', requireAnyPermission(['master:edit', 'master.edit', 'master:manage', 'master:create']), async (req: Request, res: Response): Promise<void> => {
+router.patch(['/unique-items/:id', '/stock-items/:id'], requireAnyPermission(['master:edit', 'master.edit', 'master:manage', 'master:create']), async (req: Request, res: Response): Promise<void> => {
   try {
     const bizId = req.user!.currentBusinessId;
     const { id } = req.params;
 
     const [current] = await db.select().from(uniqueItems).where(and(eq(uniqueItems.id, id), eq(uniqueItems.businessId, bizId))).limit(1);
     if (!current) {
-      res.status(404).json({ error: 'Unique Item not found' });
+      res.status(404).json({ error: 'Stock Item not found' });
       return;
     }
 
@@ -1818,9 +1839,88 @@ router.patch('/unique-items/:id', requireAnyPermission(['master:edit', 'master.e
         )
         .limit(1);
       if (existing) {
-        res.status(400).json({ error: `Unique item with code "${codeToUpdate}" already exists.` });
+        res.status(400).json({ error: `Stock item with code "${codeToUpdate}" already exists.` });
         return;
       }
+    }
+
+    let primaryItemIdToSet = current.primaryItemId;
+    if (req.body.primaryItemId !== undefined) {
+      primaryItemIdToSet = req.body.primaryItemId === null || req.body.primaryItemId === '' ? null : req.body.primaryItemId;
+    }
+
+    let maintainBatchesToSet = current.maintainBatches;
+    const incomingMaintainBatches = req.body.maintainBatches !== undefined ? req.body.maintainBatches : req.body.maintain_batches;
+
+    if (incomingMaintainBatches !== undefined) {
+      if (typeof incomingMaintainBatches !== 'boolean') {
+        res.status(400).json({ error: 'Maintain Batches must be a boolean (true/false).' });
+        return;
+      }
+
+      if (current.maintainBatches === true && incomingMaintainBatches === false) {
+        // YES -> NO safety validation
+        const batchCheck = await pool.query(
+          `SELECT id FROM "optical_batches" WHERE "unique_item_id" = $1 LIMIT 1`,
+          [id]
+        );
+
+        if (batchCheck.rows.length > 0) {
+          const stockCheck = await pool.query(
+            `SELECT 
+               COALESCE(SUM(os.physical_stock), 0) as total_physical,
+               COALESCE(SUM(os.reserved_stock), 0) as total_reserved
+             FROM "optical_stocks" os
+             JOIN "optical_batches" ob ON os.batch_id = ob.id
+             WHERE ob.unique_item_id = $1`,
+            [id]
+          );
+          const totalPhysical = Number(stockCheck.rows[0]?.total_physical || 0);
+          const totalReserved = Number(stockCheck.rows[0]?.total_reserved || 0);
+
+          if (totalPhysical > 0 || totalReserved > 0) {
+            res.status(400).json({
+              error: 'Maintain Batches cannot be disabled because this Stock Item has batch-wise inventory or transaction history.'
+            });
+            return;
+          }
+
+          const historyCheck = await pool.query(
+            `SELECT 
+               (SELECT COUNT(*)::int FROM "stock_ledger" sl JOIN "optical_batches" ob ON sl.batch_id = ob.id WHERE ob.unique_item_id = $1) as ledger_count,
+               (SELECT COUNT(*)::int FROM "sales_invoice_line_batches" silb JOIN "optical_batches" ob ON silb.batch_id = ob.id WHERE ob.unique_item_id = $1) as sales_count,
+               (SELECT COUNT(*)::int FROM "purchase_invoice_line_batches" pilb JOIN "optical_batches" ob ON pilb.batch_id = ob.id WHERE ob.unique_item_id = $1) as purchase_count,
+               (SELECT COUNT(*)::int FROM "purchase_lots" pl WHERE pl.unique_item_id = $1 OR pl.batch_id IN (SELECT id FROM "optical_batches" WHERE unique_item_id = $1)) as lot_count,
+               (SELECT COUNT(*)::int FROM "sales_order_line_batches" solb JOIN "optical_batches" ob ON solb.batch_id = ob.id WHERE ob.unique_item_id = $1) as order_count,
+               (SELECT COUNT(*)::int FROM "sales_return_line_batches" srlb JOIN "optical_batches" ob ON srlb.batch_id = ob.id WHERE ob.unique_item_id = $1) as sales_return_count,
+               (SELECT COUNT(*)::int FROM "purchase_return_line_batches" prlb JOIN "optical_batches" ob ON prlb.batch_id = ob.id WHERE ob.unique_item_id = $1) as purchase_return_count,
+               (SELECT COUNT(*)::int FROM "stock_reservations" sr JOIN "optical_batches" ob ON sr.batch_id = ob.id WHERE ob.unique_item_id = $1) as reservation_count
+            `,
+            [id]
+          );
+          const h = historyCheck.rows[0];
+          const totalHistory = (h?.ledger_count || 0) + (h?.sales_count || 0) + (h?.purchase_count || 0) +
+                               (h?.lot_count || 0) + (h?.order_count || 0) + (h?.sales_return_count || 0) +
+                               (h?.purchase_return_count || 0) + (h?.reservation_count || 0);
+
+          if (totalHistory > 0) {
+            res.status(400).json({
+              error: 'Maintain Batches cannot be disabled because this Stock Item has batch-wise inventory or transaction history.'
+            });
+            return;
+          }
+        }
+
+        maintainBatchesToSet = false;
+      } else if (current.maintainBatches === false && incomingMaintainBatches === true) {
+        maintainBatchesToSet = true;
+      }
+    }
+
+    let opticalCategoryToSet = current.opticalCategory;
+    const incomingCat = req.body.opticalCategory || req.body.optical_category || req.body.category || req.body.itemCategory || req.body.item_category;
+    if (incomingCat && ['SV', 'KT', 'PROG', 'OTHER'].includes(String(incomingCat).toUpperCase())) {
+      opticalCategoryToSet = String(incomingCat).toUpperCase();
     }
 
     const [updated] = await db
@@ -1828,8 +1928,10 @@ router.patch('/unique-items/:id', requireAnyPermission(['master:edit', 'master.e
       .set({
         code: codeToUpdate,
         name: req.body.name ?? current.name,
-        primaryItemId: req.body.primaryItemId ?? current.primaryItemId,
-        description: req.body.description ?? current.description,
+        primaryItemId: primaryItemIdToSet,
+        maintainBatches: maintainBatchesToSet,
+        opticalCategory: opticalCategoryToSet,
+        description: req.body.description !== undefined ? req.body.description : current.description,
         purchaseRate: req.body.purchaseRate !== undefined ? String(req.body.purchaseRate) : current.purchaseRate,
         lastPurchasePrice: req.body.lastPurchasePrice !== undefined ? String(req.body.lastPurchasePrice) : current.lastPurchasePrice,
         mrp: req.body.mrp !== undefined ? String(req.body.mrp) : current.mrp,
@@ -1852,13 +1954,13 @@ router.patch('/unique-items/:id', requireAnyPermission(['master:edit', 'master.e
       req,
     });
 
-    res.json({ success: true, uniqueItem: updated });
+    res.json({ success: true, uniqueItem: updated, stockItem: updated });
   } catch (error: any) {
-    res.status(500).json({ error: error.message || 'Failed to update unique item' });
+    res.status(500).json({ error: error.message || 'Failed to update stock item' });
   }
 });
 
-router.delete('/unique-items/:id', requireAnyPermission(['master:delete', 'master:edit']), async (req: Request, res: Response): Promise<void> => {
+router.delete(['/unique-items/:id', '/stock-items/:id'], requireAnyPermission(['master:delete', 'master:edit']), async (req: Request, res: Response): Promise<void> => {
   try {
     const bizId = req.user!.currentBusinessId;
     const { id } = req.params;
@@ -1870,7 +1972,7 @@ router.delete('/unique-items/:id', requireAnyPermission(['master:delete', 'maste
       .limit(1);
 
     if (!current) {
-      res.status(404).json({ error: 'Unique Item not found' });
+      res.status(404).json({ error: 'Stock Item not found' });
       return;
     }
 
@@ -1922,14 +2024,14 @@ router.delete('/unique-items/:id', requireAnyPermission(['master:delete', 'maste
 
     if (sales_invoice_lines_count > 0 || purchase_invoice_lines_count > 0 || sales_return_lines_count > 0 || purchase_return_lines_count > 0) {
       res.status(400).json({
-        error: `Cannot delete Unique Item "${current.name}" (${current.code}): Sales or Purchase Invoices / Returns have already been recorded with this SKU item. Invoiced items cannot be deleted to preserve financial audit trails.`
+        error: `Cannot delete Stock Item "${current.name}" (${current.code}): Sales or Purchase Invoices / Returns have already been recorded with this SKU item. Invoiced items cannot be deleted to preserve financial audit trails.`
       });
       return;
     }
 
     if (sales_order_lines_count > 0) {
       res.status(400).json({
-        error: `Cannot delete Unique Item "${current.name}" (${current.code}): Active Sales Orders reference this SKU item. Cancel or complete the orders first.`
+        error: `Cannot delete Stock Item "${current.name}" (${current.code}): Active Sales Orders reference this SKU item. Cancel or complete the orders first.`
       });
       return;
     }
@@ -1984,19 +2086,19 @@ router.delete('/unique-items/:id', requireAnyPermission(['master:delete', 'maste
 
     res.json({
       success: true,
-      message: `Unique Item "${current.name}" (${current.code}) ${optical_batches_count > 0 ? `and ${optical_batches_count} optical power batch(es)` : ''} deleted successfully from database.`
+      message: `Stock Item "${current.name}" (${current.code}) ${optical_batches_count > 0 ? `and ${optical_batches_count} optical power batch(es)` : ''} deleted successfully from database.`
     });
   } catch (error: any) {
-    res.status(500).json({ error: error.message || 'Failed to delete unique item' });
+    res.status(500).json({ error: error.message || 'Failed to delete stock item' });
   }
 });
 
-router.post('/unique-items/bulk-delete', requireAnyPermission(['master:delete', 'master:edit']), async (req: Request, res: Response): Promise<void> => {
+router.post(['/unique-items/bulk-delete', '/stock-items/bulk-delete'], requireAnyPermission(['master:delete', 'master:edit']), async (req: Request, res: Response): Promise<void> => {
   try {
     const bizId = req.user!.currentBusinessId;
     const { ids } = req.body;
     if (!Array.isArray(ids) || ids.length === 0) {
-      res.status(400).json({ error: 'Please provide an array of Unique Item IDs to delete.' });
+      res.status(400).json({ error: 'Please provide an array of Stock Item IDs to delete.' });
       return;
     }
 
@@ -2012,7 +2114,7 @@ router.post('/unique-items/bulk-delete', requireAnyPermission(['master:delete', 
           .limit(1);
 
         if (!current) {
-          errors.push(`Unique Item ID ${id} not found.`);
+          errors.push(`Stock Item ID ${id} not found.`);
           continue;
         }
 
@@ -2087,7 +2189,7 @@ router.post('/unique-items/bulk-delete', requireAnyPermission(['master:delete', 
 
         deletedCount++;
       } catch (itemErr: any) {
-        errors.push(`Failed to delete unique item ${id}: ${itemErr.message}`);
+        errors.push(`Failed to delete stock item ${id}: ${itemErr.message}`);
       }
     }
 
@@ -2098,11 +2200,11 @@ router.post('/unique-items/bulk-delete', requireAnyPermission(['master:delete', 
       failedCount: errors.length,
       errors,
       message: deletedCount === ids.length
-        ? `Successfully deleted ${deletedCount} unique item(s).`
-        : `Deleted ${deletedCount} of ${ids.length} unique item(s). ${errors.length} item(s) could not be deleted.`
+        ? `Successfully deleted ${deletedCount} stock item(s).`
+        : `Deleted ${deletedCount} of ${ids.length} stock item(s). ${errors.length} item(s) could not be deleted.`
     });
   } catch (error: any) {
-    res.status(500).json({ error: error.message || 'Failed to perform bulk delete of unique items' });
+    res.status(500).json({ error: error.message || 'Failed to perform bulk delete of stock items' });
   }
 });
 
@@ -2131,34 +2233,59 @@ router.get('/batches', requirePermission('master:view'), async (req: Request, re
         uniqueItemId: opticalBatches.uniqueItemId,
         uniqueItemName: uniqueItems.name,
         uniqueItemCode: uniqueItems.code,
+        opticalCategory: uniqueItems.opticalCategory,
         primaryItemName: primaryItems.name,
         categoryId: opticalBatches.categoryId,
         categoryName: categories.name,
-        categoryCode: categories.code,
+        categoryCode: sql<string>`COALESCE(${uniqueItems.opticalCategory}, ${categories.code}, 'SV')`,
         physicalStock: opticalStocks.physicalStock,
         reservedStock: opticalStocks.reservedStock,
         availableStock: opticalStocks.availableStock,
       })
       .from(opticalBatches)
       .innerJoin(uniqueItems, eq(opticalBatches.uniqueItemId, uniqueItems.id))
-      .innerJoin(primaryItems, eq(uniqueItems.primaryItemId, primaryItems.id))
+      .leftJoin(primaryItems, eq(uniqueItems.primaryItemId, primaryItems.id))
       .innerJoin(categories, eq(opticalBatches.categoryId, categories.id))
       .leftJoin(opticalStocks, eq(opticalBatches.id, opticalStocks.batchId))
       .where(eq(opticalBatches.businessId, bizId))
       .orderBy(desc(opticalBatches.createdAt));
 
-    let filtered = rows;
+    const mappedRows = rows.map(r => {
+      const catCode = r.opticalCategory || r.categoryCode || 'SV';
+      const formattedName = formatOpticalBatchName({
+        sph: r.sph,
+        cyl: r.cyl,
+        axis: r.axis,
+        add: r.add,
+        side: r.side,
+        categoryCode: catCode,
+      });
+      return {
+        ...r,
+        categoryCode: catCode,
+        formattedName,
+        name: formattedName,
+      };
+    });
+
+    let filtered = mappedRows;
     if (uniqueItemId) filtered = filtered.filter(r => r.uniqueItemId === uniqueItemId);
     if (categoryId) filtered = filtered.filter(r => r.categoryId === categoryId);
     if (barcode && typeof barcode === 'string') filtered = filtered.filter(r => r.barcode.toLowerCase() === barcode.toLowerCase());
     if (search && typeof search === 'string') {
-      const s = search.toLowerCase();
-      filtered = filtered.filter(r =>
-        r.barcode.toLowerCase().includes(s) ||
-        r.uniqueItemName.toLowerCase().includes(s) ||
-        r.uniqueItemCode.toLowerCase().includes(s) ||
-        r.identityKey.toLowerCase().includes(s)
-      );
+      filtered = rankSearchMatch(filtered, search, r => ({
+        id: r.id,
+        name: r.formattedName,
+        code: r.uniqueItemCode,
+        barcode: r.barcode,
+        sph: r.sph,
+        cyl: r.cyl,
+        axis: r.axis,
+        add: r.add,
+        side: r.side,
+        categoryCode: r.categoryCode,
+        rawText: `${r.uniqueItemName} ${r.barcode} ${r.identityKey}`,
+      }));
     }
 
     res.json({ success: true, batches: filtered });
@@ -2196,7 +2323,7 @@ router.get('/batches/:id', requirePermission('master:view'), async (req: Request
       })
       .from(opticalBatches)
       .innerJoin(uniqueItems, eq(opticalBatches.uniqueItemId, uniqueItems.id))
-      .innerJoin(primaryItems, eq(uniqueItems.primaryItemId, primaryItems.id))
+      .leftJoin(primaryItems, eq(uniqueItems.primaryItemId, primaryItems.id))
       .innerJoin(categories, eq(opticalBatches.categoryId, categories.id))
       .leftJoin(opticalStocks, eq(opticalBatches.id, opticalStocks.batchId))
       .where(and(eq(opticalBatches.id, req.params.id), eq(opticalBatches.businessId, bizId)))
@@ -2259,7 +2386,7 @@ router.post('/batches/find-or-create', requirePermission('master:create'), async
       isNew: result.isNew,
     });
   } catch (error: any) {
-    res.status(400).json({ error: error.message || 'Failed to find or create optical batch' });
+    res.status(400).json({ error: error.message || 'Failed to find or create optical batch', code: error.code });
   }
 });
 
@@ -2344,6 +2471,313 @@ router.patch('/batches/:id/status', requireAnyPermission(['master:edit', 'master
   }
 });
 
+interface BatchReferenceItem {
+  type: string;
+  typeLabel: string;
+  documentId: string;
+  documentNumber: string;
+  status: string;
+  date: string | null;
+  quantity: number;
+  partyName?: string;
+  details?: string;
+}
+
+interface BatchDeletionSafetyResult {
+  canDelete: boolean;
+  error?: string;
+  reasonSummary?: string;
+  references: BatchReferenceItem[];
+  stockInfo: {
+    physicalStock: number;
+    reservedStock: number;
+    availableStock: number;
+    hasLedgerHistory: boolean;
+    ledgerCount: number;
+  };
+}
+
+async function checkBatchDeletionSafety(batchId: string): Promise<BatchDeletionSafetyResult> {
+  const references: BatchReferenceItem[] = [];
+
+  // 1. Sales Invoices referencing this batch
+  const salesInvRes = await pool.query(
+    `SELECT 
+      si.id AS doc_id,
+      si.invoice_number AS doc_number,
+      si.status AS doc_status,
+      si.invoice_date AS doc_date,
+      silb.quantity,
+      p.name AS party_name
+    FROM sales_invoice_line_batches silb
+    JOIN sales_invoice_lines sil ON silb.sales_invoice_line_id = sil.id
+    JOIN sales_invoices si ON sil.sales_invoice_id = si.id
+    LEFT JOIN parties p ON si.party_id = p.id
+    WHERE silb.batch_id = $1`,
+    [batchId]
+  );
+  for (const r of salesInvRes.rows) {
+    references.push({
+      type: 'SALES_INVOICE',
+      typeLabel: 'Sales Invoice',
+      documentId: r.doc_id,
+      documentNumber: r.doc_number,
+      status: r.doc_status,
+      date: r.doc_date ? new Date(r.doc_date).toISOString() : null,
+      quantity: parseFloat(r.quantity) || 0,
+      partyName: r.party_name || 'Customer',
+    });
+  }
+
+  // 2. Purchase Invoices referencing this batch
+  const purchInvRes = await pool.query(
+    `SELECT 
+      pi.id AS doc_id,
+      pi.invoice_number AS doc_number,
+      pi.status AS doc_status,
+      pi.invoice_date AS doc_date,
+      pilb.quantity,
+      p.name AS party_name
+    FROM purchase_invoice_line_batches pilb
+    JOIN purchase_invoice_lines pil ON pilb.purchase_invoice_line_id = pil.id
+    JOIN purchase_invoices pi ON pil.purchase_invoice_id = pi.id
+    LEFT JOIN parties p ON pi.supplier_party_id = p.id
+    WHERE pilb.batch_id = $1`,
+    [batchId]
+  );
+  for (const r of purchInvRes.rows) {
+    references.push({
+      type: 'PURCHASE_INVOICE',
+      typeLabel: 'Purchase Invoice',
+      documentId: r.doc_id,
+      documentNumber: r.doc_number,
+      status: r.doc_status,
+      date: r.doc_date ? new Date(r.doc_date).toISOString() : null,
+      quantity: parseFloat(r.quantity) || 0,
+      partyName: r.party_name || 'Supplier',
+    });
+  }
+
+  // 3. Purchase Lots
+  const lotsRes = await pool.query(
+    `SELECT 
+      pl.id AS doc_id,
+      COALESCE(pi.invoice_number, 'LOT-' || SUBSTRING(pl.id::text, 1, 8)) AS doc_number,
+      'ACTIVE' AS doc_status,
+      pl.received_at AS doc_date,
+      pl.quantity_received AS quantity
+    FROM purchase_lots pl
+    LEFT JOIN purchase_invoices pi ON pl.purchase_invoice_id = pi.id
+    WHERE pl.batch_id = $1`,
+    [batchId]
+  );
+  for (const r of lotsRes.rows) {
+    references.push({
+      type: 'PURCHASE_LOT',
+      typeLabel: 'Purchase Lot',
+      documentId: r.doc_id,
+      documentNumber: r.doc_number || 'Lot',
+      status: 'ACTIVE',
+      date: r.doc_date ? new Date(r.doc_date).toISOString() : null,
+      quantity: parseFloat(r.quantity) || 0,
+    });
+  }
+
+  // 4. Sales Returns
+  const salesRetRes = await pool.query(
+    `SELECT 
+      sr.id AS doc_id,
+      sr.return_number AS doc_number,
+      sr.status AS doc_status,
+      sr.return_date AS doc_date,
+      srlb.quantity,
+      p.name AS party_name
+    FROM sales_return_line_batches srlb
+    JOIN sales_return_lines srl ON srlb.sales_return_line_id = srl.id
+    JOIN sales_returns sr ON srl.sales_return_id = sr.id
+    LEFT JOIN parties p ON sr.party_id = p.id
+    WHERE srlb.batch_id = $1`,
+    [batchId]
+  );
+  for (const r of salesRetRes.rows) {
+    references.push({
+      type: 'SALES_RETURN',
+      typeLabel: 'Sales Return',
+      documentId: r.doc_id,
+      documentNumber: r.doc_number,
+      status: r.doc_status,
+      date: r.doc_date ? new Date(r.doc_date).toISOString() : null,
+      quantity: parseFloat(r.quantity) || 0,
+      partyName: r.party_name || 'Customer',
+    });
+  }
+
+  // 5. Purchase Returns
+  const purchRetRes = await pool.query(
+    `SELECT 
+      pr.id AS doc_id,
+      pr.return_number AS doc_number,
+      pr.status AS doc_status,
+      pr.return_date AS doc_date,
+      prlb.quantity,
+      p.name AS party_name
+    FROM purchase_return_line_batches prlb
+    JOIN purchase_return_lines prl ON prlb.purchase_return_line_id = prl.id
+    JOIN purchase_returns pr ON prl.purchase_return_id = pr.id
+    LEFT JOIN parties p ON pr.supplier_party_id = p.id
+    WHERE prlb.batch_id = $1`,
+    [batchId]
+  );
+  for (const r of purchRetRes.rows) {
+    references.push({
+      type: 'PURCHASE_RETURN',
+      typeLabel: 'Purchase Return',
+      documentId: r.doc_id,
+      documentNumber: r.doc_number,
+      status: r.doc_status,
+      date: r.doc_date ? new Date(r.doc_date).toISOString() : null,
+      quantity: parseFloat(r.quantity) || 0,
+      partyName: r.party_name || 'Supplier',
+    });
+  }
+
+  // 6. Sales Orders
+  const salesOrdRes = await pool.query(
+    `SELECT 
+      so.id AS doc_id,
+      so.order_number AS doc_number,
+      so.status AS doc_status,
+      so.order_date AS doc_date,
+      solb.quantity,
+      p.name AS party_name
+    FROM sales_order_line_batches solb
+    JOIN sales_order_lines sol ON solb.sales_order_line_id = sol.id
+    JOIN sales_orders so ON sol.sales_order_id = so.id
+    LEFT JOIN parties p ON so.party_id = p.id
+    WHERE solb.batch_id = $1`,
+    [batchId]
+  );
+  for (const r of salesOrdRes.rows) {
+    references.push({
+      type: 'SALES_ORDER',
+      typeLabel: 'Sales Order',
+      documentId: r.doc_id,
+      documentNumber: r.doc_number,
+      status: r.doc_status,
+      date: r.doc_date ? new Date(r.doc_date).toISOString() : null,
+      quantity: parseFloat(r.quantity) || 0,
+      partyName: r.party_name || 'Customer',
+    });
+  }
+
+  // 7. Stock Ledger Records Count
+  const ledgerCountRes = await pool.query(
+    `SELECT COUNT(*)::int AS count FROM stock_ledger WHERE batch_id = $1`,
+    [batchId]
+  );
+  const ledgerCount = ledgerCountRes.rows[0]?.count || 0;
+
+  // 8. Stock Levels & Reservations
+  const stockRes = await pool.query(
+    `SELECT 
+      COALESCE(physical_stock, 0) AS physical_stock,
+      COALESCE(reserved_stock, 0) AS reserved_stock,
+      COALESCE(available_stock, 0) AS available_stock
+    FROM optical_stocks
+    WHERE batch_id = $1`,
+    [batchId]
+  );
+  const physicalStock = parseFloat(stockRes.rows[0]?.physical_stock) || 0;
+  const reservedStock = parseFloat(stockRes.rows[0]?.reserved_stock) || 0;
+  const availableStock = parseFloat(stockRes.rows[0]?.available_stock) || 0;
+
+  const resCountRes = await pool.query(
+    `SELECT COUNT(*)::int AS count FROM stock_reservations WHERE batch_id = $1`,
+    [batchId]
+  );
+  const reservationCount = resCountRes.rows[0]?.count || 0;
+
+  const stockInfo = {
+    physicalStock,
+    reservedStock,
+    availableStock,
+    hasLedgerHistory: ledgerCount > 0,
+    ledgerCount,
+  };
+
+  // Determine if can delete safely
+  if (references.length > 0) {
+    const docSummary = references
+      .slice(0, 3)
+      .map(ref => `${ref.typeLabel} ${ref.documentNumber} (${ref.status})`)
+      .join(', ');
+    const more = references.length > 3 ? ` and ${references.length - 3} more` : '';
+
+    return {
+      canDelete: false,
+      reasonSummary: 'Batch has active document line references',
+      error: `Cannot delete this batch because it is referenced by ${docSummary}${more}.`,
+      references,
+      stockInfo,
+    };
+  }
+
+  if (ledgerCount > 0) {
+    const slSample = await pool.query(
+      `SELECT transaction_type, reason, created_at, GREATEST(quantity_in, quantity_out) as qty
+       FROM stock_ledger WHERE batch_id = $1 ORDER BY created_at DESC LIMIT 3`,
+      [batchId]
+    );
+    const ledgerRefs: BatchReferenceItem[] = slSample.rows.map(sl => ({
+      type: 'STOCK_LEDGER',
+      typeLabel: sl.transaction_type.replace(/_/g, ' '),
+      documentId: batchId,
+      documentNumber: sl.reason || sl.transaction_type,
+      status: 'RECORDED',
+      date: sl.created_at ? new Date(sl.created_at).toISOString() : null,
+      quantity: parseFloat(sl.qty) || 0,
+      details: sl.reason || undefined,
+    }));
+
+    return {
+      canDelete: false,
+      reasonSummary: 'Batch has recorded stock ledger history',
+      error: `Cannot delete this batch because it has ${ledgerCount} recorded inventory movement(s) in the stock ledger.`,
+      references: ledgerRefs,
+      stockInfo,
+    };
+  }
+
+  if (physicalStock > 0 || reservedStock > 0 || reservationCount > 0) {
+    return {
+      canDelete: false,
+      reasonSummary: 'Batch has active inventory or reservations',
+      error: `Cannot delete this batch because it currently has physical stock (${physicalStock}) or reserved stock (${reservedStock}).`,
+      references: [],
+      stockInfo,
+    };
+  }
+
+  return {
+    canDelete: true,
+    references: [],
+    stockInfo,
+  };
+}
+
+router.get('/batches/:id/dependencies', requireAnyPermission(['master:view', 'inventory:view']), async (req: Request, res: Response): Promise<void> => {
+  try {
+    const { id } = req.params;
+    const safetyCheck = await checkBatchDeletionSafety(id);
+    res.json({
+      success: true,
+      data: safetyCheck,
+    });
+  } catch (error: any) {
+    res.status(500).json({ error: error.message || 'Failed to check batch dependencies' });
+  }
+});
+
 router.delete('/batches/:id', requireAnyPermission(['master:delete', 'master:edit']), async (req: Request, res: Response): Promise<void> => {
   try {
     const bizId = req.user!.currentBusinessId;
@@ -2358,6 +2792,7 @@ router.delete('/batches/:id', requireAnyPermission(['master:delete', 'master:edi
         axis: opticalBatches.axis,
         add: opticalBatches.add,
         side: opticalBatches.side,
+        uniqueItemId: opticalBatches.uniqueItemId,
         identityKey: opticalBatches.identityKey,
         businessId: opticalBatches.businessId,
       })
@@ -2370,69 +2805,29 @@ router.delete('/batches/:id', requireAnyPermission(['master:delete', 'master:edi
       return;
     }
 
-    // Check if any invoices (sales or purchase batches, lots, returns, or order line batches) reference this batch
-    const checkRes = await pool.query(
-      `SELECT 
-        (
-          SELECT COUNT(*)::int 
-          FROM sales_invoice_line_batches silb
-          WHERE silb.batch_id = $1
-        ) AS sales_invoice_batches_count,
-        (
-          SELECT COUNT(*)::int 
-          FROM purchase_invoice_line_batches pilb
-          WHERE pilb.batch_id = $1
-        ) AS purchase_invoice_batches_count,
-        (
-          SELECT COUNT(*)::int 
-          FROM purchase_lots pl
-          WHERE pl.batch_id = $1
-        ) AS purchase_lots_count,
-        (
-          SELECT COUNT(*)::int 
-          FROM sales_return_line_batches srlb
-          WHERE srlb.batch_id = $1
-        ) AS sales_return_batches_count,
-        (
-          SELECT COUNT(*)::int 
-          FROM purchase_return_line_batches prlb
-          WHERE prlb.batch_id = $1
-        ) AS purchase_return_batches_count,
-        (
-          SELECT COUNT(*)::int 
-          FROM sales_order_line_batches solb
-          WHERE solb.batch_id = $1
-        ) AS sales_order_batches_count
-      `,
-      [id]
-    );
+    // Check safety of batch deletion
+    const safetyCheck = await checkBatchDeletionSafety(id);
 
-    const {
-      sales_invoice_batches_count,
-      purchase_invoice_batches_count,
-      purchase_lots_count,
-      sales_return_batches_count,
-      purchase_return_batches_count,
-      sales_order_batches_count,
-    } = checkRes.rows[0];
-
-    if (sales_invoice_batches_count > 0 || purchase_invoice_batches_count > 0 || purchase_lots_count > 0 || sales_return_batches_count > 0 || purchase_return_batches_count > 0) {
+    if (!safetyCheck.canDelete) {
       res.status(400).json({
-        error: `Cannot delete Optical Batch (${current.barcode}, SPH ${current.sph} CYL ${current.cyl}): Sales or Purchase Invoices / Lots / Returns have already recorded transactions with this optical power batch. Invoiced batches cannot be deleted.`
+        success: false,
+        canDelete: false,
+        error: safetyCheck.error,
+        reasonSummary: safetyCheck.reasonSummary,
+        references: safetyCheck.references,
+        stockInfo: safetyCheck.stockInfo,
+        batch: {
+          id: current.id,
+          barcode: current.barcode,
+          sph: current.sph,
+          cyl: current.cyl,
+          uniqueItemId: current.uniqueItemId,
+        },
       });
       return;
     }
 
-    if (sales_order_batches_count > 0) {
-      res.status(400).json({
-        error: `Cannot delete Optical Batch (${current.barcode}): Active Sales Orders reference this optical batch power. Cancel or complete the orders first.`
-      });
-      return;
-    }
-
-    // Delete associated stock ledger, reservations, optical stock, and batch record
-    await pool.query(`DELETE FROM stock_ledger WHERE batch_id = $1`, [id]);
-    await pool.query(`DELETE FROM stock_reservations WHERE batch_id = $1`, [id]);
+    // Safe to delete: zero stock, zero reservations, zero ledger history, zero document references
     await pool.query(`DELETE FROM optical_stocks WHERE batch_id = $1`, [id]);
     await db.delete(opticalBatches).where(and(eq(opticalBatches.id, id), eq(opticalBatches.businessId, bizId)));
 
@@ -2449,6 +2844,7 @@ router.delete('/batches/:id', requireAnyPermission(['master:delete', 'master:edi
 
     res.json({
       success: true,
+      canDelete: true,
       message: `Optical Batch (${current.barcode}, SPH: ${current.sph}, CYL: ${current.cyl}) deleted successfully from database.`
     });
   } catch (error: any) {
@@ -2467,6 +2863,7 @@ router.post('/batches/bulk-delete', requireAnyPermission(['master:delete', 'mast
 
     let deletedCount = 0;
     const errors: string[] = [];
+    const blockedBatches: any[] = [];
 
     for (const id of ids) {
       try {
@@ -2479,6 +2876,7 @@ router.post('/batches/bulk-delete', requireAnyPermission(['master:delete', 'mast
             axis: opticalBatches.axis,
             add: opticalBatches.add,
             side: opticalBatches.side,
+            uniqueItemId: opticalBatches.uniqueItemId,
             identityKey: opticalBatches.identityKey,
             businessId: opticalBatches.businessId,
           })
@@ -2491,40 +2889,25 @@ router.post('/batches/bulk-delete', requireAnyPermission(['master:delete', 'mast
           continue;
         }
 
-        const checkRes = await pool.query(
-          `SELECT 
-            (SELECT COUNT(*)::int FROM sales_invoice_line_batches silb WHERE silb.batch_id = $1) AS sales_invoice_batches_count,
-            (SELECT COUNT(*)::int FROM purchase_invoice_line_batches pilb WHERE pilb.batch_id = $1) AS purchase_invoice_batches_count,
-            (SELECT COUNT(*)::int FROM purchase_lots pl WHERE pl.batch_id = $1) AS purchase_lots_count,
-            (SELECT COUNT(*)::int FROM sales_return_line_batches srlb WHERE srlb.batch_id = $1) AS sales_return_batches_count,
-            (SELECT COUNT(*)::int FROM purchase_return_line_batches prlb WHERE prlb.batch_id = $1) AS purchase_return_batches_count,
-            (SELECT COUNT(*)::int FROM sales_order_line_batches solb WHERE solb.batch_id = $1) AS sales_order_batches_count
-          `,
-          [id]
-        );
+        const safetyCheck = await checkBatchDeletionSafety(id);
 
-        const {
-          sales_invoice_batches_count,
-          purchase_invoice_batches_count,
-          purchase_lots_count,
-          sales_return_batches_count,
-          purchase_return_batches_count,
-          sales_order_batches_count,
-        } = checkRes.rows[0];
-
-        if (sales_invoice_batches_count > 0 || purchase_invoice_batches_count > 0 || purchase_lots_count > 0 || sales_return_batches_count > 0 || purchase_return_batches_count > 0) {
-          errors.push(`"${current.barcode}" (SPH ${current.sph} CYL ${current.cyl}) has recorded sales/purchase invoices, lots or returns.`);
+        if (!safetyCheck.canDelete) {
+          errors.push(`"${current.barcode}" (${current.sph}/${current.cyl}): ${safetyCheck.error}`);
+          blockedBatches.push({
+            batchId: id,
+            barcode: current.barcode,
+            sph: current.sph,
+            cyl: current.cyl,
+            uniqueItemId: current.uniqueItemId,
+            reason: safetyCheck.reasonSummary,
+            error: safetyCheck.error,
+            references: safetyCheck.references,
+            stockInfo: safetyCheck.stockInfo,
+          });
           continue;
         }
 
-        if (sales_order_batches_count > 0) {
-          errors.push(`"${current.barcode}" has active sales orders.`);
-          continue;
-        }
-
-        // Clean up stock ledger, reservations, stock, and batch
-        await pool.query(`DELETE FROM stock_ledger WHERE batch_id = $1`, [id]);
-        await pool.query(`DELETE FROM stock_reservations WHERE batch_id = $1`, [id]);
+        // Clean up zero stock and batch record
         await pool.query(`DELETE FROM optical_stocks WHERE batch_id = $1`, [id]);
         await db.delete(opticalBatches).where(and(eq(opticalBatches.id, id), eq(opticalBatches.businessId, bizId)));
 
@@ -2551,6 +2934,7 @@ router.post('/batches/bulk-delete', requireAnyPermission(['master:delete', 'mast
       deletedCount,
       failedCount: errors.length,
       errors,
+      blockedBatches,
       message: deletedCount === ids.length
         ? `Successfully deleted ${deletedCount} optical batch(es).`
         : `Deleted ${deletedCount} of ${ids.length} optical batch(es). ${errors.length} item(s) could not be deleted.`

@@ -410,7 +410,7 @@ export const DashboardPage: React.FC<Props> = ({ onNavigate }) => {
           </div>
         </div>
 
-        {/* Top Selling Unique Items */}
+        {/* Top Selling Stock Items */}
         <div className="lg:col-span-2 p-5 rounded-2xl bg-white border border-slate-200 shadow-xs space-y-4">
           <div className="flex items-center justify-between border-b border-slate-100 pb-3">
             <div className="flex items-center gap-2">

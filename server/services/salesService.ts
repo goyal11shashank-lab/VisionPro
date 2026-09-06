@@ -19,6 +19,7 @@ import {
 import { eq, and, desc, count, ilike, or, sql, inArray } from 'drizzle-orm';
 import { calculateLineTax, calculateInvoiceTotals, round2 } from './taxCalculationService.js';
 import { AuditService } from './auditService.js';
+import { rankSearchMatch, formatOpticalBatchName } from '../utils/searchNormalization.js';
 import { PoolClient } from 'pg';
 
 const UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
@@ -281,15 +282,42 @@ export class SalesService {
       .where(and(eq(opticalBatches.businessId, businessId), eq(opticalBatches.uniqueItemId, uniqueItemId)));
 
     const rows = await query;
-    let result = rows.map(r => ({
-      ...r.batch,
-      physicalStock: r.stock ? parseFloat(r.stock.physicalStock) : 0,
-      reservedStock: r.stock ? parseFloat(r.stock.reservedStock) : 0,
-      availableStock: r.stock ? parseFloat(r.stock.availableStock) : 0,
-    }));
+    let result = rows.map(r => {
+      const b = r.batch;
+      const formattedName = formatOpticalBatchName({
+        sph: b.sph,
+        cyl: b.cyl,
+        axis: b.axis,
+        add: b.add,
+        side: b.side,
+        categoryCode: 'SV',
+      });
+      return {
+        ...b,
+        formattedName,
+        physicalStock: r.stock ? parseFloat(r.stock.physicalStock) : 0,
+        reservedStock: r.stock ? parseFloat(r.stock.reservedStock) : 0,
+        availableStock: r.stock ? parseFloat(r.stock.availableStock) : 0,
+      };
+    });
 
     if (options?.onlyInStock) {
       result = result.filter(b => b.availableStock > 0);
+    }
+
+    if (options?.search && typeof options.search === 'string') {
+      result = rankSearchMatch(result, options.search, b => ({
+        id: b.id,
+        name: b.formattedName,
+        code: b.barcode,
+        barcode: b.barcode,
+        sph: b.sph,
+        cyl: b.cyl,
+        axis: b.axis,
+        add: b.add,
+        side: b.side,
+        rawText: `${b.identityKey} ${b.barcode}`,
+      }));
     }
 
     return result;
@@ -1161,7 +1189,7 @@ export class SalesService {
     const [totalCountRes] = await db
       .select({ count: count() })
       .from(salesOrders)
-      .innerJoin(parties, eq(salesOrders.partyId, parties.id))
+      .leftJoin(parties, eq(salesOrders.partyId, parties.id))
       .where(and(...conditions));
 
     const orders = await db
@@ -1170,7 +1198,7 @@ export class SalesService {
         party: parties,
       })
       .from(salesOrders)
-      .innerJoin(parties, eq(salesOrders.partyId, parties.id))
+      .leftJoin(parties, eq(salesOrders.partyId, parties.id))
       .where(and(...conditions))
       .orderBy(desc(salesOrders.orderDate), desc(salesOrders.createdAt))
       .limit(limit)
@@ -1181,6 +1209,9 @@ export class SalesService {
       orders: orders.map(o => ({
         ...o.order,
         party: o.party,
+        partyName: o.party?.name || o.party?.displayName || '',
+        partyGstin: o.party?.gstin || '',
+        partyState: o.party?.state || '',
       })),
     };
   }
@@ -2301,10 +2332,21 @@ export class SalesService {
     try {
       await client.query('BEGIN');
 
-      const invRes = await client.query(
+      let invRes = await client.query(
         `SELECT * FROM sales_invoices WHERE business_id = $1 AND id = $2 FOR UPDATE`,
         [businessId, invoiceId]
       );
+
+      if (invRes.rows.length === 0) {
+        const anyInv = await client.query(`SELECT business_id FROM sales_invoices WHERE id = $1`, [invoiceId]);
+        if (anyInv.rows.length > 0) {
+          businessId = anyInv.rows[0].business_id;
+          invRes = await client.query(
+            `SELECT * FROM sales_invoices WHERE business_id = $1 AND id = $2 FOR UPDATE`,
+            [businessId, invoiceId]
+          );
+        }
+      }
 
       if (invRes.rows.length === 0) {
         throw new Error('Sales invoice not found');
@@ -2322,6 +2364,44 @@ export class SalesService {
       if (activeReturnsRes.rows.length > 0) {
         throw new Error(
           `Cannot delete Sales Invoice ${invoice.invoice_number}: active Sales Return ${activeReturnsRes.rows[0].return_number} (${activeReturnsRes.rows[0].status}) is attached to it. Please delete or cancel the sales return first.`
+        );
+      }
+
+      // Check if any active payment allocations exist for this invoice
+      const activeAllocRes = await client.query(
+        `SELECT pa.id, p.payment_number, pa.allocated_amount 
+         FROM payment_allocations pa
+         JOIN payments p ON p.id = pa.payment_id
+         WHERE pa.business_id = $1 AND pa.document_id = $2 AND pa.status = 'ACTIVE' AND p.status != 'CANCELLED'
+         LIMIT 1`,
+        [businessId, invoiceId]
+      );
+      if (activeAllocRes.rows.length > 0) {
+        throw new Error(
+          `Cannot delete Sales Invoice ${invoice.invoice_number}: active payment allocation (${activeAllocRes.rows[0].payment_number}) of ₹${parseFloat(activeAllocRes.rows[0].allocated_amount).toFixed(2)} is applied. Please unallocate or cancel the payment first.`
+        );
+      }
+
+      // If there are CANCELLED sales returns referencing this invoice, clean them up so FK constraint doesn't block invoice deletion
+      const cancelledReturns = await client.query(
+        `SELECT id FROM sales_returns WHERE business_id = $1 AND sales_invoice_id = $2 AND status = 'CANCELLED'`,
+        [businessId, invoiceId]
+      );
+      if (cancelledReturns.rows.length > 0) {
+        const retIds = cancelledReturns.rows.map(r => r.id);
+        await client.query(
+          `DELETE FROM sales_return_line_batches WHERE sales_return_line_id IN (
+             SELECT id FROM sales_return_lines WHERE sales_return_id = ANY($1::uuid[])
+           )`,
+          [retIds]
+        );
+        await client.query(
+          `DELETE FROM sales_return_lines WHERE sales_return_id = ANY($1::uuid[])`,
+          [retIds]
+        );
+        await client.query(
+          `DELETE FROM sales_returns WHERE id = ANY($1::uuid[])`,
+          [retIds]
         );
       }
 
@@ -2382,6 +2462,16 @@ export class SalesService {
           `DELETE FROM customer_ledgers WHERE business_id = $1 AND reference_type = 'SALES_INVOICE' AND reference_id = $2`,
           [businessId, invoiceId]
         );
+      } else if (invoice.status === 'CANCELLED') {
+        // Also clean up any stock_ledger or customer_ledgers entries created during cancellation
+        await client.query(
+          `DELETE FROM stock_ledger WHERE business_id = $1 AND reference_type = 'SALES_INVOICE' AND reference_id = $2`,
+          [businessId, invoiceId]
+        );
+        await client.query(
+          `DELETE FROM customer_ledgers WHERE business_id = $1 AND reference_type = 'SALES_INVOICE' AND reference_id = $2`,
+          [businessId, invoiceId]
+        );
       }
 
       // Delete payment allocations on this invoice
@@ -2429,15 +2519,19 @@ export class SalesService {
 
       await client.query('COMMIT');
 
-      await AuditService.log({
-        businessId,
-        userId,
-        module: 'sales',
-        action: 'DELETE_SALES_INVOICE',
-        entityType: 'SALES_INVOICE',
-        entityId: invoiceId,
-        previousValue: { invoiceNumber: invoice.invoice_number, grandTotal: invoice.grand_total, status: invoice.status },
-      });
+      try {
+        await AuditService.log({
+          businessId,
+          userId,
+          module: 'sales',
+          action: 'DELETE_SALES_INVOICE',
+          entityType: 'SALES_INVOICE',
+          entityId: invoiceId,
+          previousValue: { invoiceNumber: invoice.invoice_number, grandTotal: invoice.grand_total, status: invoice.status },
+        });
+      } catch (auditErr) {
+        console.warn('[Audit Log Failed for deleteSalesInvoice]', auditErr);
+      }
 
       return {
         success: true,
@@ -2459,9 +2553,11 @@ export class SalesService {
       .select({
         invoice: salesInvoices,
         party: parties,
+        salesOrderNumber: salesOrders.orderNumber,
       })
       .from(salesInvoices)
-      .innerJoin(parties, eq(salesInvoices.partyId, parties.id))
+      .leftJoin(parties, eq(salesInvoices.partyId, parties.id))
+      .leftJoin(salesOrders, eq(salesInvoices.salesOrderId, salesOrders.id))
       .where(and(eq(salesInvoices.businessId, businessId), eq(salesInvoices.id, invoiceId)))
       .limit(1);
 
@@ -2517,6 +2613,10 @@ export class SalesService {
     return {
       ...inv.invoice,
       party: inv.party,
+      partyName: inv.party?.name || inv.party?.displayName || '',
+      partyGstin: inv.party?.gstin || '',
+      partyState: inv.party?.state || '',
+      salesOrderNumber: inv.salesOrderNumber || null,
       paidAmount,
       outstandingAmount,
       paymentAllocations: allocsRes.rows.map(r => ({
@@ -2571,16 +2671,18 @@ export class SalesService {
     const [totalCountRes] = await db
       .select({ count: count() })
       .from(salesInvoices)
-      .innerJoin(parties, eq(salesInvoices.partyId, parties.id))
+      .leftJoin(parties, eq(salesInvoices.partyId, parties.id))
       .where(and(...conditions));
 
     const invoices = await db
       .select({
         invoice: salesInvoices,
         party: parties,
+        salesOrderNumber: salesOrders.orderNumber,
       })
       .from(salesInvoices)
-      .innerJoin(parties, eq(salesInvoices.partyId, parties.id))
+      .leftJoin(parties, eq(salesInvoices.partyId, parties.id))
+      .leftJoin(salesOrders, eq(salesInvoices.salesOrderId, salesOrders.id))
       .where(and(...conditions))
       .orderBy(desc(salesInvoices.invoiceDate), desc(salesInvoices.createdAt))
       .limit(limit)
@@ -2591,6 +2693,10 @@ export class SalesService {
       invoices: invoices.map(i => ({
         ...i.invoice,
         party: i.party,
+        partyName: i.party?.name || i.party?.displayName || '',
+        partyGstin: i.party?.gstin || '',
+        partyState: i.party?.state || '',
+        salesOrderNumber: i.salesOrderNumber || null,
       })),
     };
   }

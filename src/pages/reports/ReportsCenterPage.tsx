@@ -26,6 +26,7 @@ import {
 } from 'lucide-react';
 import { useAuth } from '../../context/AuthContext.js';
 import { apiRequest, getAuthHeaders } from '../../api/client.js';
+import { StockItemLedgerModal } from '../../components/inventory/StockItemLedgerModal.js';
 
 type ReportTab =
   | 'inventory'
@@ -62,6 +63,10 @@ export const ReportsCenterPage: React.FC<{ initialTab?: ReportTab }> = ({ initia
   const [purchaseSubTab, setPurchaseSubTab] = useState<'SUMMARY' | 'DETAILS' | 'RETURNS'>('SUMMARY');
   const [outstandingType, setOutstandingType] = useState<'CUSTOMER' | 'SUPPLIER'>('CUSTOMER');
   const [selectedPartyId, setSelectedPartyId] = useState<string>('');
+
+  // Tally-Style Stock Item Ledger Modal State
+  const [ledgerItemId, setLedgerItemId] = useState<string | null>(null);
+  const [ledgerItemName, setLedgerItemName] = useState<string>('');
   const [paymentType, setPaymentType] = useState<string>('ALL');
   const [paymentMode, setPaymentMode] = useState<string>('ALL');
 
@@ -587,7 +592,17 @@ export const ReportsCenterPage: React.FC<{ initialTab?: ReportTab }> = ({ initia
                     <tr key={row.batch_id} className="hover:bg-slate-50/70 transition-colors">
                       <td className="py-2.5 px-4 font-mono font-bold text-slate-900">{row.barcode}</td>
                       <td className="py-2.5 px-4">
-                        <div className="font-semibold text-slate-800">{row.unique_item_name}</div>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setLedgerItemId(row.unique_item_id || row.item_id);
+                            setLedgerItemName(row.unique_item_name);
+                          }}
+                          className="font-semibold text-slate-800 hover:text-blue-600 hover:underline cursor-pointer text-left inline-block"
+                          title="Click to view Tally-style Stock Item Ledger"
+                        >
+                          {row.unique_item_name}
+                        </button>
                         <div className="text-[10px] text-slate-400 font-mono">SKU: {row.sku}</div>
                       </td>
                       <td className="py-2.5 px-4 text-slate-600">{row.category_name}</td>
@@ -644,7 +659,17 @@ export const ReportsCenterPage: React.FC<{ initialTab?: ReportTab }> = ({ initia
                       <td className="py-2.5 px-4 font-mono text-slate-600">{new Date(row.created_at).toLocaleString()}</td>
                       <td className="py-2.5 px-4 font-mono font-bold text-slate-900">{row.barcode}</td>
                       <td className="py-2.5 px-4">
-                        <div className="font-semibold text-slate-800">{row.unique_item_name}</div>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setLedgerItemId(row.unique_item_id || row.item_id);
+                            setLedgerItemName(row.unique_item_name);
+                          }}
+                          className="font-semibold text-slate-800 hover:text-blue-600 hover:underline cursor-pointer text-left inline-block"
+                          title="Click to view Tally-style Stock Item Ledger"
+                        >
+                          {row.unique_item_name}
+                        </button>
                         <div className="text-[10px] text-slate-500">
                           SPH: {row.sph} | CYL: {row.cyl} | AXIS: {row.axis}
                         </div>
@@ -958,6 +983,15 @@ export const ReportsCenterPage: React.FC<{ initialTab?: ReportTab }> = ({ initia
           </div>
         )}
       </div>
+
+      {/* Tally-Style Stock Item Ledger Modal */}
+      {ledgerItemId && (
+        <StockItemLedgerModal
+          itemId={ledgerItemId}
+          itemName={ledgerItemName}
+          onClose={() => setLedgerItemId(null)}
+        />
+      )}
     </div>
   );
 };

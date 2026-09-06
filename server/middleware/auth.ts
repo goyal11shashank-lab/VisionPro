@@ -86,7 +86,10 @@ export async function authenticateToken(req: Request, res: Response, next: NextF
     }
 
     // 2. Resolve target business ID
-    const requestedBusinessId = (req.headers['x-business-id'] as string) || payload.businessId;
+    let requestedBusinessId = (req.headers['x-business-id'] as string) || payload.businessId;
+    if (requestedBusinessId === 'undefined' || requestedBusinessId === 'null' || !requestedBusinessId?.trim()) {
+      requestedBusinessId = payload.businessId;
+    }
 
     let targetBusinessId = requestedBusinessId;
 
@@ -114,10 +117,15 @@ export async function authenticateToken(req: Request, res: Response, next: NextF
 
     if (!currentBusiness) {
       if (userRecord.isSuperAdmin) {
-        if (targetBusinessId) {
-          const [foundBiz] = await db.select().from(businesses).where(eq(businesses.id, targetBusinessId)).limit(1);
-          currentBusiness = foundBiz;
-        } else {
+        if (targetBusinessId && targetBusinessId !== 'undefined' && targetBusinessId !== 'null' && targetBusinessId.trim()) {
+          try {
+            const [foundBiz] = await db.select().from(businesses).where(eq(businesses.id, targetBusinessId)).limit(1);
+            currentBusiness = foundBiz;
+          } catch (bizErr) {
+            console.warn('[AUTH_TARGET_BIZ_LOOKUP_FAILED]', bizErr);
+          }
+        }
+        if (!currentBusiness) {
           const [firstBiz] = await db.select().from(businesses).where(eq(businesses.status, 'ACTIVE')).limit(1);
           currentBusiness = firstBiz;
         }

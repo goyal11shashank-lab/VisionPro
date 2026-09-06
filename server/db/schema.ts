@@ -359,10 +359,13 @@ export const primaryItems = pgTable('primary_items', {
 export const uniqueItems = pgTable('unique_items', {
   id: uuid('id').defaultRandom().primaryKey(),
   businessId: uuid('business_id').references(() => businesses.id, { onDelete: 'cascade' }).notNull(),
-  primaryItemId: uuid('primary_item_id').references(() => primaryItems.id, { onDelete: 'cascade' }).notNull(),
+  // Phase 3 Decoupling: primaryItemId is optional/nullable for standalone Stock Items
+  primaryItemId: uuid('primary_item_id').references(() => primaryItems.id, { onDelete: 'cascade' }),
   name: varchar('name', { length: 255 }).notNull(),
   code: varchar('code', { length: 100 }).notNull(),
   description: text('description'),
+  maintainBatches: boolean('maintain_batches').default(false).notNull(),
+  opticalCategory: varchar('optical_category', { length: 20 }).default('SV').notNull(), // SV, KT, PROG, OTHER
   purchaseRate: numeric('purchase_rate', { precision: 12, scale: 2 }).default('0.00'),
   lastPurchasePrice: numeric('last_purchase_price', { precision: 12, scale: 2 }).default('0.00'),
   mrp: numeric('mrp', { precision: 12, scale: 2 }).default('0.00'),

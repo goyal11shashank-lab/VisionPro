@@ -170,8 +170,8 @@ export class PurchaseService {
           category: categories,
         })
         .from(uniqueItems)
-        .innerJoin(primaryItems, eq(uniqueItems.primaryItemId, primaryItems.id))
-        .innerJoin(categories, eq(primaryItems.categoryId, categories.id))
+        .leftJoin(primaryItems, eq(uniqueItems.primaryItemId, primaryItems.id))
+        .leftJoin(categories, eq(primaryItems.categoryId, categories.id))
         .where(and(eq(uniqueItems.businessId, businessId), eq(uniqueItems.id, line.uniqueItemId)))
         .limit(1);
 
@@ -235,7 +235,7 @@ export class PurchaseService {
             `Line ${i + 1}: Sum of batch quantities (${totalBatchQty} prs) must equal line quantity (${qty} prs)`
           );
         }
-      } else {
+      } else if (uItem.uniqueItem.maintainBatches) {
         // Auto-allocate default (0.00 power) batch for line quantity
         const defaultBatch = await findOrCreateOpticalBatch({
           businessId,
@@ -254,6 +254,8 @@ export class PurchaseService {
           rate: taxRes.rate,
           totalCost: round2(qty * taxRes.rate),
         });
+      } else {
+        // Maintain batches is false: item has no batch allocations
       }
 
       processedLines.push({
@@ -508,8 +510,8 @@ export class PurchaseService {
             category: categories,
           })
           .from(uniqueItems)
-          .innerJoin(primaryItems, eq(uniqueItems.primaryItemId, primaryItems.id))
-          .innerJoin(categories, eq(primaryItems.categoryId, categories.id))
+          .leftJoin(primaryItems, eq(uniqueItems.primaryItemId, primaryItems.id))
+          .leftJoin(categories, eq(primaryItems.categoryId, categories.id))
           .where(and(eq(uniqueItems.businessId, businessId), eq(uniqueItems.id, line.uniqueItemId)))
           .limit(1);
 
@@ -577,7 +579,7 @@ export class PurchaseService {
               `Line ${i + 1} (${uItem.uniqueItem.name}): Sum of batch quantities (${batchSum}) must equal line quantity (${qty})`
             );
           }
-        } else {
+        } else if (uItem.uniqueItem.maintainBatches) {
           const defaultBatch = await findOrCreateOpticalBatch({
             businessId,
             uniqueItemId: line.uniqueItemId,
@@ -595,6 +597,8 @@ export class PurchaseService {
             rate: taxRes.rate,
             totalCost: round2(qty * taxRes.rate),
           });
+        } else {
+          // Maintain batches is false
         }
 
         processedLines.push({
@@ -882,8 +886,8 @@ export class PurchaseService {
       })
       .from(purchaseInvoiceLines)
       .innerJoin(uniqueItems, eq(purchaseInvoiceLines.uniqueItemId, uniqueItems.id))
-      .innerJoin(primaryItems, eq(uniqueItems.primaryItemId, primaryItems.id))
-      .innerJoin(categories, eq(primaryItems.categoryId, categories.id))
+      .leftJoin(primaryItems, eq(uniqueItems.primaryItemId, primaryItems.id))
+      .leftJoin(categories, eq(primaryItems.categoryId, categories.id))
       .where(eq(purchaseInvoiceLines.purchaseInvoiceId, invoiceId));
 
     // Fetch batch allocations for each line
@@ -901,8 +905,8 @@ export class PurchaseService {
       enrichedLines.push({
         ...l.line,
         uniqueItem: l.uniqueItem,
-        primaryItem: l.primaryItem,
-        category: l.category,
+        primaryItem: l.primaryItem || null,
+        category: l.category || null,
         batches: lineBatches.map(b => ({
           ...b.allocation,
           batch: b.batch,

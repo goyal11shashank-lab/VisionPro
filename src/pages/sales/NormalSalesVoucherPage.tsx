@@ -29,6 +29,8 @@ import {
 } from 'lucide-react';
 import { useAuth } from '../../context/AuthContext.js';
 import { apiRequest } from '../../api/client.js';
+import { SearchableMasterSelect } from '../../components/common/SearchableMasterSelect.js';
+import { formatOpticalBatchName } from '../../utils/searchNormalization.js';
 
 interface BatchRow {
   batchId?: string;
@@ -49,6 +51,7 @@ interface VoucherLine {
   categoryCode?: string;
   baseName?: string;
   coatingName?: string;
+  maintainBatches?: boolean;
   quantity: number;
   rate: number;
   discountType: 'NONE' | 'PERCENTAGE' | 'FIXED';
@@ -190,7 +193,7 @@ export const NormalSalesVoucherPage: React.FC<Props> = ({ onNavigate, onSuccess 
   const handleAddLine = async (uniqueItemId?: string) => {
     const item = uniqueItemsList.find(i => i.id === uniqueItemId) || uniqueItemsList[0];
     if (!item) {
-      setFormError('No products available in Master. Please create Unique Items first.');
+      setFormError('No products available in Master. Please create Stock Items first.');
       return;
     }
 
@@ -208,30 +211,34 @@ export const NormalSalesVoucherPage: React.FC<Props> = ({ onNavigate, onSuccess 
       }
     }
 
-    // Fetch batches for this item
+    const itemMaintainBatches = item.maintainBatches !== false;
+
+    // Fetch batches for this item if maintainBatches is enabled
     let batches: BatchRow[] = [];
     let availableBatches: any[] = [];
-    try {
-      const bRes = await apiRequest<{ batches: any[] }>(`/api/sales/unique-items/${item.id}/batches?onlyInStock=true`);
-      availableBatches = bRes.batches || [];
-      if (availableBatches.length > 0) {
-        const first = availableBatches[0];
-        batches = [
-          {
-            batchId: first.id,
-            sph: first.sph || '0.00',
-            cyl: first.cyl || '0.00',
-            axis: first.axis || '',
-            add: first.add || '',
-            side: first.side || 'NONE',
-            quantity: 1,
-            barcode: first.barcode,
-            availableStock: parseFloat(first.availableStock || first.quantityRemaining || 0),
-          },
-        ];
+    if (itemMaintainBatches) {
+      try {
+        const bRes = await apiRequest<{ batches: any[] }>(`/api/sales/unique-items/${item.id}/batches?onlyInStock=true`);
+        availableBatches = bRes.batches || [];
+        if (availableBatches.length > 0) {
+          const first = availableBatches[0];
+          batches = [
+            {
+              batchId: first.id,
+              sph: first.sph || '0.00',
+              cyl: first.cyl || '0.00',
+              axis: first.axis || '',
+              add: first.add || '',
+              side: first.side || 'NONE',
+              quantity: 1,
+              barcode: first.barcode,
+              availableStock: parseFloat(first.availableStock || first.quantityRemaining || 0),
+            },
+          ];
+        }
+      } catch {
+        // Non-batched fallback
       }
-    } catch {
-      // Non-batched fallback
     }
 
     const newLine: VoucherLine = {
@@ -241,6 +248,7 @@ export const NormalSalesVoucherPage: React.FC<Props> = ({ onNavigate, onSuccess 
       categoryCode: item.categoryCode || item.category?.code,
       baseName: item.baseName || item.base?.name,
       coatingName: item.coatingName || item.coating?.name,
+      maintainBatches: itemMaintainBatches,
       quantity: 1,
       rate: prefilledRate,
       discountType: 'NONE',
@@ -271,29 +279,32 @@ export const NormalSalesVoucherPage: React.FC<Props> = ({ onNavigate, onSuccess 
       }
     }
 
+    const itemMaintainBatches = item.maintainBatches !== false;
     let batches: BatchRow[] = [];
     let availableBatches: any[] = [];
-    try {
-      const bRes = await apiRequest<{ batches: any[] }>(`/api/sales/unique-items/${item.id}/batches?onlyInStock=true`);
-      availableBatches = bRes.batches || [];
-      if (availableBatches.length > 0) {
-        const first = availableBatches[0];
-        batches = [
-          {
-            batchId: first.id,
-            sph: first.sph || '0.00',
-            cyl: first.cyl || '0.00',
-            axis: first.axis || '',
-            add: first.add || '',
-            side: first.side || 'NONE',
-            quantity: lines[index]?.quantity || 1,
-            barcode: first.barcode,
-            availableStock: parseFloat(first.availableStock || first.quantityRemaining || 0),
-          },
-        ];
+    if (itemMaintainBatches) {
+      try {
+        const bRes = await apiRequest<{ batches: any[] }>(`/api/sales/unique-items/${item.id}/batches?onlyInStock=true`);
+        availableBatches = bRes.batches || [];
+        if (availableBatches.length > 0) {
+          const first = availableBatches[0];
+          batches = [
+            {
+              batchId: first.id,
+              sph: first.sph || '0.00',
+              cyl: first.cyl || '0.00',
+              axis: first.axis || '',
+              add: first.add || '',
+              side: first.side || 'NONE',
+              quantity: lines[index]?.quantity || 1,
+              barcode: first.barcode,
+              availableStock: parseFloat(first.availableStock || first.quantityRemaining || 0),
+            },
+          ];
+        }
+      } catch {
+        // ignore
       }
-    } catch {
-      // ignore
     }
 
     setLines(prev =>
@@ -307,6 +318,7 @@ export const NormalSalesVoucherPage: React.FC<Props> = ({ onNavigate, onSuccess 
               categoryCode: item.categoryCode || item.category?.code,
               baseName: item.baseName || item.base?.name,
               coatingName: item.coatingName || item.coating?.name,
+              maintainBatches: itemMaintainBatches,
               rate: prefilledRate,
               gstRate: item.taxRate ? parseFloat(item.taxRate) : 12,
               batches: batches,
@@ -314,6 +326,35 @@ export const NormalSalesVoucherPage: React.FC<Props> = ({ onNavigate, onSuccess 
             }
           : line
       )
+    );
+  };
+
+  // Change selected batch for a line item
+  const handleLineBatchChange = (index: number, batchId: string, batchObj?: any) => {
+    setLines(prev =>
+      prev.map((line, idx) => {
+        if (idx !== index) return line;
+        const b = batchObj || line.availableBatches?.find((x: any) => x.id === batchId);
+        if (!b) {
+          return { ...line, batches: [] };
+        }
+        return {
+          ...line,
+          batches: [
+            {
+              batchId: b.id,
+              sph: b.sph || '0.00',
+              cyl: b.cyl || '0.00',
+              axis: b.axis || '',
+              add: b.add || '',
+              side: b.side || 'NONE',
+              quantity: line.quantity,
+              barcode: b.barcode,
+              availableStock: parseFloat(b.availableStock || b.quantityRemaining || 0),
+            },
+          ],
+        };
+      })
     );
   };
 
@@ -634,19 +675,28 @@ export const NormalSalesVoucherPage: React.FC<Props> = ({ onNavigate, onSuccess 
               <label className="block text-slate-600 font-medium mb-1">
                 Select Customer <span className="text-rose-500">*</span>
               </label>
-              <select
+              <SearchableMasterSelect
                 id="select-voucher-customer"
+                placeholder="Type customer name, code, city..."
                 value={selectedPartyId}
-                onChange={e => handlePartyChange(e.target.value)}
-                className="w-full px-3 py-2 text-xs rounded-xl border border-slate-300 bg-white focus:ring-2 focus:ring-blue-500 focus:outline-none"
-              >
-                <option value="">-- Choose Optical Customer --</option>
-                {parties.map(p => (
-                  <option key={p.id} value={p.id}>
-                    {p.name} ({p.partyCode || 'NO-CODE'}) {p.city ? `• ${p.city}` : ''}
-                  </option>
-                ))}
-              </select>
+                options={parties.map(p => ({
+                  id: p.id,
+                  label: p.name,
+                  subLabel: `${p.partyCode || 'NO-CODE'}${p.city ? ` • ${p.city}` : ''}${p.gstin ? ` • GST: ${p.gstin}` : ''}`,
+                  tag: p.partyType || 'CUSTOMER',
+                  badgeColor: 'blue',
+                  meta: p,
+                }))}
+                onSelect={opt => handlePartyChange(opt ? opt.id : '')}
+                onNextFocus={() => {
+                  const firstItem = document.getElementById('select-line-product-0');
+                  if (firstItem) {
+                    firstItem.focus();
+                  } else {
+                    document.getElementById('input-voucher-date')?.focus();
+                  }
+                }}
+              />
             </div>
 
             {/* Customer Details Box */}
@@ -910,7 +960,8 @@ export const NormalSalesVoucherPage: React.FC<Props> = ({ onNavigate, onSuccess 
               <thead className="bg-slate-50 border-b border-slate-200 text-slate-700 font-bold uppercase tracking-wider text-[11px]">
                 <tr>
                   <th className="py-3 px-3 w-6 text-center">#</th>
-                  <th className="py-3 px-3 min-w-[240px]">Product / Optical Specification</th>
+                  <th className="py-3 px-3 min-w-[220px]">Stock Item Master</th>
+                  <th className="py-3 px-3 min-w-[240px]">Batch / Power</th>
                   <th className="py-3 px-3 w-24 text-center">Qty</th>
                   <th className="py-3 px-3 w-28 text-right">Rate (₹)</th>
                   <th className="py-3 px-3 w-28">Discount</th>
@@ -928,57 +979,180 @@ export const NormalSalesVoucherPage: React.FC<Props> = ({ onNavigate, onSuccess 
                         {idx + 1}
                       </td>
 
-                      {/* Product Selector */}
-                      <td className="py-3 px-3 space-y-1">
-                        <select
+                      {/* Stock Item Selector */}
+                      <td className="py-3 px-3">
+                        <SearchableMasterSelect
                           id={`select-line-product-${idx}`}
+                          placeholder="Type stock item name/SKU..."
                           value={line.uniqueItemId}
-                          onChange={e => handleLineItemChange(idx, e.target.value)}
-                          className="w-full px-2.5 py-1.5 rounded-lg border border-slate-300 font-semibold text-slate-900 bg-white text-xs focus:ring-2 focus:ring-blue-500 focus:outline-none"
-                        >
-                          {uniqueItemsList.map(item => (
-                            <option key={item.id} value={item.id}>
-                              {item.name} ({item.code || 'SKU'}) {item.categoryCode ? `[${item.categoryCode}]` : ''}
-                            </option>
-                          ))}
-                        </select>
-
-                        {/* Power & Optical Meta Bar */}
-                        <div className="flex flex-wrap items-center gap-2 text-[11px]">
-                          {line.batches && line.batches.length > 0 && line.batches[0].sph !== undefined && (
-                            <span className="px-2 py-0.5 bg-emerald-50 text-emerald-800 font-mono font-medium rounded border border-emerald-200">
-                              SPH: {line.batches[0].sph} | CYL: {line.batches[0].cyl || '0.00'}
-                              {line.batches[0].axis ? ` | AX: ${line.batches[0].axis}°` : ''}
-                              {line.batches[0].add ? ` | ADD: ${line.batches[0].add}` : ''}
-                            </span>
-                          )}
-                          {line.batches && line.batches.length > 0 && line.batches[0].availableStock !== undefined && (
-                            <span className="px-1.5 py-0.5 bg-slate-100 text-slate-600 font-mono rounded text-[10px]">
-                              Stock: {line.batches[0].availableStock}
-                            </span>
-                          )}
-                          <button
-                            type="button"
-                            onClick={() =>
-                              setLines(prev =>
-                                prev.map((l, i) =>
-                                  i === idx ? { ...l, isPowerDetailsOpen: !l.isPowerDetailsOpen } : l
-                                )
-                              )
+                          options={uniqueItemsList.map(item => ({
+                            id: item.id,
+                            label: item.name,
+                            subLabel: `${item.code || 'SKU'}${item.categoryCode ? ` • [${item.categoryCode}]` : ''}`,
+                            tag: item.maintainBatches === false ? 'No-Batch' : (item.categoryCode || 'ITEM'),
+                            badgeColor: item.maintainBatches === false ? 'slate' : 'blue',
+                            meta: item,
+                          }))}
+                          onSelect={opt => {
+                            if (opt) {
+                              handleLineItemChange(idx, opt.id);
                             }
-                            className="text-blue-600 hover:text-blue-800 font-medium inline-flex items-center gap-0.5 text-[11px]"
-                          >
-                            {line.isPowerDetailsOpen ? (
-                              <>
-                                <ChevronUp className="w-3 h-3" /> Hide Power Details
-                              </>
-                            ) : (
-                              <>
-                                <ChevronDown className="w-3 h-3" /> Edit Lens Power / Batch
-                              </>
-                            )}
-                          </button>
-                        </div>
+                          }}
+                          onNextFocus={() => {
+                            const selectedItem = uniqueItemsList.find(i => i.id === line.uniqueItemId);
+                            if (selectedItem && selectedItem.maintainBatches === false) {
+                              const qtyInput = document.getElementById(`input-line-qty-${idx}`);
+                              qtyInput?.focus();
+                              (qtyInput as HTMLInputElement)?.select?.();
+                            } else {
+                              const batchInput = document.getElementById(`select-line-batch-${idx}`);
+                              if (batchInput) {
+                                batchInput.focus();
+                              } else {
+                                const qtyInput = document.getElementById(`input-line-qty-${idx}`);
+                                qtyInput?.focus();
+                                (qtyInput as HTMLInputElement)?.select?.();
+                              }
+                            }
+                          }}
+                        />
+                      </td>
+
+                      {/* Batch / Power Selector */}
+                      <td className="py-3 px-3">
+                        {line.maintainBatches === false ? (
+                          <div className="py-1 px-2.5 rounded-lg bg-slate-100 text-slate-500 font-mono text-[11px] inline-flex items-center gap-1.5 border border-slate-200">
+                            <span className="w-1.5 h-1.5 rounded-full bg-slate-400"></span>
+                            <span>Direct Item (No Batch)</span>
+                          </div>
+                        ) : (
+                          <div className="space-y-1">
+                            <SearchableMasterSelect
+                              id={`select-line-batch-${idx}`}
+                              placeholder={
+                                line.availableBatches && line.availableBatches.length > 0
+                                  ? 'Type SPH / CYL / Axis...'
+                                  : 'No batches in stock (Enter custom power)'
+                              }
+                              value={line.batches[0]?.batchId || ''}
+                              displayValue={
+                                line.batches[0]?.sph !== undefined
+                                  ? formatOpticalBatchName({
+                                      sph: line.batches[0].sph,
+                                      cyl: line.batches[0].cyl,
+                                      axis: line.batches[0].axis,
+                                      add: line.batches[0].add,
+                                      side: line.batches[0].side,
+                                      categoryCode: line.categoryCode || 'SV',
+                                    })
+                                  : ''
+                              }
+                              options={(line.availableBatches || []).map(b => {
+                                const cat = b.opticalCategory || b.categoryCode || line.categoryCode || 'SV';
+                                const name = formatOpticalBatchName({
+                                  sph: b.sph,
+                                  cyl: b.cyl,
+                                  axis: b.axis,
+                                  add: b.add,
+                                  side: b.side,
+                                  categoryCode: cat,
+                                });
+                                return {
+                                  id: b.id,
+                                  label: name,
+                                  subLabel: `Available: ${b.availableStock ?? b.quantityRemaining ?? 0} pcs • Barcode: ${b.barcode || 'N/A'}${b.identityKey ? ` • [${b.identityKey}]` : ''}`,
+                                  tag: `${b.availableStock ?? b.quantityRemaining ?? 0} in stock`,
+                                  badgeColor: (b.availableStock ?? b.quantityRemaining ?? 0) > 0 ? 'emerald' : 'slate',
+                                  meta: {
+                                    ...b,
+                                    sph: b.sph,
+                                    cyl: b.cyl,
+                                    axis: b.axis,
+                                    add: b.add,
+                                    side: b.side,
+                                    categoryCode: cat,
+                                    barcode: b.barcode,
+                                  },
+                                };
+                              })}
+                              onSearch={async query => {
+                                try {
+                                  const res = await apiRequest<{ batches: any[] }>(
+                                    `/api/sales/unique-items/${line.uniqueItemId}/batches?search=${encodeURIComponent(query)}`
+                                  );
+                                  return (res.batches || []).map(b => {
+                                    const cat = b.opticalCategory || b.categoryCode || line.categoryCode || 'SV';
+                                    const name = formatOpticalBatchName({
+                                      sph: b.sph,
+                                      cyl: b.cyl,
+                                      axis: b.axis,
+                                      add: b.add,
+                                      side: b.side,
+                                      categoryCode: cat,
+                                    });
+                                    return {
+                                      id: b.id,
+                                      label: name,
+                                      subLabel: `Available: ${b.availableStock ?? b.quantityRemaining ?? 0} pcs • Barcode: ${b.barcode || 'N/A'}${b.identityKey ? ` • [${b.identityKey}]` : ''}`,
+                                      tag: `${b.availableStock ?? b.quantityRemaining ?? 0} in stock`,
+                                      badgeColor: (b.availableStock ?? b.quantityRemaining ?? 0) > 0 ? 'emerald' : 'slate',
+                                      meta: {
+                                        ...b,
+                                        sph: b.sph,
+                                        cyl: b.cyl,
+                                        axis: b.axis,
+                                        add: b.add,
+                                        side: b.side,
+                                        categoryCode: cat,
+                                        barcode: b.barcode,
+                                      },
+                                    };
+                                  });
+                                } catch {
+                                  return [];
+                                }
+                              }}
+                              onSelect={opt => {
+                                if (opt) {
+                                  handleLineBatchChange(idx, opt.id, opt.meta);
+                                } else {
+                                  handleLineBatchChange(idx, '');
+                                }
+                              }}
+                              onNextFocus={() => {
+                                const qtyInput = document.getElementById(`input-line-qty-${idx}`);
+                                qtyInput?.focus();
+                                (qtyInput as HTMLInputElement)?.select?.();
+                              }}
+                            />
+                            <div className="flex items-center justify-between text-[10px] text-slate-500">
+                              <span className="font-mono">
+                                Stock: {line.batches[0]?.availableStock ?? '—'}
+                              </span>
+                              <button
+                                type="button"
+                                onClick={() =>
+                                  setLines(prev =>
+                                    prev.map((l, i) =>
+                                      i === idx ? { ...l, isPowerDetailsOpen: !l.isPowerDetailsOpen } : l
+                                    )
+                                  )
+                                }
+                                className="text-blue-600 hover:text-blue-800 font-medium inline-flex items-center gap-0.5"
+                              >
+                                {line.isPowerDetailsOpen ? (
+                                  <>
+                                    <ChevronUp className="w-3 h-3" /> Hide Power Matrix
+                                  </>
+                                ) : (
+                                  <>
+                                    <ChevronDown className="w-3 h-3" /> Custom Powers
+                                  </>
+                                )}
+                              </button>
+                            </div>
+                          </div>
+                        )}
                       </td>
 
                       {/* Quantity */}
@@ -1002,6 +1176,14 @@ export const NormalSalesVoucherPage: React.FC<Props> = ({ onNavigate, onSuccess 
                               )
                             );
                           }}
+                          onKeyDown={e => {
+                            if (e.key === 'Enter') {
+                              e.preventDefault();
+                              const rateInput = document.getElementById(`input-line-rate-${idx}`);
+                              rateInput?.focus();
+                              (rateInput as HTMLInputElement)?.select?.();
+                            }
+                          }}
                           className="w-full px-2 py-1.5 text-center font-mono font-semibold rounded-lg border border-slate-300 focus:ring-2 focus:ring-blue-500 focus:outline-none"
                         />
                       </td>
@@ -1017,6 +1199,20 @@ export const NormalSalesVoucherPage: React.FC<Props> = ({ onNavigate, onSuccess 
                           onChange={e => {
                             const val = parseFloat(e.target.value) || 0;
                             setLines(prev => prev.map((l, i) => (i === idx ? { ...l, rate: val } : l)));
+                          }}
+                          onKeyDown={e => {
+                            if (e.key === 'Enter') {
+                              e.preventDefault();
+                              if (idx + 1 < computedLines.length) {
+                                document.getElementById(`select-line-product-${idx + 1}`)?.focus();
+                              } else {
+                                handleAddLine().then(() => {
+                                  setTimeout(() => {
+                                    document.getElementById(`select-line-product-${idx + 1}`)?.focus();
+                                  }, 50);
+                                });
+                              }
+                            }
                           }}
                           className="w-full px-2 py-1.5 text-right font-mono font-semibold rounded-lg border border-slate-300 focus:ring-2 focus:ring-blue-500 focus:outline-none"
                         />
@@ -1102,7 +1298,7 @@ export const NormalSalesVoucherPage: React.FC<Props> = ({ onNavigate, onSuccess 
                     {/* Expandable Optical Power & Batch Selection Box */}
                     {line.isPowerDetailsOpen && (
                       <tr className="bg-blue-50/40">
-                        <td colSpan={9} className="p-3">
+                        <td colSpan={10} className="p-3">
                           <div className="p-3 bg-white rounded-xl border border-blue-200 space-y-3">
                             <div className="flex items-center justify-between text-xs font-bold text-blue-900 border-b border-blue-100 pb-2">
                               <span>Optical Prescription &amp; Power Specification</span>
@@ -1117,44 +1313,26 @@ export const NormalSalesVoucherPage: React.FC<Props> = ({ onNavigate, onSuccess 
                                 <label className="block text-xs font-semibold text-slate-700">
                                   Select Existing Stock Batch:
                                 </label>
-                                <select
+                                <SearchableMasterSelect
+                                  id={`select-drawer-batch-${idx}`}
+                                  placeholder="Type to filter stock batches..."
                                   value={line.batches[0]?.batchId || ''}
-                                  onChange={e => {
-                                    const bId = e.target.value;
-                                    const b = line.availableBatches?.find(x => x.id === bId);
-                                    if (b) {
-                                      setLines(prev =>
-                                        prev.map((l, i) =>
-                                          i === idx
-                                            ? {
-                                                ...l,
-                                                batches: [
-                                                  {
-                                                    batchId: b.id,
-                                                    sph: b.sph,
-                                                    cyl: b.cyl,
-                                                    axis: b.axis,
-                                                    add: b.add,
-                                                    side: b.side,
-                                                    quantity: l.quantity,
-                                                    barcode: b.barcode,
-                                                    availableStock: parseFloat(b.availableStock || b.quantityRemaining || 0),
-                                                  },
-                                                ],
-                                              }
-                                            : l
-                                        )
-                                      );
+                                  options={line.availableBatches.map(b => ({
+                                    id: b.id,
+                                    label: `SPH: ${b.sph || '0.00'} | CYL: ${b.cyl || '0.00'}${b.axis ? ` | Axis: ${b.axis}` : ''}${b.add ? ` | Add: ${b.add}` : ''} | Side: ${b.side || 'BE'}`,
+                                    subLabel: `Barcode: ${b.barcode || 'N/A'} • Available Stock: ${b.availableStock ?? b.quantityRemaining ?? 0}`,
+                                    tag: `Stock: ${b.availableStock ?? b.quantityRemaining ?? 0}`,
+                                    badgeColor: 'emerald',
+                                    meta: b,
+                                  }))}
+                                  onSelect={opt => {
+                                    if (opt) {
+                                      handleLineBatchChange(idx, opt.id, opt.meta);
+                                    } else {
+                                      handleLineBatchChange(idx, '');
                                     }
                                   }}
-                                  className="w-full px-3 py-1.5 rounded-lg border border-slate-300 font-mono text-xs"
-                                >
-                                  {line.availableBatches.map(b => (
-                                    <option key={b.id} value={b.id}>
-                                      SPH: {b.sph || '0.00'} | CYL: {b.cyl || '0.00'} | Axis: {b.axis || '—'} | Add: {b.add || '—'} | Side: {b.side || 'BE'} | Barcode: {b.barcode || 'N/A'} (Stock: {b.availableStock || b.quantityRemaining || 0})
-                                    </option>
-                                  ))}
-                                </select>
+                                />
                               </div>
                             ) : null}
 

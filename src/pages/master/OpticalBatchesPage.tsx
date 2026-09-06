@@ -1,9 +1,11 @@
 import React, { useState, useEffect } from 'react';
-import { Barcode, Plus, Search, RefreshCw, CheckCircle2, XCircle, Trash2, AlertTriangle, ShieldAlert, Filter, Sparkles, Eye, Layers, Copy, Check, Edit3, FileSpreadsheet } from 'lucide-react';
+import { Barcode, Plus, Search, RefreshCw, CheckCircle2, XCircle, Trash2, AlertTriangle, ShieldAlert, Filter, Sparkles, Eye, Layers, Copy, Check, Edit3, FileSpreadsheet, BookOpen, ExternalLink, Info } from 'lucide-react';
 import { apiRequest } from '../../api/client.js';
 import { OpticalBatch, UniqueItem, Category } from '../../types/index.js';
 import { useAuth } from '../../context/AuthContext.js';
 import { OpticalBatchImportModal } from '../../components/master/OpticalBatchImportModal.js';
+import { StockItemLedgerModal } from '../../components/inventory/StockItemLedgerModal.js';
+import { rankSearchMatch, formatOpticalBatchName } from '../../utils/searchNormalization.js';
 
 export const OpticalBatchesPage: React.FC = () => {
   const { hasPermission } = useAuth();
@@ -22,6 +24,34 @@ export const OpticalBatchesPage: React.FC = () => {
   const [batchToDelete, setBatchToDelete] = useState<OpticalBatch | null>(null);
   const [deleting, setDeleting] = useState<boolean>(false);
   const [deleteError, setDeleteError] = useState<string | null>(null);
+  const [deleteBlockedInfo, setDeleteBlockedInfo] = useState<{
+    canDelete?: boolean;
+    reasonSummary?: string;
+    error?: string;
+    references?: Array<{
+      type: string;
+      typeLabel: string;
+      documentNumber: string;
+      status: string;
+      partyName: string;
+      quantity: number;
+      date: string;
+    }>;
+    stockInfo?: {
+      physicalStock: number;
+      reservedStock: number;
+      availableStock: number;
+    };
+  } | null>(null);
+
+  // Inspect Dependencies Modal State
+  const [inspectBatch, setInspectBatch] = useState<OpticalBatch | null>(null);
+  const [inspectData, setInspectData] = useState<any | null>(null);
+  const [inspectLoading, setInspectLoading] = useState<boolean>(false);
+
+  // Tally-Style Stock Item Ledger Modal State
+  const [ledgerItemId, setLedgerItemId] = useState<string | null>(null);
+  const [ledgerItemName, setLedgerItemName] = useState<string>('');
 
   // Multi-select & Bulk delete state
   const [selectedIds, setSelectedIds] = useState<string[]>([]);
@@ -84,7 +114,8 @@ export const OpticalBatchesPage: React.FC = () => {
   }, []);
 
   const handleOpenFindOrCreate = () => {
-    const defaultU = uniqueItems[0]?.id || '';
+    const batchEnabledItems = uniqueItems.filter(u => u.maintainBatches);
+    const defaultU = batchEnabledItems[0]?.id || '';
     setFormData({
       uniqueItemId: defaultU,
       sph: '0.00',
@@ -100,6 +131,50 @@ export const OpticalBatchesPage: React.FC = () => {
   const handleDeleteClick = (b: OpticalBatch) => {
     setBatchToDelete(b);
     setDeleteError(null);
+    setDeleteBlockedInfo(null);
+  };
+
+  const handleInspectDependencies = async (b: OpticalBatch) => {
+    setInspectBatch(b);
+    setInspectLoading(true);
+    setInspectData(null);
+    try {
+      const res = await apiRequest<{ success: boolean; data: any }>(
+        `/api/optical-master/batches/${b.id}/dependencies`
+      );
+      setInspectData(res.data);
+    } catch (err: any) {
+      setInspectData({
+        canDelete: false,
+        error: err.message || 'Failed to check dependencies',
+        references: [],
+      });
+    } finally {
+      setInspectLoading(false);
+    }
+  };
+
+  const handleSetBatchInactive = async (batchId: string) => {
+    try {
+      setDeleting(true);
+      await apiRequest(`/api/optical-master/batches/${batchId}/status`, {
+        method: 'PATCH',
+        body: JSON.stringify({ status: 'INACTIVE' }),
+      });
+      setFeedbackMessage({
+        type: 'success',
+        text: 'Optical Batch was set to INACTIVE / ARCHIVED. It will no longer appear in new sales or purchase invoice power dropdowns, while all historical documents and ledger lines remain completely intact.',
+      });
+      setBatchToDelete(null);
+      setDeleteBlockedInfo(null);
+      setInspectBatch(null);
+      setTimeout(() => setFeedbackMessage(null), 8000);
+      fetchData();
+    } catch (err: any) {
+      setDeleteError(err.message || 'Failed to mark batch inactive');
+    } finally {
+      setDeleting(false);
+    }
   };
 
   const handleConfirmDelete = async () => {
@@ -107,6 +182,7 @@ export const OpticalBatchesPage: React.FC = () => {
     try {
       setDeleting(true);
       setDeleteError(null);
+      setDeleteBlockedInfo(null);
       const res = await apiRequest<{ success: boolean; message: string }>(
         `/api/optical-master/batches/${batchToDelete.id}`,
         { method: 'DELETE' }
@@ -120,7 +196,11 @@ export const OpticalBatchesPage: React.FC = () => {
       setTimeout(() => setFeedbackMessage(null), 6000);
       fetchData();
     } catch (err: any) {
-      setDeleteError(err.message || 'Failed to delete optical batch');
+      const detailedErr = err.data || {};
+      setDeleteError(detailedErr.error || err.message || 'Failed to delete optical batch');
+      if (detailedErr.references || detailedErr.reasonSummary || detailedErr.canDelete === false) {
+        setDeleteBlockedInfo(detailedErr);
+      }
     } finally {
       setDeleting(false);
     }
@@ -176,10 +256,10 @@ export const OpticalBatchesPage: React.FC = () => {
 
   // Determine selected item category to show appropriate fields
   const selectedItemObj = uniqueItems.find(u => u.id === formData.uniqueItemId);
-  const currentCategoryCode = (selectedItemObj?.categoryCode || 'SV').toUpperCase();
+  const currentCategoryCode = (selectedItemObj?.opticalCategory || selectedItemObj?.categoryCode || 'SV').toUpperCase();
 
   const editSelectedItemObj = uniqueItems.find(u => u.id === editFormData.uniqueItemId);
-  const editCategoryCode = (editSelectedItemObj?.categoryCode || editingBatch?.categoryCode || 'SV').toUpperCase();
+  const editCategoryCode = (editSelectedItemObj?.opticalCategory || editSelectedItemObj?.categoryCode || editingBatch?.categoryCode || 'SV').toUpperCase();
 
   const handleOpenEdit = (b: OpticalBatch) => {
     setEditingBatch(b);
@@ -246,12 +326,13 @@ export const OpticalBatchesPage: React.FC = () => {
       setSubmitting(true);
       setCreateResult(null);
 
+      const cylVal = parseFloat(formData.cyl) || 0;
       const payload = {
         uniqueItemId: formData.uniqueItemId,
         sph: parseFloat(formData.sph) || 0,
-        cyl: parseFloat(formData.cyl) || 0,
-        axis: currentCategoryCode !== 'SV' ? parseFloat(formData.axis) || 0 : 0,
-        add: currentCategoryCode !== 'SV' ? parseFloat(formData.add) || 0 : 0,
+        cyl: cylVal,
+        axis: (cylVal !== 0) ? (parseFloat(formData.axis) || 0) : 0,
+        add: (currentCategoryCode === 'KT' || currentCategoryCode === 'PROG') ? (parseFloat(formData.add) || 0) : 0,
         side: currentCategoryCode === 'PROG' ? formData.side : 'NONE',
       };
 
@@ -275,15 +356,34 @@ export const OpticalBatchesPage: React.FC = () => {
     }
   };
 
-  const filtered = batches.filter(b => {
-    const matchesSearch = b.barcode.toLowerCase().includes(search.toLowerCase()) ||
-      b.uniqueItemName?.toLowerCase().includes(search.toLowerCase()) ||
-      b.uniqueItemCode?.toLowerCase().includes(search.toLowerCase()) ||
-      b.identityKey.toLowerCase().includes(search.toLowerCase());
+  const preFiltered = batches.filter(b => {
     const matchesCat = selectedCategory ? b.categoryId === selectedCategory : true;
     const matchesUnique = selectedUniqueItem ? b.uniqueItemId === selectedUniqueItem : true;
-    return matchesSearch && matchesCat && matchesUnique;
+    return matchesCat && matchesUnique;
   });
+
+  const filtered = search.trim()
+    ? rankSearchMatch<OpticalBatch>(preFiltered, search, (b: OpticalBatch) => ({
+        id: b.id,
+        name: (b as any).formattedName || (b as any).name || formatOpticalBatchName({
+          sph: b.sph,
+          cyl: b.cyl,
+          axis: b.axis,
+          add: b.add,
+          side: b.side,
+          categoryCode: b.categoryCode,
+        }),
+        code: b.uniqueItemCode,
+        barcode: b.barcode,
+        sph: b.sph,
+        cyl: b.cyl,
+        axis: b.axis,
+        add: b.add,
+        side: b.side,
+        categoryCode: b.categoryCode,
+        rawText: `${b.uniqueItemName || ''} ${b.identityKey || ''} ${b.barcode || ''}`,
+      }))
+    : preFiltered;
 
   const isAllSelected = filtered.length > 0 && filtered.every(item => selectedIds.includes(item.id));
   const isSomeSelected = filtered.some(item => selectedIds.includes(item.id)) && !isAllSelected;
@@ -471,7 +571,7 @@ export const OpticalBatchesPage: React.FC = () => {
                     />
                   </th>
                   <th className="px-5 py-4">Permanent Barcode</th>
-                  <th className="px-5 py-4">Unique Item / SKU</th>
+                  <th className="px-5 py-4">Stock Item / SKU</th>
                   <th className="px-5 py-4">Category</th>
                   <th className="px-5 py-4">Optical Powers</th>
                   <th className="px-5 py-4">Canonical Identity Key</th>
@@ -527,8 +627,19 @@ export const OpticalBatchesPage: React.FC = () => {
                             </button>
                           </div>
                         </td>
-                        <td className="px-5 py-4 font-semibold text-slate-900">
-                          {b.uniqueItemName}
+                        <td className="px-5 py-4 font-semibold text-slate-900" onClick={e => e.stopPropagation()}>
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setLedgerItemId(b.uniqueItemId);
+                              setLedgerItemName(b.uniqueItemName);
+                            }}
+                            className="text-left font-semibold text-slate-900 hover:text-indigo-600 hover:underline transition-colors cursor-pointer inline-flex items-center gap-1.5 group"
+                            title="Click to view Tally-style Stock Item purchases, sales & stock ledger"
+                          >
+                            <span>{b.uniqueItemName}</span>
+                            <BookOpen className="h-3.5 w-3.5 text-indigo-400 opacity-0 group-hover:opacity-100 transition-opacity" />
+                          </button>
                           <div className="text-xs text-slate-400 font-mono font-normal">
                             {b.uniqueItemCode}
                           </div>
@@ -577,6 +688,25 @@ export const OpticalBatchesPage: React.FC = () => {
                         </td>
                         <td className="px-5 py-4 text-right" onClick={e => e.stopPropagation()}>
                           <div className="flex items-center justify-end gap-1">
+                            <button
+                              id={`btn-ledger-batch-${b.barcode}`}
+                              onClick={() => {
+                                setLedgerItemId(b.uniqueItemId);
+                                setLedgerItemName(b.uniqueItemName);
+                              }}
+                              className="p-1.5 text-slate-500 hover:text-indigo-600 hover:bg-indigo-50 rounded-md transition-colors cursor-pointer"
+                              title="View Tally-Style Stock Item Ledger & Monthly Drill-down"
+                            >
+                              <BookOpen className="h-4 w-4" />
+                            </button>
+                            <button
+                              id={`btn-inspect-batch-${b.barcode}`}
+                              onClick={() => handleInspectDependencies(b)}
+                              className="p-1.5 text-slate-500 hover:text-blue-600 hover:bg-blue-50 rounded-md transition-colors cursor-pointer"
+                              title="Inspect Invoices & Document References"
+                            >
+                              <ShieldAlert className="h-4 w-4" />
+                            </button>
                             {(hasPermission('master:edit') || hasPermission('master:create')) && (
                               <button
                                 id={`btn-edit-batch-${b.barcode}`}
@@ -637,20 +767,25 @@ export const OpticalBatchesPage: React.FC = () => {
 
             <form onSubmit={handleFindOrCreateSubmit} className="space-y-4">
               <div>
-                <label className="block text-xs font-medium text-slate-700 mb-1">Unique Item (SKU) *</label>
+                <label className="block text-xs font-medium text-slate-700 mb-1">Stock Item (SKU) *</label>
                 <select
                   required
                   value={formData.uniqueItemId}
                   onChange={(e) => setFormData({ ...formData, uniqueItemId: e.target.value })}
                   className="w-full px-3 py-2 text-sm bg-slate-50 border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-indigo-500"
                 >
-                  <option value="">Select SKU Item</option>
-                  {uniqueItems.map(u => (
+                  <option value="">Select Stock Item (Batch-enabled)</option>
+                  {uniqueItems.filter(u => u.maintainBatches).map(u => (
                     <option key={u.id} value={u.id}>
                       {u.code} - {u.name} ({u.categoryCode || 'SV'})
                     </option>
                   ))}
                 </select>
+                {uniqueItems.filter(u => u.maintainBatches).length === 0 && (
+                  <p className="text-xs text-amber-600 mt-1">
+                    No batch-enabled stock items found. Items must have "Maintain Batches" enabled in Stock Item Master.
+                  </p>
+                )}
               </div>
 
               <div className="p-3 bg-indigo-50/50 rounded-xl border border-indigo-100">
@@ -685,8 +820,27 @@ export const OpticalBatchesPage: React.FC = () => {
                   </div>
                 </div>
 
+                {/* AXIS for Single Vision when CYL is non-zero */}
+                {currentCategoryCode === 'SV' && parseFloat(formData.cyl) !== 0 && (
+                  <div className="mt-3">
+                    <label className="block text-xs font-medium text-slate-700 mb-1">
+                      AXIS (0 - 180°) * (CYL is non-zero)
+                    </label>
+                    <input
+                      type="number"
+                      min="0"
+                      max="180"
+                      step="1"
+                      value={formData.axis}
+                      onChange={(e) => setFormData({ ...formData, axis: e.target.value })}
+                      placeholder="90"
+                      className="w-full px-3 py-2 text-sm bg-white border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-indigo-500 font-mono"
+                    />
+                  </div>
+                )}
+
                 {/* Kryptok or Progressive fields */}
-                {currentCategoryCode !== 'SV' && (
+                {(currentCategoryCode === 'KT' || currentCategoryCode === 'PROG') && (
                   <div className="grid grid-cols-2 gap-3 mt-3">
                     <div>
                       <label className="block text-xs font-medium text-slate-700 mb-1">
@@ -704,11 +858,12 @@ export const OpticalBatchesPage: React.FC = () => {
                       />
                     </div>
                     <div>
-                      <label className="block text-xs font-medium text-slate-700 mb-1">ADD Power</label>
+                      <label className="block text-xs font-medium text-slate-700 mb-1">ADD Power *</label>
                       <input
                         type="number"
                         step="0.25"
                         min="0"
+                        required
                         value={formData.add}
                         onChange={(e) => setFormData({ ...formData, add: e.target.value })}
                         placeholder="+2.00"
@@ -734,6 +889,21 @@ export const OpticalBatchesPage: React.FC = () => {
                     </select>
                   </div>
                 )}
+
+                {/* Live Canonical Batch Name Preview */}
+                <div className="mt-3.5 p-2.5 bg-indigo-100/70 rounded-lg border border-indigo-200 flex items-center justify-between">
+                  <span className="text-xs font-semibold text-indigo-900">Canonical Batch Name:</span>
+                  <span className="font-mono text-xs font-bold text-indigo-950 bg-white px-2.5 py-1 rounded border border-indigo-200">
+                    {formatOpticalBatchName({
+                      sph: parseFloat(formData.sph) || 0,
+                      cyl: parseFloat(formData.cyl) || 0,
+                      axis: (parseFloat(formData.cyl) !== 0) ? (parseFloat(formData.axis) || 0) : 0,
+                      add: (currentCategoryCode === 'KT' || currentCategoryCode === 'PROG') ? (parseFloat(formData.add) || 0) : 0,
+                      side: currentCategoryCode === 'PROG' ? formData.side : 'NONE',
+                      categoryCode: currentCategoryCode,
+                    })}
+                  </span>
+                </div>
               </div>
 
               <div className="flex items-center justify-end gap-3 pt-3 border-t border-slate-100">
@@ -774,39 +944,94 @@ export const OpticalBatchesPage: React.FC = () => {
               Are you sure you want to delete Optical Batch <strong className="text-slate-900 font-mono font-bold">"{batchToDelete.barcode}"</strong> ({batchToDelete.uniqueItemName})?
             </p>
 
-            <div className="p-3 bg-slate-50 rounded-xl border border-slate-200 text-xs text-slate-600 mb-4 space-y-1.5">
+            <div className="p-3 bg-slate-50 rounded-xl border border-slate-200 text-xs text-slate-600 mb-3 space-y-1.5">
               <div className="font-semibold text-slate-800">Database Safeguard Notice:</div>
               <p>
-                If any <strong>Sales or Purchase Invoices / Orders</strong> are associated with this power batch, or if it has non-zero physical inventory lots, the deletion will be <strong>strictly blocked</strong> by the database to ensure integrity.
+                If any <strong>Sales or Purchase Invoices / Orders</strong> are associated with this power batch, or if it has non-zero physical inventory lots, the deletion will be <strong>strictly blocked</strong> by the database to ensure accounting integrity.
               </p>
             </div>
 
             {deleteError && (
-              <div className="p-3 bg-rose-50 border border-rose-200 rounded-xl text-rose-700 text-xs flex items-start gap-2 mb-4">
-                <ShieldAlert className="h-4 w-4 shrink-0 mt-0.5" />
-                <span>{deleteError}</span>
+              <div className="p-3 bg-rose-50 border border-rose-200 rounded-xl text-rose-800 text-xs space-y-2 mb-3">
+                <div className="flex items-start gap-2 font-semibold">
+                  <ShieldAlert className="h-4 w-4 text-rose-600 shrink-0 mt-0.5" />
+                  <span>{deleteError}</span>
+                </div>
+
+                {deleteBlockedInfo?.references && deleteBlockedInfo.references.length > 0 && (
+                  <div className="mt-2 space-y-1.5">
+                    <div className="font-semibold text-slate-900 flex items-center justify-between">
+                      <span>Specific Referenced Document(s):</span>
+                      <span className="text-[10px] bg-rose-100 text-rose-800 px-1.5 py-0.5 rounded font-mono">
+                        {deleteBlockedInfo.references.length} found
+                      </span>
+                    </div>
+                    <div className="max-h-36 overflow-y-auto rounded-lg border border-rose-200/80 bg-white text-[11px] divide-y divide-slate-100">
+                      {deleteBlockedInfo.references.map((ref, idx) => (
+                        <div key={idx} className="p-2 flex items-center justify-between gap-2">
+                          <div>
+                            <div className="font-semibold text-slate-900 flex items-center gap-1.5">
+                              <span>{ref.typeLabel} {ref.documentNumber}</span>
+                              <span className={`px-1.5 py-0.2 rounded text-[10px] font-bold ${
+                                ref.status === 'DRAFT'
+                                  ? 'bg-amber-100 text-amber-800'
+                                  : ref.status === 'CANCELLED'
+                                  ? 'bg-slate-100 text-slate-700'
+                                  : 'bg-emerald-100 text-emerald-800'
+                              }`}>
+                                {ref.status}
+                              </span>
+                            </div>
+                            <div className="text-slate-500 text-[10px] mt-0.5">
+                              {ref.partyName} • Qty: {ref.quantity} {ref.date ? `• ${new Date(ref.date).toLocaleDateString()}` : ''}
+                            </div>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                    <p className="text-[10px] text-slate-500 italic mt-1">
+                      Note: Draft and cancelled vouchers also retain foreign-key batch lines to preserve document recovery and user audit logs.
+                    </p>
+                  </div>
+                )}
               </div>
             )}
 
-            <div className="flex items-center justify-end gap-3 pt-3 border-t border-slate-100">
-              <button
-                type="button"
-                onClick={() => setBatchToDelete(null)}
-                disabled={deleting}
-                className="px-4 py-2 text-sm font-medium text-slate-600 bg-slate-100 hover:bg-slate-200 rounded-lg transition-colors disabled:opacity-50 cursor-pointer"
-              >
-                Cancel
-              </button>
-              <button
-                type="button"
-                id="btn-confirm-delete-optical-batch"
-                onClick={handleConfirmDelete}
-                disabled={deleting}
-                className="inline-flex items-center gap-2 px-4 py-2 text-sm font-medium text-white bg-rose-600 hover:bg-rose-700 rounded-lg transition-colors disabled:opacity-50 shadow-xs cursor-pointer"
-              >
-                <Trash2 className="h-4 w-4" />
-                {deleting ? 'Deleting...' : 'Delete from Database'}
-              </button>
+            <div className="flex items-center justify-between gap-3 pt-3 border-t border-slate-100">
+              {deleteBlockedInfo && (
+                <button
+                  type="button"
+                  onClick={() => handleSetBatchInactive(batchToDelete.id)}
+                  disabled={deleting}
+                  className="px-3 py-2 text-xs font-semibold text-amber-800 bg-amber-50 hover:bg-amber-100 border border-amber-200 rounded-lg transition-colors cursor-pointer"
+                  title="Mark batch inactive instead of deleting"
+                >
+                  Set Inactive / Archived
+                </button>
+              )}
+              <div className="flex items-center gap-2 ml-auto">
+                <button
+                  type="button"
+                  onClick={() => {
+                    setBatchToDelete(null);
+                    setDeleteBlockedInfo(null);
+                  }}
+                  disabled={deleting}
+                  className="px-4 py-2 text-sm font-medium text-slate-600 bg-slate-100 hover:bg-slate-200 rounded-lg transition-colors disabled:opacity-50 cursor-pointer"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="button"
+                  id="btn-confirm-delete-optical-batch"
+                  onClick={handleConfirmDelete}
+                  disabled={deleting}
+                  className="inline-flex items-center gap-2 px-4 py-2 text-sm font-medium text-white bg-rose-600 hover:bg-rose-700 rounded-lg transition-colors disabled:opacity-50 shadow-xs cursor-pointer"
+                >
+                  <Trash2 className="h-4 w-4" />
+                  {deleting ? 'Deleting...' : 'Delete from Database'}
+                </button>
+              </div>
             </div>
           </div>
         </div>
@@ -913,14 +1138,14 @@ export const OpticalBatchesPage: React.FC = () => {
 
             <form onSubmit={handleEditSubmit} className="space-y-4">
               <div>
-                <label className="block text-xs font-medium text-slate-700 mb-1">Unique SKU / Item *</label>
+                <label className="block text-xs font-medium text-slate-700 mb-1">Stock Item (SKU) *</label>
                 <select
                   required
                   value={editFormData.uniqueItemId}
                   onChange={(e) => setEditFormData({ ...editFormData, uniqueItemId: e.target.value })}
                   className="w-full px-3 py-2 text-sm bg-slate-50 border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-indigo-500"
                 >
-                  {uniqueItems.map(u => (
+                  {uniqueItems.filter(u => u.maintainBatches || u.id === editingBatch?.uniqueItemId).map(u => (
                     <option key={u.id} value={u.id}>
                       {u.name} ({u.code}) - {u.categoryCode || 'SV'}
                     </option>
@@ -1055,6 +1280,163 @@ export const OpticalBatchesPage: React.FC = () => {
               text: 'Bulk Excel import completed successfully. Optical batches and stock registry have been updated.',
             });
           }}
+        />
+      )}
+
+      {/* Inspect Dependencies Modal */}
+      {inspectBatch && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/60 backdrop-blur-xs p-4">
+          <div className="bg-white rounded-2xl max-w-xl w-full p-6 shadow-2xl border border-slate-200 max-h-[85vh] flex flex-col">
+            <div className="flex items-center justify-between pb-3 border-b border-slate-100">
+              <div className="flex items-center gap-2.5">
+                <div className="p-2 bg-blue-50 text-blue-600 rounded-xl">
+                  <ShieldAlert className="h-5 w-5" />
+                </div>
+                <div>
+                  <h3 className="text-base font-bold text-slate-900">
+                    Batch Dependencies & Audit Inspector
+                  </h3>
+                  <div className="flex items-center gap-2 text-xs text-slate-500 font-mono mt-0.5">
+                    <span className="font-semibold text-indigo-600">{inspectBatch.barcode}</span>
+                    <span>•</span>
+                    <span>{inspectBatch.uniqueItemName}</span>
+                    <span>• SPH: {inspectBatch.sph} CYL: {inspectBatch.cyl}</span>
+                  </div>
+                </div>
+              </div>
+              <button
+                onClick={() => setInspectBatch(null)}
+                className="p-1.5 text-slate-400 hover:text-slate-600 rounded-lg"
+              >
+                <XCircle className="h-5 w-5" />
+              </button>
+            </div>
+
+            <div className="py-4 overflow-y-auto flex-1 space-y-4">
+              {inspectLoading ? (
+                <div className="flex flex-col items-center justify-center py-12 text-slate-500 gap-2">
+                  <RefreshCw className="h-6 w-6 animate-spin text-indigo-600" />
+                  <span className="text-xs">Inspecting database foreign-key relations & stock ledger...</span>
+                </div>
+              ) : inspectData ? (
+                <div className="space-y-3">
+                  {/* Status Banner */}
+                  <div
+                    className={`p-3.5 rounded-xl border text-xs flex items-start gap-2.5 ${
+                      inspectData.canDelete
+                        ? 'bg-emerald-50 border-emerald-200 text-emerald-800'
+                        : 'bg-amber-50 border-amber-200 text-amber-900'
+                    }`}
+                  >
+                    {inspectData.canDelete ? (
+                      <CheckCircle2 className="h-5 w-5 text-emerald-600 shrink-0 mt-0.5" />
+                    ) : (
+                      <AlertTriangle className="h-5 w-5 text-amber-600 shrink-0 mt-0.5" />
+                    )}
+                    <div>
+                      <div className="font-bold">
+                        {inspectData.canDelete
+                          ? 'Zero Dependencies: Safe for Hard Deletion'
+                          : 'Hard Deletion Blocked to Protect Integrity'}
+                      </div>
+                      <p className="mt-0.5 leading-relaxed">
+                        {inspectData.canDelete
+                          ? 'This power batch has no sales or purchase invoices, zero lots, zero reservations, and zero movement history.'
+                          : inspectData.reasonSummary || inspectData.error}
+                      </p>
+                    </div>
+                  </div>
+
+                  {/* Stock Position */}
+                  {inspectData.stockInfo && (
+                    <div className="grid grid-cols-3 gap-2 bg-slate-50 p-3 rounded-xl border border-slate-200 text-center font-mono">
+                      <div>
+                        <span className="text-[10px] text-slate-500 block font-sans">Physical Stock</span>
+                        <span className="text-xs font-bold text-slate-900">{inspectData.stockInfo.physicalStock}</span>
+                      </div>
+                      <div>
+                        <span className="text-[10px] text-amber-600 block font-sans">Reserved</span>
+                        <span className="text-xs font-bold text-amber-700">{inspectData.stockInfo.reservedStock}</span>
+                      </div>
+                      <div>
+                        <span className="text-[10px] text-emerald-600 block font-sans">Available</span>
+                        <span className="text-xs font-bold text-emerald-700">{inspectData.stockInfo.availableStock}</span>
+                      </div>
+                    </div>
+                  )}
+
+                  {/* List of Referenced Documents */}
+                  <div>
+                    <div className="text-xs font-bold text-slate-900 mb-1.5 flex items-center justify-between">
+                      <span>Referenced Invoices & Documents</span>
+                      <span className="text-[10px] bg-slate-100 px-2 py-0.5 rounded font-mono text-slate-600">
+                        {inspectData.references?.length || 0} reference(s)
+                      </span>
+                    </div>
+
+                    {(!inspectData.references || inspectData.references.length === 0) ? (
+                      <div className="p-4 bg-slate-50 border border-dashed border-slate-200 rounded-xl text-center text-xs text-slate-400">
+                        No document line items are referencing this batch.
+                      </div>
+                    ) : (
+                      <div className="border border-slate-200 rounded-xl overflow-hidden divide-y divide-slate-100 max-h-48 overflow-y-auto">
+                        {inspectData.references.map((r: any, idx: number) => (
+                          <div key={idx} className="p-2.5 bg-white text-xs flex items-center justify-between gap-2">
+                            <div>
+                              <div className="font-semibold text-slate-900 flex items-center gap-1.5">
+                                <span>{r.typeLabel} {r.documentNumber}</span>
+                                <span
+                                  className={`px-1.5 py-0.2 rounded text-[10px] font-bold ${
+                                    r.status === 'DRAFT'
+                                      ? 'bg-amber-100 text-amber-800'
+                                      : r.status === 'CANCELLED'
+                                      ? 'bg-slate-100 text-slate-700'
+                                      : 'bg-emerald-100 text-emerald-800'
+                                  }`}
+                                >
+                                  {r.status}
+                                </span>
+                              </div>
+                              <div className="text-slate-500 text-[11px] mt-0.5">
+                                {r.partyName} • Qty: {r.quantity} {r.date ? `• ${new Date(r.date).toLocaleDateString()}` : ''}
+                              </div>
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                </div>
+              ) : null}
+            </div>
+
+            <div className="flex items-center justify-between pt-3 border-t border-slate-100">
+              {inspectBatch && inspectData && !inspectData.canDelete && (
+                <button
+                  type="button"
+                  onClick={() => handleSetBatchInactive(inspectBatch.id)}
+                  className="px-3 py-1.5 text-xs font-semibold text-amber-800 bg-amber-50 hover:bg-amber-100 border border-amber-200 rounded-lg transition-colors cursor-pointer"
+                >
+                  Set Batch Inactive / Archived
+                </button>
+              )}
+              <button
+                onClick={() => setInspectBatch(null)}
+                className="px-4 py-1.5 text-xs font-medium text-slate-600 bg-slate-100 hover:bg-slate-200 rounded-lg ml-auto cursor-pointer"
+              >
+                Done
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Tally-Style Stock Item Ledger Modal */}
+      {ledgerItemId && (
+        <StockItemLedgerModal
+          itemId={ledgerItemId}
+          itemName={ledgerItemName}
+          onClose={() => setLedgerItemId(null)}
         />
       )}
     </div>

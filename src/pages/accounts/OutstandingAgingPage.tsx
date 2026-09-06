@@ -20,6 +20,7 @@ import {
   ExternalLink,
 } from 'lucide-react';
 import { useAuth } from '../../context/AuthContext.js';
+import { getStoredToken } from '../../api/client.js';
 
 interface OutstandingCustomer {
   partyId: string;
@@ -110,7 +111,7 @@ export const OutstandingAgingPage: React.FC<{ onNavigate?: (path: string) => voi
       if (activeTab === 'CUSTOMERS') {
         const res = await fetch(`/api/payments/outstanding/customers?${params.toString()}`, {
           headers: {
-            Authorization: `Bearer ${localStorage.getItem('token')}`,
+            Authorization: `Bearer ${getStoredToken()}`,
             'X-Business-Id': currentBusiness.id,
           },
         });
@@ -121,7 +122,7 @@ export const OutstandingAgingPage: React.FC<{ onNavigate?: (path: string) => voi
       } else {
         const res = await fetch(`/api/payments/outstanding/suppliers?${params.toString()}`, {
           headers: {
-            Authorization: `Bearer ${localStorage.getItem('token')}`,
+            Authorization: `Bearer ${getStoredToken()}`,
             'X-Business-Id': currentBusiness.id,
           },
         });
@@ -154,7 +155,7 @@ export const OutstandingAgingPage: React.FC<{ onNavigate?: (path: string) => voi
 
       const res = await fetch(`/api/payments/statement/${partyId}?${params.toString()}`, {
         headers: {
-          Authorization: `Bearer ${localStorage.getItem('token')}`,
+          Authorization: `Bearer ${getStoredToken()}`,
           'X-Business-Id': currentBusiness.id,
         },
       });

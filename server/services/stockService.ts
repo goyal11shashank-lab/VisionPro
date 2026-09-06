@@ -835,7 +835,7 @@ export class StockService {
       })
       .from(opticalBatches)
       .innerJoin(uniqueItems, eq(opticalBatches.uniqueItemId, uniqueItems.id))
-      .innerJoin(primaryItems, eq(uniqueItems.primaryItemId, primaryItems.id))
+      .leftJoin(primaryItems, eq(uniqueItems.primaryItemId, primaryItems.id))
       .innerJoin(categories, eq(opticalBatches.categoryId, categories.id))
       .where(and(eq(opticalBatches.businessId, businessId), eq(opticalBatches.barcode, cleanBarcode)))
       .limit(1);
@@ -856,11 +856,11 @@ export class StockService {
         name: batchRecord.category.name,
         code: batchRecord.category.code,
       },
-      primaryItem: {
+      primaryItem: batchRecord.primaryItem ? {
         id: batchRecord.primaryItem.id,
         name: batchRecord.primaryItem.name,
         code: batchRecord.primaryItem.code,
-      },
+      } : null,
       uniqueItem: {
         id: batchRecord.uniqueItem.id,
         name: batchRecord.uniqueItem.name,
@@ -909,7 +909,7 @@ export class StockService {
       })
       .from(opticalBatches)
       .innerJoin(uniqueItems, eq(opticalBatches.uniqueItemId, uniqueItems.id))
-      .innerJoin(primaryItems, eq(uniqueItems.primaryItemId, primaryItems.id))
+      .leftJoin(primaryItems, eq(uniqueItems.primaryItemId, primaryItems.id))
       .innerJoin(categories, eq(opticalBatches.categoryId, categories.id))
       .leftJoin(
         opticalStocks,
@@ -936,9 +936,9 @@ export class StockService {
         categoryId: r.category.id,
         categoryName: r.category.name,
         categoryCode: r.category.code,
-        primaryItemId: r.primaryItem.id,
-        primaryItemName: r.primaryItem.name,
-        primaryItemCode: r.primaryItem.code,
+        primaryItemId: r.primaryItem?.id || null,
+        primaryItemName: r.primaryItem?.name || null,
+        primaryItemCode: r.primaryItem?.code || null,
         uniqueItemId: r.uniqueItem.id,
         uniqueItemName: r.uniqueItem.name,
         uniqueItemCode: r.uniqueItem.code,
@@ -990,8 +990,8 @@ export class StockService {
           r.barcode.toLowerCase().includes(q) ||
           r.uniqueItemName.toLowerCase().includes(q) ||
           r.uniqueItemCode.toLowerCase().includes(q) ||
-          r.primaryItemName.toLowerCase().includes(q) ||
-          r.categoryName.toLowerCase().includes(q) ||
+          (r.primaryItemName && r.primaryItemName.toLowerCase().includes(q)) ||
+          (r.categoryName && r.categoryName.toLowerCase().includes(q)) ||
           r.identityKey.toLowerCase().includes(q)
       );
     }
@@ -1021,7 +1021,7 @@ export class StockService {
       })
       .from(opticalBatches)
       .innerJoin(uniqueItems, eq(opticalBatches.uniqueItemId, uniqueItems.id))
-      .innerJoin(primaryItems, eq(uniqueItems.primaryItemId, primaryItems.id))
+      .leftJoin(primaryItems, eq(uniqueItems.primaryItemId, primaryItems.id))
       .innerJoin(categories, eq(opticalBatches.categoryId, categories.id))
       .where(and(eq(opticalBatches.businessId, businessId), eq(opticalBatches.id, batchId)))
       .limit(1);
@@ -1059,7 +1059,7 @@ export class StockService {
         status: batchRecord.batch.status,
       },
       category: batchRecord.category,
-      primaryItem: batchRecord.primaryItem,
+      primaryItem: batchRecord.primaryItem || null,
       uniqueItem: batchRecord.uniqueItem,
       stock,
       ledger: ledger.map((l) => ({
@@ -1118,7 +1118,7 @@ export class StockService {
       .from(stockReservations)
       .innerJoin(opticalBatches, eq(stockReservations.batchId, opticalBatches.id))
       .innerJoin(uniqueItems, eq(opticalBatches.uniqueItemId, uniqueItems.id))
-      .innerJoin(primaryItems, eq(uniqueItems.primaryItemId, primaryItems.id))
+      .leftJoin(primaryItems, eq(uniqueItems.primaryItemId, primaryItems.id))
       .innerJoin(categories, eq(opticalBatches.categoryId, categories.id))
       .where(eq(stockReservations.businessId, businessId));
 
@@ -1130,7 +1130,7 @@ export class StockService {
       barcode: r.batch.barcode,
       identityKey: r.batch.identityKey,
       categoryName: r.category.name,
-      primaryItemName: r.primaryItem.name,
+      primaryItemName: r.primaryItem?.name || null,
       uniqueItemName: r.uniqueItem.name,
       sph: parseFloat(r.batch.sph),
       cyl: parseFloat(r.batch.cyl),
@@ -1190,7 +1190,7 @@ export class StockService {
       .from(stockLedger)
       .innerJoin(opticalBatches, eq(stockLedger.batchId, opticalBatches.id))
       .innerJoin(uniqueItems, eq(opticalBatches.uniqueItemId, uniqueItems.id))
-      .innerJoin(primaryItems, eq(uniqueItems.primaryItemId, primaryItems.id))
+      .leftJoin(primaryItems, eq(uniqueItems.primaryItemId, primaryItems.id))
       .innerJoin(categories, eq(opticalBatches.categoryId, categories.id))
       .where(
         and(
@@ -1207,7 +1207,7 @@ export class StockService {
       barcode: r.batch.barcode,
       identityKey: r.batch.identityKey,
       categoryName: r.category.name,
-      primaryItemName: r.primaryItem.name,
+      primaryItemName: r.primaryItem?.name || null,
       uniqueItemName: r.uniqueItem.name,
       sph: parseFloat(r.batch.sph),
       cyl: parseFloat(r.batch.cyl),
@@ -1249,7 +1249,7 @@ export class StockService {
       .from(stockLedger)
       .innerJoin(opticalBatches, eq(stockLedger.batchId, opticalBatches.id))
       .innerJoin(uniqueItems, eq(opticalBatches.uniqueItemId, uniqueItems.id))
-      .innerJoin(primaryItems, eq(uniqueItems.primaryItemId, primaryItems.id))
+      .leftJoin(primaryItems, eq(uniqueItems.primaryItemId, primaryItems.id))
       .innerJoin(categories, eq(opticalBatches.categoryId, categories.id))
       .where(
         and(
@@ -1271,7 +1271,7 @@ export class StockService {
         barcode: r.batch.barcode,
         identityKey: r.batch.identityKey,
         categoryName: r.category.name,
-        primaryItemName: r.primaryItem.name,
+        primaryItemName: r.primaryItem?.name || null,
         uniqueItemName: r.uniqueItem.name,
         sph: parseFloat(r.batch.sph),
         cyl: parseFloat(r.batch.cyl),

@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { BookOpen, Search, ArrowUpRight, ArrowDownLeft, Building2, Calendar, FileText } from 'lucide-react';
 import { useAuth } from '../../context/AuthContext.js';
+import { getStoredToken } from '../../api/client.js';
 
 export const CustomerLedgerPage: React.FC = () => {
   const { currentBusiness } = useAuth();
@@ -14,7 +15,7 @@ export const CustomerLedgerPage: React.FC = () => {
     if (!currentBusiness) return;
     fetch('/api/parties', {
       headers: {
-        Authorization: `Bearer ${localStorage.getItem('token')}`,
+        Authorization: `Bearer ${getStoredToken()}`,
         'X-Business-Id': currentBusiness.id,
       },
     })
@@ -36,7 +37,7 @@ export const CustomerLedgerPage: React.FC = () => {
     setLoading(true);
     fetch(`/api/sales/parties/${selectedPartyId}/ledger`, {
       headers: {
-        Authorization: `Bearer ${localStorage.getItem('token')}`,
+        Authorization: `Bearer ${getStoredToken()}`,
         'X-Business-Id': currentBusiness.id,
       },
     })

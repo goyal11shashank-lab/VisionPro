@@ -1,8 +1,10 @@
 import React, { useState, useEffect } from 'react';
-import { QrCode, Plus, Search, RefreshCw, CheckCircle2, XCircle, Edit3, Trash2, ShieldAlert, AlertTriangle, Filter, IndianRupee, Layers } from 'lucide-react';
+import { QrCode, Plus, Search, RefreshCw, CheckCircle2, XCircle, Edit3, Trash2, ShieldAlert, AlertTriangle, Filter, IndianRupee, Layers, BookOpen } from 'lucide-react';
 import { apiRequest } from '../../api/client.js';
 import { UniqueItem, PrimaryItem } from '../../types/index.js';
 import { useAuth } from '../../context/AuthContext.js';
+import { StockItemLedgerModal } from '../../components/inventory/StockItemLedgerModal.js';
+import { rankSearchMatch } from '../../utils/searchNormalization.js';
 
 export const UniqueItemsPage: React.FC = () => {
   const { hasPermission } = useAuth();
@@ -25,16 +27,23 @@ export const UniqueItemsPage: React.FC = () => {
   const [bulkDeleting, setBulkDeleting] = useState<boolean>(false);
   const [bulkDeleteError, setBulkDeleteError] = useState<string | null>(null);
 
+  // Tally-style Stock Item Ledger state
+  const [ledgerItemId, setLedgerItemId] = useState<string | null>(null);
+  const [ledgerItemName, setLedgerItemName] = useState<string>('');
+
   const [formData, setFormData] = useState({
     primaryItemId: '',
     name: '',
     code: '',
     description: '',
+    maintainBatches: false,
+    opticalCategory: 'SV' as 'SV' | 'KT' | 'PROG' | 'OTHER',
     purchaseRate: 0,
     lastPurchasePrice: 0,
     mrp: 0,
     status: 'ACTIVE' as 'ACTIVE' | 'INACTIVE',
   });
+  const [modalError, setModalError] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState<boolean>(false);
 
   const fetchData = async () => {
@@ -49,7 +58,7 @@ export const UniqueItemsPage: React.FC = () => {
       setPrimaryItems(pRes.primaryItems || []);
       setSelectedIds([]);
     } catch (err: any) {
-      setError(err.message || 'Failed to load unique items');
+      setError(err.message || 'Failed to load stock items');
     } finally {
       setLoading(false);
     }
@@ -61,12 +70,14 @@ export const UniqueItemsPage: React.FC = () => {
 
   const handleOpenCreate = () => {
     setEditingItem(null);
-    const defaultP = primaryItems[0]?.id || '';
+    setModalError(null);
     setFormData({
-      primaryItemId: defaultP,
+      primaryItemId: '',
       name: '',
       code: '',
       description: '',
+      maintainBatches: false,
+      opticalCategory: 'SV',
       purchaseRate: 0,
       lastPurchasePrice: 0,
       mrp: 0,
@@ -77,11 +88,14 @@ export const UniqueItemsPage: React.FC = () => {
 
   const handleOpenEdit = (item: UniqueItem) => {
     setEditingItem(item);
+    setModalError(null);
     setFormData({
-      primaryItemId: item.primaryItemId,
+      primaryItemId: item.primaryItemId || '',
       name: item.name,
       code: item.code,
       description: item.description || '',
+      maintainBatches: Boolean(item.maintainBatches),
+      opticalCategory: (item.opticalCategory || item.categoryCode || 'SV') as any,
       purchaseRate: Number(item.purchaseRate) || 0,
       lastPurchasePrice: Number(item.lastPurchasePrice) || 0,
       mrp: Number(item.mrp) || 0,
@@ -106,14 +120,14 @@ export const UniqueItemsPage: React.FC = () => {
       );
       setFeedbackMessage({
         type: 'success',
-        text: res.message || `Unique Item "${itemToDelete.name}" was deleted successfully.`
+        text: res.message || `Stock Item "${itemToDelete.name}" was deleted successfully.`
       });
       setSelectedIds(prev => prev.filter(id => id !== itemToDelete.id));
       setItemToDelete(null);
       setTimeout(() => setFeedbackMessage(null), 6000);
       fetchData();
     } catch (err: any) {
-      setDeleteError(err.message || 'Failed to delete unique item');
+      setDeleteError(err.message || 'Failed to delete stock item');
     } finally {
       setDeleting(false);
     }
@@ -142,7 +156,7 @@ export const UniqueItemsPage: React.FC = () => {
       if (res.deletedCount > 0 && res.failedCount === 0) {
         setFeedbackMessage({
           type: 'success',
-          text: res.message || `Successfully deleted ${res.deletedCount} unique item(s).`,
+          text: res.message || `Successfully deleted ${res.deletedCount} stock item(s).`,
         });
       } else if (res.deletedCount > 0 && res.failedCount > 0) {
         setFeedbackMessage({
@@ -153,7 +167,7 @@ export const UniqueItemsPage: React.FC = () => {
       } else {
         setFeedbackMessage({
           type: 'error',
-          text: res.message || 'None of the selected unique items could be deleted.',
+          text: res.message || 'None of the selected stock items could be deleted.',
           details: res.errors,
         });
       }
@@ -171,11 +185,15 @@ export const UniqueItemsPage: React.FC = () => {
     e.preventDefault();
     try {
       setSubmitting(true);
+      setModalError(null);
       if (editingItem) {
         await apiRequest(`/api/optical-master/unique-items/${editingItem.id}`, {
           method: 'PATCH',
           body: JSON.stringify({
             name: formData.name,
+            primaryItemId: formData.primaryItemId ? formData.primaryItemId : null,
+            maintainBatches: formData.maintainBatches,
+            opticalCategory: formData.opticalCategory,
             description: formData.description,
             purchaseRate: formData.purchaseRate,
             lastPurchasePrice: formData.lastPurchasePrice,
@@ -183,31 +201,37 @@ export const UniqueItemsPage: React.FC = () => {
             status: formData.status,
           }),
         });
-        setFeedbackMessage({ type: 'success', text: `Unique Item "${formData.name}" updated successfully.` });
+        setFeedbackMessage({ type: 'success', text: `Stock Item "${formData.name}" updated successfully.` });
       } else {
         await apiRequest('/api/optical-master/unique-items', {
           method: 'POST',
-          body: JSON.stringify(formData),
+          body: JSON.stringify({
+            ...formData,
+            primaryItemId: formData.primaryItemId ? formData.primaryItemId : null,
+          }),
         });
-        setFeedbackMessage({ type: 'success', text: `Unique Item "${formData.name}" created successfully.` });
+        setFeedbackMessage({ type: 'success', text: `Stock Item "${formData.name}" created successfully.` });
       }
       setTimeout(() => setFeedbackMessage(null), 5000);
       setShowModal(false);
       fetchData();
     } catch (err: any) {
-      alert(err.message || 'Error saving unique item');
+      setModalError(err.message || 'Error saving stock item');
     } finally {
       setSubmitting(false);
     }
   };
 
-  const filtered = uniqueItems.filter(item => {
-    const matchesSearch = item.name.toLowerCase().includes(search.toLowerCase()) ||
-      item.code.toLowerCase().includes(search.toLowerCase()) ||
-      (item.primaryItemName && item.primaryItemName.toLowerCase().includes(search.toLowerCase()));
-    const matchesPrimary = selectedPrimaryItem ? item.primaryItemId === selectedPrimaryItem : true;
-    return matchesSearch && matchesPrimary;
-  });
+  const byPrimary = selectedPrimaryItem ? uniqueItems.filter(item => item.primaryItemId === selectedPrimaryItem) : uniqueItems;
+  const filtered = search.trim()
+    ? rankSearchMatch<UniqueItem>(byPrimary, search, (item: UniqueItem) => ({
+        id: item.id,
+        name: item.name,
+        code: item.code,
+        categoryCode: (item.opticalCategory || item.categoryCode) as string,
+        rawText: `${item.primaryItemName || ''} ${item.primaryItemCode || ''} ${item.description || ''}`,
+      }))
+    : byPrimary;
 
   const isAllSelected = filtered.length > 0 && filtered.every(item => selectedIds.includes(item.id));
   const isSomeSelected = filtered.some(item => selectedIds.includes(item.id)) && !isAllSelected;
@@ -237,7 +261,7 @@ export const UniqueItemsPage: React.FC = () => {
         <div>
           <h1 className="text-2xl font-bold tracking-tight text-slate-900 flex items-center gap-2">
             <QrCode className="h-7 w-7 text-indigo-600" />
-            Unique Items Master
+            Stock Items Master
           </h1>
           <p className="text-sm text-slate-500 mt-1">
             SKU level products with distinct commercial pricing, brand packaging, and purchase rates.
@@ -257,7 +281,7 @@ export const UniqueItemsPage: React.FC = () => {
               className="inline-flex items-center gap-2 px-4 py-2 text-sm font-medium text-white bg-indigo-600 rounded-lg hover:bg-indigo-700 shadow-xs cursor-pointer"
             >
               <Plus className="h-4 w-4" />
-              New Unique Item
+              New Stock Item
             </button>
           )}
         </div>
@@ -318,7 +342,7 @@ export const UniqueItemsPage: React.FC = () => {
             {(hasPermission('master:delete') || hasPermission('master:edit')) && (
               <button
                 type="button"
-                id="btn-bulk-delete-unique-items"
+                id="btn-bulk-delete-stock-items"
                 onClick={() => {
                   setBulkDeleteError(null);
                   setShowBulkDeleteModal(true);
@@ -338,7 +362,7 @@ export const UniqueItemsPage: React.FC = () => {
           <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-slate-400" />
           <input
             type="text"
-            placeholder="Search unique items by code, name, or primary item..."
+            placeholder="Search stock items by code, name, or primary item..."
             value={search}
             onChange={(e) => setSearch(e.target.value)}
             className="w-full pl-9 pr-4 py-2 text-sm bg-slate-50 border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:bg-white transition-all"
@@ -373,7 +397,7 @@ export const UniqueItemsPage: React.FC = () => {
                   <th className="w-10 px-4 py-4 text-center">
                     <input
                       type="checkbox"
-                      id="checkbox-select-all-unique-items"
+                      id="checkbox-select-all-stock-items"
                       checked={isAllSelected}
                       ref={input => {
                         if (input) input.indeterminate = isSomeSelected;
@@ -383,9 +407,10 @@ export const UniqueItemsPage: React.FC = () => {
                     />
                   </th>
                   <th className="px-5 py-4">SKU Code</th>
-                  <th className="px-5 py-4">Unique Item Name</th>
+                  <th className="px-5 py-4">Stock Item Name</th>
                   <th className="px-5 py-4">Primary Item</th>
                   <th className="px-5 py-4">Category</th>
+                  <th className="px-5 py-4">Batches</th>
                   <th className="px-5 py-4">Purchase Rate</th>
                   <th className="px-5 py-4">MRP</th>
                   <th className="px-5 py-4">Status</th>
@@ -395,15 +420,15 @@ export const UniqueItemsPage: React.FC = () => {
               <tbody className="divide-y divide-slate-200">
                 {loading ? (
                   <tr>
-                    <td colSpan={9} className="px-6 py-12 text-center text-slate-400">
+                    <td colSpan={10} className="px-6 py-12 text-center text-slate-400">
                       <RefreshCw className="h-6 w-6 animate-spin mx-auto mb-2 text-indigo-500" />
-                      Loading unique item catalog...
+                      Loading stock item catalog...
                     </td>
                   </tr>
                 ) : filtered.length === 0 ? (
                   <tr>
-                    <td colSpan={9} className="px-6 py-12 text-center text-slate-400">
-                      No unique items found.
+                    <td colSpan={10} className="px-6 py-12 text-center text-slate-400">
+                      No stock items found.
                     </td>
                   </tr>
                 ) : (
@@ -420,7 +445,7 @@ export const UniqueItemsPage: React.FC = () => {
                         <td className="w-10 px-4 py-4 text-center" onClick={e => e.stopPropagation()}>
                           <input
                             type="checkbox"
-                            id={`checkbox-unique-item-${item.code}`}
+                            id={`checkbox-stock-item-${item.code}`}
                             checked={isSelected}
                             onChange={(e) => handleToggleSelectRow(item.id, e as any)}
                             className="h-4 w-4 rounded border-slate-300 text-indigo-600 focus:ring-indigo-500 cursor-pointer"
@@ -431,16 +456,52 @@ export const UniqueItemsPage: React.FC = () => {
                             {item.code}
                           </span>
                         </td>
-                        <td className="px-5 py-4 font-semibold text-slate-900">
-                          {item.name}
+                        <td className="px-5 py-4 font-semibold text-slate-900" onClick={e => e.stopPropagation()}>
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setLedgerItemId(item.id);
+                              setLedgerItemName(item.name);
+                            }}
+                            className="text-left font-semibold text-slate-900 hover:text-indigo-600 hover:underline transition-colors cursor-pointer inline-flex items-center gap-1.5 group"
+                            title="Click to view Tally-style monthly purchases, sales & stock ledger"
+                          >
+                            <span>{item.name}</span>
+                            <BookOpen className="h-3.5 w-3.5 text-indigo-400 opacity-0 group-hover:opacity-100 transition-opacity" />
+                          </button>
                         </td>
                         <td className="px-5 py-4 text-slate-600">
                           {item.primaryItemName || item.primaryItemCode || '—'}
                         </td>
                         <td className="px-5 py-4">
-                          <span className="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-slate-100 text-slate-700 border border-slate-200">
-                            {item.categoryCode || 'SV'}
-                          </span>
+                          {(() => {
+                            const cat = (item.opticalCategory || item.categoryCode || 'SV').toUpperCase();
+                            const badgeColor =
+                              cat === 'SV'
+                                ? 'bg-sky-50 text-sky-700 border-sky-200'
+                                : cat === 'KT'
+                                ? 'bg-amber-50 text-amber-700 border-amber-200'
+                                : cat === 'PROG'
+                                ? 'bg-purple-50 text-purple-700 border-purple-200'
+                                : 'bg-slate-100 text-slate-600 border-slate-200';
+                            return (
+                              <span className={`inline-flex items-center px-2.5 py-0.5 rounded-md text-xs font-bold border ${badgeColor}`}>
+                                {cat}
+                              </span>
+                            );
+                          })()}
+                        </td>
+                        <td className="px-5 py-4">
+                          {item.maintainBatches ? (
+                            <span className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-xs font-semibold bg-emerald-50 text-emerald-700 border border-emerald-200">
+                              <Layers className="h-3 w-3 text-emerald-600" />
+                              Yes {item.batchesCount !== undefined && Number(item.batchesCount) > 0 ? `(${item.batchesCount})` : ''}
+                            </span>
+                          ) : (
+                            <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-slate-100 text-slate-500 border border-slate-200">
+                              No
+                            </span>
+                          )}
                         </td>
                         <td className="px-5 py-4 font-mono text-slate-900">
                           ₹{Number(item.purchaseRate).toFixed(2)}
@@ -463,22 +524,33 @@ export const UniqueItemsPage: React.FC = () => {
                         </td>
                         <td className="px-5 py-4 text-right" onClick={e => e.stopPropagation()}>
                           <div className="flex items-center justify-end gap-1">
+                            <button
+                              id={`btn-ledger-stock-item-${item.code}`}
+                              onClick={() => {
+                                setLedgerItemId(item.id);
+                                setLedgerItemName(item.name);
+                              }}
+                              className="p-1.5 text-slate-500 hover:text-indigo-600 hover:bg-indigo-50 rounded-md transition-colors cursor-pointer"
+                              title="View Tally-Style Stock Item Ledger & Monthly Drill-down"
+                            >
+                              <BookOpen className="h-4 w-4" />
+                            </button>
                             {(hasPermission('master:edit') || hasPermission('master:create') || hasPermission('master:manage')) && (
                               <button
-                                id={`btn-edit-unique-item-${item.code}`}
+                                id={`btn-edit-stock-item-${item.code}`}
                                 onClick={() => handleOpenEdit(item)}
                                 className="p-1.5 text-slate-500 hover:text-indigo-600 hover:bg-indigo-50 rounded-md transition-colors cursor-pointer"
-                                title="Edit Unique Item"
+                                title="Edit Stock Item"
                               >
                                 <Edit3 className="h-4 w-4" />
                               </button>
                             )}
                             {(hasPermission('master:delete') || hasPermission('master:edit')) && (
                               <button
-                                id={`btn-delete-unique-item-${item.code}`}
+                                id={`btn-delete-stock-item-${item.code}`}
                                 onClick={() => handleDeleteClick(item)}
                                 className="p-1.5 text-slate-400 hover:text-rose-600 hover:bg-rose-50 rounded-md transition-colors cursor-pointer"
-                                title="Delete Unique Item"
+                                title="Delete Stock Item"
                               >
                                 <Trash2 className="h-4 w-4" />
                               </button>
@@ -504,12 +576,12 @@ export const UniqueItemsPage: React.FC = () => {
                 <AlertTriangle className="h-6 w-6 text-rose-600" />
               </div>
               <h3 className="text-lg font-bold text-slate-900">
-                Delete Unique Item (SKU)?
+                Delete Stock Item (SKU)?
               </h3>
             </div>
 
             <p className="text-sm text-slate-600 mb-4 leading-relaxed">
-              Are you sure you want to delete Unique SKU <strong className="text-slate-900">"{itemToDelete.name}"</strong> (<span className="font-mono text-xs font-semibold">{itemToDelete.code}</span>)?
+              Are you sure you want to delete Stock Item <strong className="text-slate-900">"{itemToDelete.name}"</strong> (<span className="font-mono text-xs font-semibold">{itemToDelete.code}</span>)?
             </p>
 
             <div className="p-3 bg-slate-50 rounded-xl border border-slate-200 text-xs text-slate-600 mb-4 space-y-1.5">
@@ -537,7 +609,7 @@ export const UniqueItemsPage: React.FC = () => {
               </button>
               <button
                 type="button"
-                id="btn-confirm-delete-unique-item"
+                id="btn-confirm-delete-stock-item"
                 onClick={handleConfirmDelete}
                 disabled={deleting}
                 className="inline-flex items-center gap-2 px-4 py-2 text-sm font-medium text-white bg-rose-600 hover:bg-rose-700 rounded-lg transition-colors disabled:opacity-50 shadow-xs cursor-pointer"
@@ -552,7 +624,7 @@ export const UniqueItemsPage: React.FC = () => {
 
       {/* Bulk Delete Modal */}
       {showBulkDeleteModal && (
-        <div id="modal-bulk-delete-unique-items" className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/60 backdrop-blur-xs p-4 overflow-y-auto">
+        <div id="modal-bulk-delete-stock-items" className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/60 backdrop-blur-xs p-4 overflow-y-auto">
           <div className="bg-white rounded-2xl max-w-lg w-full max-h-[90vh] flex flex-col p-6 shadow-2xl border border-rose-100 animate-in fade-in zoom-in-95 duration-150 overflow-hidden">
             <div className="flex items-start gap-4 overflow-y-auto flex-1 pr-1 overscroll-contain">
               <div className="p-3 bg-rose-100 text-rose-600 rounded-full shrink-0">
@@ -560,10 +632,10 @@ export const UniqueItemsPage: React.FC = () => {
               </div>
               <div className="flex-1">
                 <h3 className="text-lg font-bold text-slate-900">
-                  Delete {selectedIds.length} Selected Unique SKUs
+                  Delete {selectedIds.length} Selected Stock Items
                 </h3>
                 <p className="text-sm text-slate-500 mt-1">
-                  You are about to permanently delete <span className="font-semibold text-slate-800">{selectedIds.length}</span> unique item records.
+                  You are about to permanently delete <span className="font-semibold text-slate-800">{selectedIds.length}</span> stock item records.
                 </p>
 
                 {/* List preview with scrollable container */}
@@ -605,7 +677,7 @@ export const UniqueItemsPage: React.FC = () => {
               </button>
               <button
                 type="button"
-                id="btn-confirm-bulk-delete-unique-items"
+                id="btn-confirm-bulk-delete-stock-items"
                 disabled={bulkDeleting}
                 onClick={handleBulkDeleteConfirm}
                 className="inline-flex items-center gap-2 px-4 py-2 text-sm font-medium text-white bg-rose-600 hover:bg-rose-700 rounded-lg disabled:opacity-50 transition-colors shadow-xs cursor-pointer"
@@ -613,12 +685,12 @@ export const UniqueItemsPage: React.FC = () => {
                 {bulkDeleting ? (
                   <>
                     <RefreshCw className="h-4 w-4 animate-spin" />
-                    Deleting {selectedIds.length} SKUs...
+                    Deleting {selectedIds.length} Stock Items...
                   </>
                 ) : (
                   <>
                     <Trash2 className="h-4 w-4" />
-                    Delete {selectedIds.length} SKUs
+                    Delete {selectedIds.length} Stock Items
                   </>
                 )}
               </button>
@@ -632,31 +704,42 @@ export const UniqueItemsPage: React.FC = () => {
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/60 backdrop-blur-xs p-4">
           <div className="bg-white rounded-2xl max-w-lg w-full p-6 shadow-xl border border-slate-200 max-h-[90vh] overflow-y-auto">
             <h3 className="text-lg font-bold text-slate-900 mb-1">
-              {editingItem ? `Edit Unique Item: ${editingItem.code}` : 'Create Unique Item (SKU)'}
+              {editingItem ? `Edit Stock Item: ${editingItem.code}` : 'Create Stock Item'}
             </h3>
             <p className="text-xs text-slate-500 mb-4">
-              {editingItem ? 'Update unique packaging and commercial rates.' : 'Add a distinct brand SKU under a Primary Item.'}
+              {editingItem ? 'Update stock item packaging, commercial rates, and master details.' : 'Create an independent inventory Stock Item. Legacy master relationships are optional.'}
             </p>
+
+            {modalError && (
+              <div className="mb-4 p-3 bg-rose-50 border border-rose-200 rounded-xl text-rose-700 text-xs flex items-start gap-2">
+                <ShieldAlert className="h-4 w-4 shrink-0 mt-0.5" />
+                <span>{modalError}</span>
+              </div>
+            )}
+
             <form onSubmit={handleSubmit} className="space-y-4">
               <div>
-                <label className="block text-xs font-medium text-slate-700 mb-1">Parent Primary Item *</label>
+                <label className="block text-xs font-medium text-slate-700 mb-1">
+                  Parent Primary Item <span className="text-slate-400 font-normal">(Optional / Legacy Master)</span>
+                </label>
                 <select
-                  required
-                  disabled={!!editingItem}
                   value={formData.primaryItemId}
                   onChange={(e) => setFormData({ ...formData, primaryItemId: e.target.value })}
-                  className="w-full px-3 py-2 text-sm bg-slate-50 border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-indigo-500 disabled:opacity-50"
+                  className="w-full px-3 py-2 text-sm bg-slate-50 border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-indigo-500"
                 >
-                  <option value="">Select Primary Item</option>
+                  <option value="">None (Standalone Stock Item)</option>
                   {primaryItems.map(p => (
                     <option key={p.id} value={p.id}>{p.code} - {p.name}</option>
                   ))}
                 </select>
+                <p className="text-[11px] text-slate-400 mt-1">
+                  Stock Items can operate independently without requiring legacy Category or Primary Item master records.
+                </p>
               </div>
 
               <div className="grid grid-cols-2 gap-4">
                 <div>
-                  <label className="block text-xs font-medium text-slate-700 mb-1">Unique SKU Code *</label>
+                  <label className="block text-xs font-medium text-slate-700 mb-1">Stock Item Code *</label>
                   <input
                     type="text"
                     required
@@ -681,7 +764,7 @@ export const UniqueItemsPage: React.FC = () => {
               </div>
 
               <div>
-                <label className="block text-xs font-medium text-slate-700 mb-1">Unique Item Name *</label>
+                <label className="block text-xs font-medium text-slate-700 mb-1">Stock Item Name *</label>
                 <input
                   type="text"
                   required
@@ -690,6 +773,72 @@ export const UniqueItemsPage: React.FC = () => {
                   placeholder="e.g. PG HC KT - Standard White Box"
                   className="w-full px-3 py-2 text-sm bg-slate-50 border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-indigo-500"
                 />
+              </div>
+
+              {/* Category selector on Stock Item */}
+              <div>
+                <label className="block text-xs font-bold text-slate-900 mb-1">
+                  Category (Optical Type) *
+                </label>
+                <select
+                  id="select-stock-item-optical-category"
+                  value={formData.opticalCategory}
+                  onChange={(e) => setFormData({ ...formData, opticalCategory: e.target.value as any })}
+                  className="w-full px-3 py-2 text-sm bg-slate-50 border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-indigo-500 font-medium text-slate-800"
+                >
+                  <option value="SV">SV — Single Vision</option>
+                  <option value="KT">KT — Kryptok / Bifocal</option>
+                  <option value="PROG">PROG — Progressive</option>
+                  <option value="OTHER">OTHER — Non-Optical / General</option>
+                </select>
+                <p className="text-[11px] text-slate-500 mt-1">
+                  Category determines required optical parameters (SPH, CYL, AXIS, ADD, SIDE) during batch creation.
+                </p>
+              </div>
+
+              {/* Tally-Style Maintain Batches Control */}
+              <div className="p-3.5 bg-slate-50/80 border border-slate-200 rounded-xl space-y-2">
+                <div className="flex items-center justify-between gap-4">
+                  <div>
+                    <label className="block text-xs font-bold text-slate-900">
+                      Maintain Batches
+                    </label>
+                    <p className="text-[11px] text-slate-500 mt-0.5">
+                      Enable if this stock item requires power or batch tracking.
+                    </p>
+                  </div>
+                  <div className="flex items-center gap-4 shrink-0">
+                    <label className="inline-flex items-center gap-1.5 cursor-pointer text-xs font-semibold text-slate-700">
+                      <input
+                        type="radio"
+                        id="radio-maintain-batches-no"
+                        name="maintainBatches"
+                        value="false"
+                        checked={!formData.maintainBatches}
+                        onChange={() => setFormData({ ...formData, maintainBatches: false })}
+                        className="h-4 w-4 text-indigo-600 focus:ring-indigo-500 border-slate-300"
+                      />
+                      <span>No</span>
+                    </label>
+                    <label className="inline-flex items-center gap-1.5 cursor-pointer text-xs font-semibold text-slate-700">
+                      <input
+                        type="radio"
+                        id="radio-maintain-batches-yes"
+                        name="maintainBatches"
+                        value="true"
+                        checked={formData.maintainBatches}
+                        onChange={() => setFormData({ ...formData, maintainBatches: true })}
+                        className="h-4 w-4 text-indigo-600 focus:ring-indigo-500 border-slate-300"
+                      />
+                      <span>Yes</span>
+                    </label>
+                  </div>
+                </div>
+                {editingItem && editingItem.maintainBatches && !formData.maintainBatches && (
+                  <div className="text-[11px] text-amber-800 bg-amber-50 p-2 rounded-lg border border-amber-200">
+                    <strong>Note:</strong> Disabling batch tracking will be rejected if this item has existing inventory or transaction history.
+                  </div>
+                )}
               </div>
 
               <div className="grid grid-cols-3 gap-3">
@@ -749,12 +898,21 @@ export const UniqueItemsPage: React.FC = () => {
                   disabled={submitting}
                   className="px-4 py-2 text-sm font-medium text-white bg-indigo-600 hover:bg-indigo-700 rounded-lg disabled:opacity-50 cursor-pointer"
                 >
-                  {submitting ? 'Saving...' : editingItem ? 'Save Changes' : 'Create Unique Item'}
+                  {submitting ? 'Saving...' : editingItem ? 'Save Changes' : 'Create Stock Item'}
                 </button>
               </div>
             </form>
           </div>
         </div>
+      )}
+
+      {/* Tally-Style Stock Item Ledger Modal */}
+      {ledgerItemId && (
+        <StockItemLedgerModal
+          itemId={ledgerItemId}
+          itemName={ledgerItemName}
+          onClose={() => setLedgerItemId(null)}
+        />
       )}
     </div>
   );

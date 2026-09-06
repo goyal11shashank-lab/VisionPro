@@ -15,7 +15,7 @@ import {
   Sparkles,
   Barcode as BarcodeIcon,
 } from 'lucide-react';
-import { apiRequest } from '../../api/client.js';
+import { apiRequest, getStoredToken } from '../../api/client.js';
 import { generateClientOpticalBatchTemplate } from '../../utils/excelTemplateGenerator.js';
 
 interface OpticalBatchImportModalProps {
@@ -117,7 +117,7 @@ export const OpticalBatchImportModal: React.FC<OpticalBatchImportModalProps> = (
   const handleDownloadErrorReport = async (sessionId: string) => {
     try {
       setDownloadingErrors(true);
-      const token = localStorage.getItem('token');
+      const token = getStoredToken();
       const response = await fetch(`/api/imports/${sessionId}/errors/xlsx`, {
         headers: {
           ...(token ? { Authorization: `Bearer ${token}` } : {}),
@@ -175,7 +175,7 @@ export const OpticalBatchImportModal: React.FC<OpticalBatchImportModalProps> = (
       formData.append('file', file);
       formData.append('importType', 'OPTICAL_BATCH');
 
-      const token = localStorage.getItem('token');
+      const token = getStoredToken();
       const response = await fetch('/api/imports/upload', {
         method: 'POST',
         headers: {
@@ -340,17 +340,17 @@ export const OpticalBatchImportModal: React.FC<OpticalBatchImportModalProps> = (
                   Important Data Hierarchy & Import Rules
                 </div>
                 <p>
-                  Existing Hierarchy: <span className="font-semibold">Primary Item → Category → Group Level → Unique Item → Batch</span>.
+                  Existing Hierarchy: <span className="font-semibold">Primary Item → Category → Group Level → Stock Item → Batch</span>.
                 </p>
                 <ul className="list-disc pl-5 space-y-1 text-slate-700">
                   <li>
-                    <strong className="text-indigo-900">Unique Item Must Pre-Exist:</strong> The <code className="bg-indigo-100 px-1 py-0.5 rounded text-indigo-800">unique_item</code> in your Excel file must already be created in the system (e.g. <code>HC_SV_-6/-2</code>, <code>HC_SV_+4/+2</code>). The import will not create new Primary Items.
+                    <strong className="text-indigo-900">Stock Item Must Pre-Exist:</strong> The <code className="bg-indigo-100 px-1 py-0.5 rounded text-indigo-800">unique_item</code> (Stock Item) in your Excel file must already be created in the system (e.g. <code>HC_SV_-6/-2</code>, <code>HC_SV_+4/+2</code>). The import will not create new Primary Items.
                   </li>
                   <li>
                     <strong className="text-indigo-900">Power Configuration:</strong> Supports standard optical power strings such as <code>-6.00/-2.00</code>, <code>+1.75/-2.00/90/+2.00</code>, or individual SPH/CYL/AXIS/ADD/SIDE columns.
                   </li>
                   <li>
-                    <strong className="text-indigo-900">Stock & Pricing:</strong> Opening stock quantity will be initialized in the stock ledger. Existing pricing structures for the Unique Item are preserved.
+                    <strong className="text-indigo-900">Stock & Pricing:</strong> Opening stock quantity will be initialized in the stock ledger. Existing pricing structures for the Stock Item are preserved.
                   </li>
                 </ul>
               </div>
@@ -530,7 +530,7 @@ export const OpticalBatchImportModal: React.FC<OpticalBatchImportModalProps> = (
                       <tr>
                         <th className="px-3 py-2.5">Row</th>
                         <th className="px-3 py-2.5">Status</th>
-                        <th className="px-3 py-2.5">Unique Item</th>
+                        <th className="px-3 py-2.5">Stock Item</th>
                         <th className="px-3 py-2.5">Power Specification</th>
                         <th className="px-3 py-2.5">SKU</th>
                         <th className="px-3 py-2.5 text-right">Opening Qty</th>

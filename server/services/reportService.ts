@@ -117,7 +117,7 @@ export class ReportService {
     // Search term
     if (filters.search) {
       const q = `%${filters.search.trim()}%`;
-      conditions.push(`(b.barcode ILIKE $${paramIndex} OR u.name ILIKE $${paramIndex} OR u.code ILIKE $${paramIndex} OR p.name ILIKE $${paramIndex})`);
+      conditions.push(`(b.barcode ILIKE $${paramIndex} OR u.name ILIKE $${paramIndex} OR u.code ILIKE $${paramIndex} OR COALESCE(p.name, '') ILIKE $${paramIndex})`);
       params.push(q);
       paramIndex++;
     }
@@ -134,7 +134,7 @@ export class ReportService {
       FROM optical_batches b
       JOIN categories c ON b.category_id = c.id
       JOIN unique_items u ON b.unique_item_id = u.id
-      JOIN primary_items p ON u.primary_item_id = p.id
+      LEFT JOIN primary_items p ON u.primary_item_id = p.id
       LEFT JOIN optical_stocks s ON (s.batch_id = b.id AND s.business_id = b.business_id)
       WHERE ${whereClause}
     `;
@@ -172,7 +172,7 @@ export class ReportService {
       FROM optical_batches b
       JOIN categories c ON b.category_id = c.id
       JOIN unique_items u ON b.unique_item_id = u.id
-      JOIN primary_items p ON u.primary_item_id = p.id
+      LEFT JOIN primary_items p ON u.primary_item_id = p.id
       LEFT JOIN optical_stocks s ON (s.batch_id = b.id AND s.business_id = b.business_id)
       WHERE ${whereClause}
       ORDER BY b.barcode ASC
@@ -1585,7 +1585,7 @@ export class ReportService {
        FROM sales_invoice_lines sil
        JOIN sales_invoices si ON sil.sales_invoice_id = si.id
        JOIN unique_items u ON sil.unique_item_id = u.id
-       JOIN primary_items p ON u.primary_item_id = p.id
+       LEFT JOIN primary_items p ON u.primary_item_id = p.id
        WHERE ${whereClause}`,
       params
     );
@@ -1596,16 +1596,16 @@ export class ReportService {
          u.id AS unique_item_id,
          u.name AS unique_item_name,
          u.code AS sku,
-         c.name AS category_name,
-         p.name AS brand_name,
+         COALESCE(c.name, '—') AS category_name,
+         COALESCE(p.name, '—') AS brand_name,
          COUNT(DISTINCT si.id) AS invoice_count,
          COALESCE(SUM(sil.quantity), 0) AS total_quantity_sold,
          COALESCE(SUM(sil.line_total), 0) AS total_sales_amount
        FROM sales_invoice_lines sil
        JOIN sales_invoices si ON sil.sales_invoice_id = si.id
        JOIN unique_items u ON sil.unique_item_id = u.id
-       JOIN primary_items p ON u.primary_item_id = p.id
-       JOIN categories c ON p.category_id = c.id
+       LEFT JOIN primary_items p ON u.primary_item_id = p.id
+       LEFT JOIN categories c ON p.category_id = c.id
        WHERE ${whereClause}
        GROUP BY u.id, u.name, u.code, c.name, p.name
        ORDER BY total_sales_amount DESC

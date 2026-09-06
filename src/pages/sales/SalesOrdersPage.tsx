@@ -21,6 +21,7 @@ import {
   Layers,
 } from 'lucide-react';
 import { useAuth } from '../../context/AuthContext.js';
+import { getStoredToken } from '../../api/client.js';
 
 interface SalesOrderLineBatch {
   id?: string;
@@ -119,11 +120,14 @@ export const SalesOrdersPage: React.FC<{ onNavigateToInvoice?: (orderId: string)
 
       const res = await fetch(`/api/sales/orders?${params.toString()}`, {
         headers: {
-          Authorization: `Bearer ${localStorage.getItem('token')}`,
+          Authorization: `Bearer ${getStoredToken()}`,
           'X-Business-Id': currentBusiness.id,
         },
       });
-      if (!res.ok) throw new Error('Failed to load sales orders');
+      if (!res.ok) {
+        const errData = await res.json().catch(() => ({}));
+        throw new Error(errData.message || 'Failed to load sales orders');
+      }
       const data = await res.json();
       setOrders(data.orders || []);
     } catch (err: any) {
@@ -143,7 +147,7 @@ export const SalesOrdersPage: React.FC<{ onNavigateToInvoice?: (orderId: string)
       // 1. Load Customer Parties (CUSTOMER or BOTH)
       const partiesRes = await fetch('/api/parties', {
         headers: {
-          Authorization: `Bearer ${localStorage.getItem('token')}`,
+          Authorization: `Bearer ${getStoredToken()}`,
           'X-Business-Id': currentBusiness.id,
         },
       });
@@ -158,7 +162,7 @@ export const SalesOrdersPage: React.FC<{ onNavigateToInvoice?: (orderId: string)
       // 2. Load Unique Items
       const itemsRes = await fetch('/api/optical-master/unique-items', {
         headers: {
-          Authorization: `Bearer ${localStorage.getItem('token')}`,
+          Authorization: `Bearer ${getStoredToken()}`,
           'X-Business-Id': currentBusiness.id,
         },
       });
@@ -170,7 +174,7 @@ export const SalesOrdersPage: React.FC<{ onNavigateToInvoice?: (orderId: string)
       // 3. Order Number preview
       const numRes = await fetch('/api/sales/orders/number-preview', {
         headers: {
-          Authorization: `Bearer ${localStorage.getItem('token')}`,
+          Authorization: `Bearer ${getStoredToken()}`,
           'X-Business-Id': currentBusiness.id,
         },
       });
@@ -205,7 +209,7 @@ export const SalesOrdersPage: React.FC<{ onNavigateToInvoice?: (orderId: string)
     try {
       const res = await fetch(`/api/sales/parties/${partyId}/credit-check`, {
         headers: {
-          Authorization: `Bearer ${localStorage.getItem('token')}`,
+          Authorization: `Bearer ${getStoredToken()}`,
           'X-Business-Id': currentBusiness!.id,
         },
       });
@@ -230,7 +234,7 @@ export const SalesOrdersPage: React.FC<{ onNavigateToInvoice?: (orderId: string)
       try {
         const priceRes = await fetch(`/api/sales/pricing/${selectedPartyId}/${item.id}`, {
           headers: {
-            Authorization: `Bearer ${localStorage.getItem('token')}`,
+            Authorization: `Bearer ${getStoredToken()}`,
             'X-Business-Id': currentBusiness!.id,
           },
         });
@@ -250,7 +254,7 @@ export const SalesOrdersPage: React.FC<{ onNavigateToInvoice?: (orderId: string)
     try {
       const bRes = await fetch(`/api/sales/unique-items/${item.id}/batches?onlyInStock=true`, {
         headers: {
-          Authorization: `Bearer ${localStorage.getItem('token')}`,
+          Authorization: `Bearer ${getStoredToken()}`,
           'X-Business-Id': currentBusiness!.id,
         },
       });
@@ -303,7 +307,7 @@ export const SalesOrdersPage: React.FC<{ onNavigateToInvoice?: (orderId: string)
 
       const res = await fetch(`/api/sales/barcode-lookup/${encodeURIComponent(barcodeInput.trim())}`, {
         headers: {
-          Authorization: `Bearer ${localStorage.getItem('token')}`,
+          Authorization: `Bearer ${getStoredToken()}`,
           'X-Business-Id': currentBusiness!.id,
         },
       });
@@ -322,7 +326,7 @@ export const SalesOrdersPage: React.FC<{ onNavigateToInvoice?: (orderId: string)
       if (selectedPartyId) {
         const priceRes = await fetch(`/api/sales/pricing/${selectedPartyId}/${uItem.id}`, {
           headers: {
-            Authorization: `Bearer ${localStorage.getItem('token')}`,
+            Authorization: `Bearer ${getStoredToken()}`,
             'X-Business-Id': currentBusiness!.id,
           },
         });
@@ -466,7 +470,7 @@ export const SalesOrdersPage: React.FC<{ onNavigateToInvoice?: (orderId: string)
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
-          Authorization: `Bearer ${localStorage.getItem('token')}`,
+          Authorization: `Bearer ${getStoredToken()}`,
           'X-Business-Id': currentBusiness!.id,
         },
         body: JSON.stringify(payload),
@@ -493,7 +497,7 @@ export const SalesOrdersPage: React.FC<{ onNavigateToInvoice?: (orderId: string)
       const res = await fetch(`/api/sales/orders/${orderId}/confirm`, {
         method: 'POST',
         headers: {
-          Authorization: `Bearer ${localStorage.getItem('token')}`,
+          Authorization: `Bearer ${getStoredToken()}`,
           'X-Business-Id': currentBusiness!.id,
         },
       });
@@ -521,7 +525,7 @@ export const SalesOrdersPage: React.FC<{ onNavigateToInvoice?: (orderId: string)
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
-          Authorization: `Bearer ${localStorage.getItem('token')}`,
+          Authorization: `Bearer ${getStoredToken()}`,
           'X-Business-Id': currentBusiness!.id,
         },
         body: JSON.stringify({ reason }),
@@ -554,7 +558,7 @@ export const SalesOrdersPage: React.FC<{ onNavigateToInvoice?: (orderId: string)
       const res = await fetch(`/api/sales/orders/${orderId}`, {
         method: 'DELETE',
         headers: {
-          Authorization: `Bearer ${localStorage.getItem('token')}`,
+          Authorization: `Bearer ${getStoredToken()}`,
           'X-Business-Id': currentBusiness!.id,
         },
       });

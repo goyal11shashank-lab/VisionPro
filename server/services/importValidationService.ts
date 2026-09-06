@@ -84,7 +84,7 @@ export class ImportValidationService {
           mrp: uniqueItems.mrp,
         })
         .from(uniqueItems)
-        .innerJoin(primaryItems, eq(uniqueItems.primaryItemId, primaryItems.id))
+        .leftJoin(primaryItems, eq(uniqueItems.primaryItemId, primaryItems.id))
         .where(eq(uniqueItems.businessId, businessId)),
       db
         .select()
