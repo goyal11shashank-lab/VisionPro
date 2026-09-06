@@ -119,7 +119,8 @@ export const Sidebar: React.FC<SidebarProps> = ({
       title: 'Purchase',
       icon: Truck,
       items: [
-        { id: 'purchase-invoices', label: 'Purchase Invoices', icon: FileSpreadsheet, path: '/purchase/invoices', permission: 'purchase:view' },
+        { id: 'purchase-voucher', label: 'Normal Purchase Voucher', icon: FileSpreadsheet, path: '/purchase/voucher/new', permission: 'purchase:view' },
+        { id: 'purchase-invoices', label: 'Purchase Invoices Register', icon: Receipt, path: '/purchase/invoices', permission: 'purchase:view' },
         { id: 'purchase-returns', label: 'Purchase Returns', icon: RotateCcw, path: '/purchase/returns', permission: 'purchase:view' },
         { id: 'purchase-lots', label: 'Purchase Lots & Costing', icon: Layers, path: '/purchase/lots', permission: 'purchase:view' },
       ],

@@ -16,6 +16,7 @@ import { UniqueItemsPage } from './pages/master/UniqueItemsPage.js';
 import { OpticalBatchesPage } from './pages/master/OpticalBatchesPage.js';
 import { PartiesPage } from './pages/parties/PartiesPage.js';
 import { PurchaseInvoicesPage } from './pages/purchases/PurchaseInvoicesPage.js';
+import { CreatePurchaseInvoicePage } from './pages/purchases/CreatePurchaseInvoicePage.js';
 import { PurchaseLotsPage } from './pages/purchases/PurchaseLotsPage.js';
 import { SupplierLedgerPage } from './pages/parties/SupplierLedgerPage.js';
 import { CustomerLedgerPage } from './pages/parties/CustomerLedgerPage.js';
@@ -105,6 +106,13 @@ const AppContent: React.FC = () => {
       case '/purchase/returns':
       case '/purchases/returns':
         return 'Purchase Returns & Debit Notes';
+      case '/purchase/voucher/new':
+      case '/purchase/voucher':
+      case '/purchase/new':
+      case '/purchases/voucher/new':
+      case '/purchases/voucher':
+      case '/purchases/new':
+        return 'Normal Purchase Voucher';
       case '/purchase/lots':
       case '/purchases/lots':
         return 'Purchase Lots & Costing';
@@ -220,6 +228,19 @@ const AppContent: React.FC = () => {
         );
 
       // Purchase Submodules
+      case '/purchase/voucher/new':
+      case '/purchase/voucher':
+      case '/purchase/new':
+      case '/purchases/voucher/new':
+      case '/purchases/voucher':
+      case '/purchases/new':
+        return (
+          <CreatePurchaseInvoicePage
+            onBack={() => setCurrentPath('/purchase/invoices')}
+            onSuccess={() => setCurrentPath('/purchase/invoices')}
+          />
+        );
+
       case '/purchases/orders':
       case '/purchases/invoices':
       case '/purchase/invoices':
