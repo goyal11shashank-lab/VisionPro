@@ -146,7 +146,7 @@ export const VoucherHeader: React.FC<VoucherHeaderProps> = ({
             {onVoucherNumberChange ? (
               <input
                 type="text"
-                value={voucherNumber}
+                value={voucherNumber ?? ''}
                 onChange={e => onVoucherNumberChange(e.target.value)}
                 className="w-28 px-1.5 py-0.5 text-xs font-bold text-slate-900 border border-slate-300 rounded bg-slate-50 focus:bg-white focus:ring-1 focus:ring-blue-500"
               />
@@ -161,7 +161,7 @@ export const VoucherHeader: React.FC<VoucherHeaderProps> = ({
             <span className="text-slate-500 font-semibold font-sans">Date:</span>
             <input
               type="date"
-              value={voucherDate}
+              value={voucherDate ?? ''}
               onChange={e => onVoucherDateChange(e.target.value)}
               className="px-1.5 py-0.5 text-xs font-medium text-slate-900 border border-slate-300 rounded bg-slate-50 focus:bg-white focus:ring-1 focus:ring-blue-500 font-mono"
             />
@@ -206,8 +206,8 @@ export const VoucherHeader: React.FC<VoucherHeaderProps> = ({
 
       {/* Second Strip: Party Selection & Ledger Accounting Details */}
       <div className="grid grid-cols-1 md:grid-cols-12 gap-2 pt-2 items-center text-xs">
-        {/* Party A/c Name (col 5) */}
-        <div className="md:col-span-5 flex items-center gap-2">
+        {/* Party A/c Name */}
+        <div className={`${isSales ? 'md:col-span-5' : 'md:col-span-4'} flex items-center gap-2`}>
           <span className="w-24 text-slate-600 font-semibold shrink-0 text-right">
             Party A/c name:
           </span>
@@ -235,8 +235,8 @@ export const VoucherHeader: React.FC<VoucherHeaderProps> = ({
           )}
         </div>
 
-        {/* GST / Taxation Mode (col 3) */}
-        <div className="md:col-span-3 flex items-center gap-2">
+        {/* GST / Taxation Mode */}
+        <div className={`${isSales ? 'md:col-span-3' : 'md:col-span-2'} flex items-center gap-2`}>
           <span className="text-slate-600 font-semibold shrink-0">
             GST Ledger:
           </span>
@@ -251,28 +251,43 @@ export const VoucherHeader: React.FC<VoucherHeaderProps> = ({
           </select>
         </div>
 
-        {/* Reference / Supplier Invoice No (col 2) */}
+        {/* Reference / Supplier Invoice No */}
         <div className="md:col-span-2 flex items-center gap-1.5">
           <span className="text-slate-600 font-semibold shrink-0">
             {isSales ? 'Ref No:' : 'Supp Inv:'}
           </span>
           <input
             type="text"
-            value={referenceNumber}
+            value={referenceNumber ?? ''}
             onChange={e => onReferenceNumberChange && onReferenceNumberChange(e.target.value)}
             placeholder={isSales ? 'Order / Ref #' : 'Inv #'}
             className="flex-1 min-w-0 py-1 px-1.5 text-xs border border-slate-300 rounded bg-slate-50 focus:bg-white focus:ring-1 focus:ring-blue-500 font-mono"
           />
         </div>
 
-        {/* Fast Barcode Scanner Quick Input (col 2) */}
+        {/* Supplier Invoice Date for Purchase */}
+        {!isSales && (
+          <div className="md:col-span-2 flex items-center gap-1.5">
+            <span className="text-slate-600 font-semibold shrink-0">
+              Supp Date:
+            </span>
+            <input
+              type="date"
+              value={supplierInvoiceDate ?? ''}
+              onChange={e => onSupplierInvoiceDateChange && onSupplierInvoiceDateChange(e.target.value)}
+              className="flex-1 min-w-0 py-1 px-1.5 text-xs border border-slate-300 rounded bg-slate-50 focus:bg-white focus:ring-1 focus:ring-blue-500 font-mono"
+            />
+          </div>
+        )}
+
+        {/* Fast Barcode Scanner Quick Input */}
         <div className="md:col-span-2">
           <form onSubmit={onBarcodeSubmit} className="relative flex items-center">
             <Barcode className="w-3.5 h-3.5 absolute left-2 text-slate-400 pointer-events-none" />
             <input
               ref={barcodeInputRef}
               type="text"
-              value={barcodeInput}
+              value={barcodeInput ?? ''}
               onChange={e => onBarcodeInput(e.target.value)}
               placeholder="Scan Barcode (F3)..."
               disabled={barcodeLoading}

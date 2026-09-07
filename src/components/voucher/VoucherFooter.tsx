@@ -58,7 +58,7 @@ export const VoucherFooter: React.FC<VoucherFooterProps> = ({
             </span>
             <textarea
               rows={2}
-              value={narration}
+              value={narration ?? ''}
               onChange={e => onNarrationChange(e.target.value)}
               placeholder={
                 isSales

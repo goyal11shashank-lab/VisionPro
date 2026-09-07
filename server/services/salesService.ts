@@ -267,7 +267,7 @@ export class SalesService {
   static async getBatchesForUniqueItem(
     businessId: string,
     uniqueItemId: string,
-    options?: { search?: string; onlyInStock?: boolean }
+    options?: { search?: string; onlyInStock?: boolean; limit?: number }
   ) {
     let query = db
       .select({
@@ -318,6 +318,10 @@ export class SalesService {
         side: b.side,
         rawText: `${b.identityKey} ${b.barcode}`,
       }));
+    }
+
+    if (options?.limit && options.limit > 0) {
+      result = result.slice(0, options.limit);
     }
 
     return result;

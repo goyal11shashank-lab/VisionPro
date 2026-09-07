@@ -41,6 +41,7 @@ export const UniqueItemsPage: React.FC = () => {
     purchaseRate: 0,
     lastPurchasePrice: 0,
     mrp: 0,
+    gstRate: 5,
     status: 'ACTIVE' as 'ACTIVE' | 'INACTIVE',
   });
   const [modalError, setModalError] = useState<string | null>(null);
@@ -81,6 +82,7 @@ export const UniqueItemsPage: React.FC = () => {
       purchaseRate: 0,
       lastPurchasePrice: 0,
       mrp: 0,
+      gstRate: 5,
       status: 'ACTIVE',
     });
     setShowModal(true);
@@ -99,6 +101,7 @@ export const UniqueItemsPage: React.FC = () => {
       purchaseRate: Number(item.purchaseRate) || 0,
       lastPurchasePrice: Number(item.lastPurchasePrice) || 0,
       mrp: Number(item.mrp) || 0,
+      gstRate: item.gstRate !== undefined ? Number(item.gstRate) : 5,
       status: item.status,
     });
     setShowModal(true);
@@ -198,6 +201,7 @@ export const UniqueItemsPage: React.FC = () => {
             purchaseRate: formData.purchaseRate,
             lastPurchasePrice: formData.lastPurchasePrice,
             mrp: formData.mrp,
+            gstRate: formData.gstRate,
             status: formData.status,
           }),
         });
@@ -413,6 +417,7 @@ export const UniqueItemsPage: React.FC = () => {
                   <th className="px-5 py-4">Batches</th>
                   <th className="px-5 py-4">Purchase Rate</th>
                   <th className="px-5 py-4">MRP</th>
+                  <th className="px-5 py-4">GST Rate</th>
                   <th className="px-5 py-4">Status</th>
                   <th className="px-5 py-4 text-right">Actions</th>
                 </tr>
@@ -420,14 +425,14 @@ export const UniqueItemsPage: React.FC = () => {
               <tbody className="divide-y divide-slate-200">
                 {loading ? (
                   <tr>
-                    <td colSpan={10} className="px-6 py-12 text-center text-slate-400">
+                    <td colSpan={11} className="px-6 py-12 text-center text-slate-400">
                       <RefreshCw className="h-6 w-6 animate-spin mx-auto mb-2 text-indigo-500" />
                       Loading stock item catalog...
                     </td>
                   </tr>
                 ) : filtered.length === 0 ? (
                   <tr>
-                    <td colSpan={10} className="px-6 py-12 text-center text-slate-400">
+                    <td colSpan={11} className="px-6 py-12 text-center text-slate-400">
                       No stock items found.
                     </td>
                   </tr>
@@ -508,6 +513,11 @@ export const UniqueItemsPage: React.FC = () => {
                         </td>
                         <td className="px-5 py-4 font-mono text-slate-900">
                           ₹{Number(item.mrp).toFixed(2)}
+                        </td>
+                        <td className="px-5 py-4">
+                          <span className="inline-flex items-center px-2 py-0.5 rounded text-[11px] font-semibold font-mono bg-indigo-50 text-indigo-700 border border-indigo-200">
+                            {item.gstRate !== undefined ? item.gstRate : 5}%
+                          </span>
                         </td>
                         <td className="px-5 py-4">
                           {item.status === 'ACTIVE' ? (
@@ -841,36 +851,73 @@ export const UniqueItemsPage: React.FC = () => {
                 )}
               </div>
 
-              <div className="grid grid-cols-3 gap-3">
+              <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
                 <div>
                   <label className="block text-xs font-medium text-slate-700 mb-1">Purchase Rate (₹)</label>
                   <input
                     type="number"
-                    step="0.01"
-                    value={formData.purchaseRate}
-                    onChange={(e) => setFormData({ ...formData, purchaseRate: parseFloat(e.target.value) || 0 })}
-                    className="w-full px-3 py-2 text-sm bg-slate-50 border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-indigo-500 font-mono"
+                    step="any"
+                    min="0"
+                    value={formData.purchaseRate !== undefined ? formData.purchaseRate : ''}
+                    onChange={(e) => setFormData({ ...formData, purchaseRate: Math.max(0, parseFloat(e.target.value) || 0) })}
+                    className="w-full px-3 py-2 text-sm bg-slate-50 border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-indigo-500 font-mono [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none"
+                    placeholder="0.00"
                   />
                 </div>
                 <div>
                   <label className="block text-xs font-medium text-slate-700 mb-1">Last Purch. Price (₹)</label>
                   <input
                     type="number"
-                    step="0.01"
-                    value={formData.lastPurchasePrice}
-                    onChange={(e) => setFormData({ ...formData, lastPurchasePrice: parseFloat(e.target.value) || 0 })}
-                    className="w-full px-3 py-2 text-sm bg-slate-50 border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-indigo-500 font-mono"
+                    step="any"
+                    min="0"
+                    value={formData.lastPurchasePrice !== undefined ? formData.lastPurchasePrice : ''}
+                    onChange={(e) => setFormData({ ...formData, lastPurchasePrice: Math.max(0, parseFloat(e.target.value) || 0) })}
+                    className="w-full px-3 py-2 text-sm bg-slate-50 border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-indigo-500 font-mono [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none"
+                    placeholder="0.00"
                   />
                 </div>
                 <div>
                   <label className="block text-xs font-medium text-slate-700 mb-1">MRP (₹)</label>
                   <input
                     type="number"
-                    step="0.01"
-                    value={formData.mrp}
-                    onChange={(e) => setFormData({ ...formData, mrp: parseFloat(e.target.value) || 0 })}
-                    className="w-full px-3 py-2 text-sm bg-slate-50 border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-indigo-500 font-mono"
+                    step="any"
+                    min="0"
+                    value={formData.mrp !== undefined ? formData.mrp : ''}
+                    onChange={(e) => setFormData({ ...formData, mrp: Math.max(0, parseFloat(e.target.value) || 0) })}
+                    className="w-full px-3 py-2 text-sm bg-slate-50 border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-indigo-500 font-mono [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none"
+                    placeholder="0.00"
                   />
+                </div>
+                <div>
+                  <label className="block text-xs font-medium text-slate-700 mb-1">GST Rate (%) *</label>
+                  <div className="relative">
+                    <input
+                      type="number"
+                      step="any"
+                      min="0"
+                      value={formData.gstRate !== undefined ? formData.gstRate : 5}
+                      onChange={(e) => setFormData({ ...formData, gstRate: Math.max(0, parseFloat(e.target.value) || 0) })}
+                      className="w-full px-3 py-2 text-sm bg-slate-50 border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-indigo-500 font-mono [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none pr-7"
+                      placeholder="5"
+                    />
+                    <div className="absolute right-2.5 top-2 text-xs text-slate-400 font-bold pointer-events-none">%</div>
+                  </div>
+                  <div className="flex items-center gap-1 mt-1">
+                    {[0, 5, 12, 18, 28].map(rate => (
+                      <button
+                        key={rate}
+                        type="button"
+                        onClick={() => setFormData({ ...formData, gstRate: rate })}
+                        className={`text-[10px] px-1.5 py-0.5 rounded font-mono transition-colors ${
+                          formData.gstRate === rate
+                            ? 'bg-indigo-600 text-white font-bold'
+                            : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
+                        }`}
+                      >
+                        {rate}%
+                      </button>
+                    ))}
+                  </div>
                 </div>
               </div>
 

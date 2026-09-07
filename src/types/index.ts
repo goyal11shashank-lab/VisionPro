@@ -204,6 +204,7 @@ export interface UniqueItem {
   purchaseRate: string | number;
   lastPurchasePrice: string | number;
   mrp: string | number;
+  gstRate?: string | number;
   status: 'ACTIVE' | 'INACTIVE';
   createdAt?: string;
   updatedAt?: string;

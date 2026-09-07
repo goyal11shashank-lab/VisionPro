@@ -184,12 +184,13 @@ export class PurchaseService {
       const rate = round2(line.rate);
       if (rate < 0) throw new Error(`Line ${i + 1}: Rate cannot be negative`);
 
+      const itemGst = uItem.uniqueItem.gstRate ? parseFloat(uItem.uniqueItem.gstRate) : 5.00;
       const taxRes = calculateLineTax({
         quantity: qty,
         rate,
         discountType: line.discountType,
         discountValue: line.discountValue,
-        gstRate: line.gstRate ?? 5.00,
+        gstRate: line.gstRate !== undefined ? line.gstRate : itemGst,
       });
 
       calculatedLineTaxResults.push(taxRes);
@@ -529,12 +530,13 @@ export class PurchaseService {
           throw new Error(`Line ${i + 1}: Purchase rate must be non-negative`);
         }
 
+        const itemGst = uItem.uniqueItem.gstRate ? parseFloat(uItem.uniqueItem.gstRate) : 5.00;
         const taxRes = calculateLineTax({
           quantity: qty,
           rate,
           discountType: line.discountType || 'NONE',
           discountValue: Number(line.discountValue || 0),
-          gstRate: Number(line.gstRate !== undefined ? line.gstRate : 12),
+          gstRate: Number(line.gstRate !== undefined ? line.gstRate : itemGst),
         });
 
         calculatedLineTaxResults.push(taxRes);

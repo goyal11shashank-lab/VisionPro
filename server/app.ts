@@ -60,6 +60,15 @@ export function createExpressApp() {
   app.use('/api/reports', reportRoutes);
   app.use('/api/stock-items', stockItemLedgerRoutes);
   app.use('/api/inventory/stock-items', stockItemLedgerRoutes);
+  app.use('/api/unique-items', opticalMasterRoutes);
+
+  // Catch-all 404 handler for any undefined API route so it never falls through to Vite HTML
+  app.all('/api/*', (req: Request, res: Response) => {
+    res.status(404).json({
+      error: 'NOT_FOUND',
+      message: `API endpoint ${req.method} ${req.originalUrl} not found`,
+    });
+  });
 
   // Global Error Handler
   app.use((err: any, req: Request, res: Response, next: NextFunction) => {

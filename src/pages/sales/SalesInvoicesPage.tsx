@@ -24,7 +24,7 @@ import {
   ArrowLeftRight,
 } from 'lucide-react';
 import { useAuth } from '../../context/AuthContext.js';
-import { getAuthHeaders, getStoredToken } from '../../api/client.js';
+import { getAuthHeaders, getStoredToken, apiRequest } from '../../api/client.js';
 
 interface SalesInvoiceLineBatch {
   id?: string;
@@ -209,43 +209,26 @@ export const SalesInvoicesPage: React.FC<{
   const loadFormData = async () => {
     if (!currentBusiness) return;
     try {
-      const partiesRes = await fetch('/api/parties', {
-        headers: {
-          Authorization: `Bearer ${getStoredToken()}`,
-          'X-Business-Id': currentBusiness.id,
-        },
-      });
-      if (partiesRes.ok) {
-        const data = await partiesRes.json();
-        const validParties = (data.parties || []).filter(
-          (p: any) => p.partyType === 'CUSTOMER' || p.partyType === 'BOTH'
-        );
-        setParties(validParties);
-      }
+      const [partiesRes, itemsRes, numRes] = await Promise.all([
+        apiRequest<{ parties: any[] }>('/api/parties').catch(() => ({ parties: [] })),
+        apiRequest<{ uniqueItems: any[] }>('/api/optical-master/unique-items').catch(() =>
+          apiRequest<{ uniqueItems: any[] }>('/api/unique-items').catch(() => ({ uniqueItems: [] }))
+        ),
+        apiRequest<{ invoiceNumber: string }>('/api/sales/invoices/number-preview').catch(() => ({
+          invoiceNumber: `INV-${Date.now().toString().slice(-6)}`,
+        })),
+      ]);
 
-      const itemsRes = await fetch('/api/optical-master/unique-items', {
-        headers: {
-          Authorization: `Bearer ${getStoredToken()}`,
-          'X-Business-Id': currentBusiness.id,
-        },
-      });
-      if (itemsRes.ok) {
-        const data = await itemsRes.json();
-        setUniqueItems(data.uniqueItems || []);
-      }
-
-      const numRes = await fetch('/api/sales/invoices/number-preview', {
-        headers: {
-          Authorization: `Bearer ${getStoredToken()}`,
-          'X-Business-Id': currentBusiness.id,
-        },
-      });
-      if (numRes.ok) {
-        const data = await numRes.json();
-        setPreviewInvoiceNumber(data.invoiceNumber);
+      const validParties = (partiesRes?.parties || []).filter(
+        (p: any) => p.partyType === 'CUSTOMER' || p.partyType === 'BOTH'
+      );
+      setParties(validParties);
+      setUniqueItems(itemsRes?.uniqueItems || []);
+      if (numRes?.invoiceNumber) {
+        setPreviewInvoiceNumber(numRes.invoiceNumber);
       }
     } catch (err) {
-      console.error('Failed to load form prerequisites:', err);
+      console.warn('Notice loading form prerequisites:', err);
     }
   };
 
@@ -395,7 +378,7 @@ export const SalesInvoicesPage: React.FC<{
       rate: prefilledRate,
       discountType: 'NONE',
       discountValue: 0,
-      gstRate: 12,
+      gstRate: (item as any).gstRate !== undefined ? parseFloat(String((item as any).gstRate)) : ((item as any).taxRate ? parseFloat((item as any).taxRate) : 5),
       batches: batches,
     };
 
@@ -452,7 +435,7 @@ export const SalesInvoicesPage: React.FC<{
         rate: defaultRate,
         discountType: 'NONE',
         discountValue: 0,
-        gstRate: 12,
+        gstRate: uItem.gstRate !== undefined ? parseFloat(String(uItem.gstRate)) : ((uItem as any).taxRate ? parseFloat((uItem as any).taxRate) : 5),
         batches: [
           {
             batchId: batch.id,
@@ -1165,7 +1148,7 @@ export const SalesInvoicesPage: React.FC<{
                                 <input
                                   type="number"
                                   min="1"
-                                  value={line.quantity}
+                                  value={line.quantity !== undefined && line.quantity !== null ? line.quantity : 1}
                                   onChange={e => {
                                     const val = Math.max(1, parseInt(e.target.value, 10) || 1);
                                     setFormLines(prev =>
@@ -1187,15 +1170,16 @@ export const SalesInvoicesPage: React.FC<{
                               <td className="py-3 px-3">
                                 <input
                                   type="number"
-                                  step="0.01"
-                                  value={line.rate}
+                                  step="any"
+                                  min="0"
+                                  value={line.rate !== undefined && line.rate !== null ? line.rate : ''}
                                   onChange={e => {
-                                    const val = parseFloat(e.target.value) || 0;
+                                    const val = parseFloat(e.target.value);
                                     setFormLines(prev =>
-                                      prev.map((l, i) => (i === idx ? { ...l, rate: val } : l))
+                                      prev.map((l, i) => (i === idx ? { ...l, rate: isNaN(val) ? 0 : Math.max(0, val) } : l))
                                     );
                                   }}
-                                  className="w-full px-2 py-1 text-right font-mono rounded border border-slate-300 focus:ring-1 focus:ring-emerald-500 focus:outline-none"
+                                  className="w-full px-2 py-1 text-right font-mono rounded border border-slate-300 focus:ring-1 focus:ring-emerald-500 focus:outline-none [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none"
                                 />
                               </td>
 
@@ -1204,7 +1188,7 @@ export const SalesInvoicesPage: React.FC<{
                                   type="number"
                                   min="0"
                                   max="100"
-                                  value={line.discountValue}
+                                  value={line.discountValue !== undefined && line.discountValue !== null ? line.discountValue : 0}
                                   onChange={e => {
                                     const val = parseFloat(e.target.value) || 0;
                                     setFormLines(prev =>
@@ -1225,7 +1209,7 @@ export const SalesInvoicesPage: React.FC<{
 
                               <td className="py-3 px-3">
                                 <select
-                                  value={line.gstRate}
+                                  value={line.gstRate !== undefined && line.gstRate !== null ? line.gstRate : 5}
                                   onChange={e => {
                                     const val = parseFloat(e.target.value);
                                     setFormLines(prev =>
@@ -1437,7 +1421,7 @@ export const SalesInvoicesPage: React.FC<{
                                 type="number"
                                 min="1"
                                 max={l.quantity}
-                                value={convertLineQuantities[l.id] || l.quantity}
+                                value={convertLineQuantities[l.id] !== undefined ? convertLineQuantities[l.id] : (l.quantity ?? 1)}
                                 onChange={e => {
                                   const val = Math.min(
                                     l.quantity,

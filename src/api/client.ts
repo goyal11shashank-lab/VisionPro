@@ -73,6 +73,7 @@ export async function apiRequest<T = any>(
 
   const headers: Record<string, string> = {
     'Content-Type': 'application/json',
+    'Accept': 'application/json',
     ...(options.headers as Record<string, string>),
   };
 
@@ -89,7 +90,26 @@ export async function apiRequest<T = any>(
     headers,
   });
 
-  const data = await response.json().catch(() => ({}));
+  const contentType = response.headers.get('content-type') || '';
+  let data: any = {};
+
+  if (contentType.includes('application/json')) {
+    data = await response.json().catch(() => ({}));
+  } else {
+    const text = await response.text().catch(() => '');
+    if (!response.ok) {
+      const err: any = new Error(`HTTP ${response.status}: Request failed`);
+      err.status = response.status;
+      err.data = text;
+      throw err;
+    }
+    if (text.startsWith('<!doctype') || text.startsWith('<html') || text.trim().startsWith('<')) {
+      const err: any = new Error(`API endpoint ${endpoint} returned HTML instead of JSON`);
+      err.status = 502;
+      err.data = text;
+      throw err;
+    }
+  }
 
   if (!response.ok) {
     const errorMsg = data.message || data.error || `HTTP ${response.status}: Request failed`;

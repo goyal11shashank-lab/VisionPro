@@ -1,5 +1,13 @@
 import React, { useState, useEffect } from 'react';
-import { RefreshCw } from 'lucide-react';
+import {
+  FileSpreadsheet,
+  ArrowLeft,
+  Printer,
+  CheckCircle2,
+  AlertTriangle,
+  RefreshCw,
+} from 'lucide-react';
+import { useAuth } from '../../context/AuthContext';
 import { apiRequest } from '../../api/client';
 import { Party, UniqueItem } from '../../types/index';
 import { VoucherHeader } from '../../components/voucher/VoucherHeader';
@@ -11,19 +19,26 @@ import {
   ComputedVoucherLine,
   VoucherTotals,
   BatchAllocation,
+  createEmptyVoucherLine,
+  isVoucherLineEmpty,
+  ensureTrailingBlankRow,
 } from '../../components/voucher/VoucherTypes';
 
 interface Props {
   editInvoiceId?: string | null;
-  onBack: () => void;
-  onSuccess: (invoiceId: string) => void;
+  onBack?: () => void;
+  onSuccess?: (invoiceId: string) => void;
+  onNavigate?: (path: string) => void;
 }
 
 export const CreatePurchaseInvoicePage: React.FC<Props> = ({
   editInvoiceId,
-  onBack,
+  onBack = () => window.history.back(),
   onSuccess,
+  onNavigate,
 }) => {
+  const { currentBusiness } = useAuth();
+
   // Master Data
   const [suppliers, setSuppliers] = useState<Party[]>([]);
   const [uniqueItemsList, setUniqueItemsList] = useState<UniqueItem[]>([]);
@@ -33,6 +48,12 @@ export const CreatePurchaseInvoicePage: React.FC<Props> = ({
 
   // Form State
   const [supplierPartyId, setSupplierPartyId] = useState<string>('');
+  const [selectedParty, setSelectedParty] = useState<Party | null>(null);
+  const [partyBalance, setPartyBalance] = useState<{
+    balance: number;
+    type: 'Dr' | 'Cr';
+  } | null>(null);
+
   const [invoiceDate, setInvoiceDate] = useState<string>(
     new Date().toISOString().split('T')[0]
   );
@@ -46,13 +67,19 @@ export const CreatePurchaseInvoicePage: React.FC<Props> = ({
   const [paymentTerms, setPaymentTerms] = useState<string>('NET 30');
   const [dueDate, setDueDate] = useState<string>('');
 
-  // Lines
-  const [lines, setLines] = useState<VoucherLineItem[]>([]);
+  // Lines (initialized with a pristine blank row)
+  const [lines, setLines] = useState<VoucherLineItem[]>([createEmptyVoucherLine('p-row')]);
 
   // Optical Batch Modal state
-  const [activeBatchModalIndex, setActiveBatchModalIndex] = useState<number | null>(
-    null
-  );
+  const [activeBatchModalIndex, setActiveBatchModalIndex] = useState<number | null>(null);
+  const [activeBatchLineId, setActiveBatchLineId] = useState<string | null>(null);
+  const [focusRequest, setFocusRequest] = useState<{ row: number; col: string; key: number } | null>(null);
+
+  const activeBatchLine = activeBatchLineId
+    ? lines.find(l => l.id === activeBatchLineId) || null
+    : activeBatchModalIndex !== null
+    ? lines[activeBatchModalIndex] || null
+    : null;
 
   // Barcode Scanner Quick Entry
   const [barcodeInput, setBarcodeInput] = useState<string>('');
@@ -62,169 +89,219 @@ export const CreatePurchaseInvoicePage: React.FC<Props> = ({
     text: string;
   } | null>(null);
 
-  // Submission
+  // Submission & Post-Save State
   const [submitting, setSubmitting] = useState<boolean>(false);
   const [error, setError] = useState<string | null>(null);
+  const [createdInvoice, setCreatedInvoice] = useState<any | null>(null);
+  const [showPrintModal, setShowPrintModal] = useState<boolean>(false);
 
-  // Load suppliers, unique items, and existing invoice if editing
-  useEffect(() => {
-    const loadData = async () => {
-      setLoadingInitial(true);
-      try {
-        const [supData, itemData] = await Promise.all([
-          apiRequest<{ parties: Party[] }>('/api/parties?partyType=SUPPLIER&limit=100').catch(
-            () => ({ parties: [] })
-          ),
-          apiRequest<UniqueItem[]>('/api/unique-items').catch(() => []),
-        ]);
+  // Helper: Auto calculate Due Date based on payment terms
+  const updateDueDate = (baseDate: string, terms: string) => {
+    if (!baseDate) return;
+    const d = new Date(baseDate);
+    if (terms === 'IMMEDIATE' || terms === 'DUE_ON_RECEIPT') {
+      setDueDate(baseDate);
+    } else if (terms === 'NET 7') {
+      d.setDate(d.getDate() + 7);
+      setDueDate(d.toISOString().split('T')[0]);
+    } else if (terms === 'NET 15') {
+      d.setDate(d.getDate() + 15);
+      setDueDate(d.toISOString().split('T')[0]);
+    } else if (terms === 'NET 30') {
+      d.setDate(d.getDate() + 30);
+      setDueDate(d.toISOString().split('T')[0]);
+    } else if (terms === 'NET 60') {
+      d.setDate(d.getDate() + 60);
+      setDueDate(d.toISOString().split('T')[0]);
+    }
+  };
 
-        const allSuppliers = supData.parties || [];
-        setSuppliers(allSuppliers);
-        const items = itemData || [];
-        setUniqueItemsList(items);
+  // Load suppliers, items, preview number & edit data
+  const loadData = async () => {
+    setLoadingInitial(true);
+    try {
+      const [supData, itemData, numRes] = await Promise.all([
+        apiRequest<{ parties: Party[] }>('/api/parties?limit=100').catch(() => ({ parties: [] })),
+        apiRequest<{ uniqueItems: UniqueItem[] }>('/api/optical-master/unique-items').catch(() =>
+          apiRequest<UniqueItem[]>('/api/unique-items').then(items => ({ uniqueItems: items })).catch(() => ({ uniqueItems: [] }))
+        ),
+        apiRequest<{ invoiceNumber: string }>('/api/purchases/invoices/number-preview').catch(() =>
+          apiRequest<{ invoiceNumber: string }>('/api/purchases/number-preview').catch(() => ({
+            invoiceNumber: `PUR-${Date.now().toString().slice(-6)}`,
+          }))
+        ),
+      ]);
 
-        if (editInvoiceId) {
-          const inv = await apiRequest<any>(`/api/purchases/invoices/${editInvoiceId}`);
-          if (inv) {
-            setExistingInvoiceNumber(inv.invoiceNumber);
-            setExistingStatus(inv.status);
-            setSupplierPartyId(inv.supplierPartyId || (inv.supplier?.id ?? ''));
-            if (inv.invoiceDate) {
-              setInvoiceDate(new Date(inv.invoiceDate).toISOString().split('T')[0]);
-            }
-            setSupplierInvoiceNumber(inv.supplierInvoiceNumber || '');
-            if (inv.supplierInvoiceDate) {
-              setSupplierInvoiceDate(
-                new Date(inv.supplierInvoiceDate).toISOString().split('T')[0]
-              );
-            }
-            setGstMode(inv.gstMode || 'INTRA_STATE');
-            setNotes(inv.notes || '');
+      const allParties = supData.parties || [];
+      const validSuppliers = allParties.filter(
+        p => p.partyType === 'SUPPLIER' || p.partyType === 'BOTH'
+      );
+      setSuppliers(validSuppliers);
 
-            if (inv.lines && inv.lines.length > 0) {
-              const loadedLines: VoucherLineItem[] = inv.lines.map((l: any, i: number) => ({
-                id: `edit-row-${i}`,
-                uniqueItemId: l.uniqueItemId,
-                uniqueItemName: l.uniqueItem?.name || 'Item',
-                uniqueItemCode: l.uniqueItem?.code || '',
-                categoryCode: l.category?.code || l.uniqueItem?.categoryCode || 'SV',
-                maintainBatches: l.uniqueItem?.maintainBatches !== false,
-                quantity: parseFloat(l.quantity) || 1,
-                rate: parseFloat(l.rate) || 0,
-                discountType: l.discountType || 'NONE',
-                discountValue: parseFloat(l.discountValue) || 0,
-                gstRate: parseFloat(l.gstRate) || 12,
-                batches: (l.batches || []).map((b: any) => ({
-                  batchId: b.batchId || b.batch?.id,
-                  sph: parseFloat(b.batch?.sph ?? b.sph ?? 0),
-                  cyl: parseFloat(b.batch?.cyl ?? b.cyl ?? 0),
-                  axis: parseFloat(b.batch?.axis ?? b.axis ?? 0),
-                  add: parseFloat(b.batch?.add ?? b.add ?? 0),
-                  side: b.batch?.side || b.side || 'NONE',
-                  quantity: parseFloat(b.quantity) || 1,
-                  rate: parseFloat(b.rate ?? l.rate ?? 0),
-                })),
-              }));
-              setLines(loadedLines);
+      const items = (itemData as any).uniqueItems || (Array.isArray(itemData) ? itemData : []);
+      setUniqueItemsList(items);
+
+      if (!editInvoiceId) {
+        setExistingInvoiceNumber(numRes.invoiceNumber);
+        updateDueDate(invoiceDate, paymentTerms);
+      }
+
+      if (editInvoiceId) {
+        const inv = await apiRequest<any>(`/api/purchases/invoices/${editInvoiceId}`).catch(() =>
+          apiRequest<any>(`/api/purchases/${editInvoiceId}`)
+        );
+        if (inv) {
+          setExistingInvoiceNumber(inv.invoiceNumber);
+          setExistingStatus(inv.status);
+          const initialSupId = inv.supplierPartyId || (inv.supplier?.id ?? '');
+          setSupplierPartyId(initialSupId);
+          const sup = validSuppliers.find(p => p.id === initialSupId) || inv.supplier || null;
+          setSelectedParty(sup);
+
+          if (inv.invoiceDate) {
+            const parsedDate = new Date(inv.invoiceDate).toISOString().split('T')[0];
+            setInvoiceDate(parsedDate);
+            updateDueDate(parsedDate, paymentTerms);
+          }
+          setSupplierInvoiceNumber(inv.supplierInvoiceNumber || '');
+          if (inv.supplierInvoiceDate) {
+            setSupplierInvoiceDate(
+              new Date(inv.supplierInvoiceDate).toISOString().split('T')[0]
+            );
+          }
+          setGstMode(inv.gstMode || 'INTRA_STATE');
+          setNotes(inv.notes || '');
+
+          // Fetch party ledger balance
+          if (initialSupId) {
+            try {
+              const ledgerRes = await apiRequest<any>(`/api/parties/${initialSupId}/ledger`);
+              if (ledgerRes && ledgerRes.currentBalance !== undefined) {
+                const balNum = parseFloat(ledgerRes.currentBalance);
+                setPartyBalance({
+                  balance: Math.abs(balNum),
+                  type: balNum >= 0 ? 'Cr' : 'Dr',
+                });
+              }
+            } catch {
+              // ignore
             }
           }
-        } else {
-          if (allSuppliers.length > 0) {
-            setSupplierPartyId(allSuppliers[0].id);
-          }
-          if (items.length > 0) {
-            const first = items[0];
-            const defaultRate = first.lastPurchasePrice
-              ? parseFloat(first.lastPurchasePrice as any)
-              : 250;
-            const itemMaintainBatches = first.maintainBatches !== false;
 
-            setLines([
-              {
-                id: 'p-row-1',
-                uniqueItemId: first.id,
-                uniqueItemName: first.name,
-                uniqueItemCode: first.code,
-                categoryCode: (first as any).categoryCode || (first as any).category?.code || 'SV',
-                maintainBatches: itemMaintainBatches,
-                quantity: 1,
-                rate: defaultRate,
-                discountType: 'NONE',
-                discountValue: 0,
-                gstRate: (first as any).taxRate ? parseFloat((first as any).taxRate) : 12,
-                batches: itemMaintainBatches
-                  ? [
-                      {
-                        sph: '0.00',
-                        cyl: '0.00',
-                        axis: '',
-                        add: '',
-                        side: 'NONE',
-                        quantity: 1,
-                        rate: defaultRate,
-                      },
-                    ]
-                  : [],
-              },
-            ]);
+          if (inv.lines && inv.lines.length > 0) {
+            const loadedLines: VoucherLineItem[] = inv.lines.map((l: any, i: number) => ({
+              id: `p-edit-row-${i}-${l.id || i}`,
+              uniqueItemId: l.uniqueItemId,
+              uniqueItemName: l.uniqueItem?.name || 'Item',
+              uniqueItemCode: l.uniqueItem?.code || '',
+              categoryCode: l.category?.code || l.uniqueItem?.categoryCode || 'SV',
+              maintainBatches: l.uniqueItem?.maintainBatches !== false,
+              quantity: parseFloat(l.quantity) || 1,
+              rate: parseFloat(l.rate) || 0,
+              discountType: l.discountType || 'NONE',
+              discountValue: parseFloat(l.discountValue) || 0,
+              gstRate: parseFloat(l.gstRate) || 12,
+              batches: (l.batches || []).map((b: any) => ({
+                batchId: b.batchId || b.batch?.id,
+                sph: b.batch?.sph !== undefined ? parseFloat(b.batch.sph) : parseFloat(b.sph || 0),
+                cyl: b.batch?.cyl !== undefined ? parseFloat(b.batch.cyl) : parseFloat(b.cyl || 0),
+                axis: b.batch?.axis !== undefined ? parseFloat(b.batch.axis) : parseFloat(b.axis || 0),
+                add: b.batch?.add !== undefined ? parseFloat(b.batch.add) : parseFloat(b.add || 0),
+                side: b.batch?.side || b.side || 'NONE',
+                quantity: parseFloat(b.quantity) || 1,
+                rate: parseFloat(b.rate !== undefined ? b.rate : (l.rate || 0)),
+              })),
+            }));
+            setLines(ensureTrailingBlankRow(loadedLines, 'p-row'));
+          } else {
+            setLines([createEmptyVoucherLine('p-row')]);
           }
         }
-      } catch (err: any) {
-        setError(err.message || 'Failed to load master items for purchase form');
-      } finally {
-        setLoadingInitial(false);
+      } else {
+        setLines(prev => (prev.length === 0 ? [createEmptyVoucherLine('p-row')] : prev));
       }
-    };
+    } catch (err: any) {
+      setError(err.message || 'Failed to load master items for purchase voucher');
+    } finally {
+      setLoadingInitial(false);
+    }
+  };
+
+  useEffect(() => {
     loadData();
-  }, [editInvoiceId]);
+  }, [editInvoiceId, currentBusiness?.id]);
+
+  // Handle supplier change & auto-detect GST mode + ledger balance
+  const handlePartyChange = async (partyId: string) => {
+    setSupplierPartyId(partyId);
+    const party = suppliers.find(p => p.id === partyId) || null;
+    setSelectedParty(party);
+
+    if (!party) {
+      setPartyBalance(null);
+      return;
+    }
+
+    // Auto-detect GST Mode based on business vs party state
+    if (party.state && currentBusiness?.state) {
+      if (party.state.trim().toLowerCase() !== currentBusiness.state.trim().toLowerCase()) {
+        setGstMode('INTER_STATE');
+      } else {
+        setGstMode('INTRA_STATE');
+      }
+    }
+
+    // Fetch supplier running ledger balance
+    try {
+      const ledgerRes = await apiRequest<any>(`/api/parties/${partyId}/ledger`);
+      if (ledgerRes && ledgerRes.currentBalance !== undefined) {
+        const balNum = parseFloat(ledgerRes.currentBalance);
+        setPartyBalance({
+          balance: Math.abs(balNum),
+          type: balNum >= 0 ? 'Cr' : 'Dr',
+        });
+      }
+    } catch {
+      setPartyBalance(null);
+    }
+  };
 
   // Add a blank row
   const handleAddBlankLine = () => {
-    if (uniqueItemsList.length === 0) return;
-    const first = uniqueItemsList[0];
-    const defaultRate = first.lastPurchasePrice
-      ? parseFloat(first.lastPurchasePrice as any)
-      : 250;
-    const itemMaintainBatches = first.maintainBatches !== false;
-
-    const newLine: VoucherLineItem = {
-      id: `p-row-${Date.now()}-${Math.random().toString(36).substring(2, 6)}`,
-      uniqueItemId: first.id,
-      uniqueItemName: first.name,
-      uniqueItemCode: first.code,
-      categoryCode: (first as any).categoryCode || (first as any).category?.code || 'SV',
-      maintainBatches: itemMaintainBatches,
-      quantity: 1,
-      rate: defaultRate,
-      discountType: 'NONE',
-      discountValue: 0,
-      gstRate: (first as any).taxRate ? parseFloat((first as any).taxRate) : 12,
-      batches: itemMaintainBatches
-        ? [
-            {
-              sph: '0.00',
-              cyl: '0.00',
-              axis: '',
-              add: '',
-              side: 'NONE',
-              quantity: 1,
-              rate: defaultRate,
-            },
-          ]
-        : [],
-    };
-    setLines(prev => [...prev, newLine]);
+    setLines(prev => ensureTrailingBlankRow(prev, 'p-row'));
   };
 
   // Select Item for a row
   const handleLineItemChange = (index: number, newItemId: string) => {
+    if (!newItemId) {
+      setLines(prev =>
+        prev.map((line, idx) =>
+          idx === index ? { ...createEmptyVoucherLine('p-row'), id: line.id } : line
+        )
+      );
+      return;
+    }
+
     const item = uniqueItemsList.find(i => i.id === newItemId);
     if (!item) return;
 
     const defaultRate = item.lastPurchasePrice
       ? parseFloat(item.lastPurchasePrice as any)
+      : (item as any).purchaseRate
+      ? parseFloat((item as any).purchaseRate as any)
       : 250;
     const itemMaintainBatches = item.maintainBatches !== false;
+    const existingLine = lines[index];
+    const isSameItem = existingLine && existingLine.uniqueItemId === item.id;
+    const existingBatches = isSameItem ? existingLine.batches : [];
+    const existingQty =
+      isSameItem && existingLine.quantity > 0
+        ? existingLine.quantity
+        : itemMaintainBatches
+        ? 0
+        : existingLine && existingLine.quantity > 0
+        ? existingLine.quantity
+        : 1;
 
     setLines(prev =>
       prev.map((line, idx) =>
@@ -238,24 +315,60 @@ export const CreatePurchaseInvoicePage: React.FC<Props> = ({
                 (item as any).categoryCode || (item as any).category?.code || 'SV',
               maintainBatches: itemMaintainBatches,
               rate: defaultRate,
-              gstRate: (item as any).taxRate ? parseFloat((item as any).taxRate) : 12,
-              batches: itemMaintainBatches
-                ? [
-                    {
-                      sph: '0.00',
-                      cyl: '0.00',
-                      axis: '',
-                      add: '',
-                      side: 'NONE',
-                      quantity: line.quantity || 1,
-                      rate: defaultRate,
-                    },
-                  ]
-                : [],
+              gstRate:
+                item.gstRate !== undefined
+                  ? parseFloat(String(item.gstRate))
+                  : (item as any).taxRate
+                  ? parseFloat((item as any).taxRate)
+                  : 5,
+              batches: existingBatches,
+              quantity: existingQty,
             }
           : line
       )
     );
+
+    // Auto-open batch modal when maintainBatches is YES
+    if (itemMaintainBatches) {
+      setActiveBatchModalIndex(index);
+      if (lines[index]) {
+        setActiveBatchLineId(lines[index].id);
+      }
+    }
+  };
+
+  // Apply batch allocations from modal
+  const handleLineBatchApply = (
+    index: number | null,
+    allocatedBatches: BatchAllocation[],
+    totalQty?: number
+  ) => {
+    const targetId = activeBatchLineId || (index !== null && lines[index] ? lines[index].id : null);
+    setLines(prev => {
+      const updated = prev.map((line, idx) => {
+        const isTarget = targetId ? line.id === targetId : idx === index;
+        if (!isTarget) return line;
+        const newQty = totalQty !== undefined && totalQty > 0 ? totalQty : line.quantity;
+        return {
+          ...line,
+          batches: allocatedBatches,
+          quantity: newQty,
+        };
+      });
+      // Guarantee next empty row exists immediately after completing batch line
+      return ensureTrailingBlankRow(updated, 'p-row');
+    });
+
+    setActiveBatchModalIndex(null);
+    setActiveBatchLineId(null);
+
+    // Auto-focus rate field on the line that was just allocated
+    setTimeout(() => {
+      const focusIndex = targetId ? lines.findIndex(l => l.id === targetId) : (index ?? 0);
+      if (focusIndex >= 0) {
+        setFocusRequest({ row: focusIndex, col: 'rate', key: Date.now() });
+      }
+    }, 60);
   };
 
   // Barcode Lookup Fast Add
@@ -292,29 +405,38 @@ export const CreatePurchaseInvoicePage: React.FC<Props> = ({
 
         let updatedBatches = [...line.batches];
         if (existingBatchIdx >= 0) {
-          updatedBatches[existingBatchIdx].quantity += 1;
+          updatedBatches[existingBatchIdx] = {
+            ...updatedBatches[existingBatchIdx],
+            quantity: updatedBatches[existingBatchIdx].quantity + 1,
+          };
         } else {
           updatedBatches.push({
             batchId: batch.id,
-            sph: Number(batch.sph),
-            cyl: Number(batch.cyl),
-            axis: Number(batch.axis),
-            add: Number(batch.add),
+            sph: Number(batch.sph || 0),
+            cyl: Number(batch.cyl || 0),
+            axis: Number(batch.axis || 0),
+            add: Number(batch.add || 0),
             side: batch.side || 'NONE',
             quantity: 1,
             rate: defaultRate,
+            barcode: batch.barcode,
           });
         }
 
+        const newTotalQty = updatedBatches.reduce((s, b) => s + b.quantity, 0);
+
         setLines(prev =>
-          prev.map((l, i) =>
-            i === existingIdx
-              ? {
-                  ...l,
-                  quantity: l.quantity + 1,
-                  batches: updatedBatches,
-                }
-              : l
+          ensureTrailingBlankRow(
+            prev.map((l, i) =>
+              i === existingIdx
+                ? {
+                    ...l,
+                    quantity: newTotalQty,
+                    batches: updatedBatches,
+                  }
+                : l
+            ),
+            'p-row'
           )
         );
       } else {
@@ -329,21 +451,27 @@ export const CreatePurchaseInvoicePage: React.FC<Props> = ({
           rate: defaultRate,
           discountType: 'NONE',
           discountValue: 0,
-          gstRate: 12,
+          gstRate:
+            uItem.gstRate !== undefined
+              ? parseFloat(String(uItem.gstRate))
+              : (uItem as any).taxRate
+              ? parseFloat((uItem as any).taxRate)
+              : 5,
           batches: [
             {
               batchId: batch.id,
-              sph: Number(batch.sph),
-              cyl: Number(batch.cyl),
-              axis: Number(batch.axis),
-              add: Number(batch.add),
+              sph: Number(batch.sph || 0),
+              cyl: Number(batch.cyl || 0),
+              axis: Number(batch.axis || 0),
+              add: Number(batch.add || 0),
               side: batch.side || 'NONE',
               quantity: 1,
               rate: defaultRate,
+              barcode: batch.barcode,
             },
           ],
         };
-        setLines(prev => [...prev, newLine]);
+        setLines(prev => ensureTrailingBlankRow([...prev, newLine], 'p-row'));
       }
 
       setBarcodeMsg({
@@ -421,7 +549,29 @@ export const CreatePurchaseInvoicePage: React.FC<Props> = ({
     roundOff,
     grandTotal,
     totalQuantity,
-    totalItems: lines.length,
+    totalItems: lines.filter(l => !isVoucherLineEmpty(l)).length,
+  };
+
+  const handleRemoveLine = (idx: number) => {
+    setLines(prev => {
+      const updated = prev.filter((_, i) => i !== idx);
+      return updated.length === 0 ? [createEmptyVoucherLine('p-row')] : updated;
+    });
+  };
+
+  const handleResetForm = () => {
+    setCreatedInvoice(null);
+    setShowPrintModal(false);
+    setSupplierPartyId('');
+    setSelectedParty(null);
+    setPartyBalance(null);
+    setInvoiceDate(new Date().toISOString().split('T')[0]);
+    setSupplierInvoiceNumber('');
+    setSupplierInvoiceDate('');
+    setNotes('');
+    setLines([createEmptyVoucherLine('p-row')]);
+    setError(null);
+    loadData();
   };
 
   // Save / Post Invoice
@@ -436,25 +586,50 @@ export const CreatePurchaseInvoicePage: React.FC<Props> = ({
       setError('Please select a Supplier A/c Name');
       return;
     }
-    if (lines.length === 0) {
-      setError('Invoice must contain at least 1 line item');
+
+    const nonBlankLines = lines.filter(l => !isVoucherLineEmpty(l));
+
+    if (nonBlankLines.length === 0) {
+      setError('Invoice must contain at least 1 stock item line');
       return;
     }
 
-    // Validate batch sums
-    for (let i = 0; i < lines.length; i++) {
-      const line = lines[i];
-      if (line.maintainBatches && line.batches.length > 0) {
+    // Validate non-blank lines
+    for (let i = 0; i < nonBlankLines.length; i++) {
+      const line = nonBlankLines[i];
+      const lineNum = i + 1;
+      const itemName = line.uniqueItemName || 'Item';
+
+      if (!line.uniqueItemId) {
+        setError(`Line #${lineNum}: Stock Item is required.`);
+        return;
+      }
+
+      if (line.maintainBatches !== false) {
+        if (!line.batches || line.batches.length === 0) {
+          setError(`Line #${lineNum} (${itemName}): Batch allocations are required. Please allocate at least one batch.`);
+          return;
+        }
         const sumBatches = line.batches.reduce(
-          (sum, b) => sum + Number(b.quantity),
+          (sum, b) => sum + Number(b.quantity || 0),
           0
         );
-        if (Math.abs(sumBatches - line.quantity) > 0.001) {
+        if (sumBatches <= 0 || Math.abs(sumBatches - line.quantity) > 0.001) {
           setError(
-            `Line ${i + 1} (${line.uniqueItemName}): Sum of batch quantities (${sumBatches}) must equal line quantity (${line.quantity})`
+            `Line #${lineNum} (${itemName}): Sum of batch quantities (${sumBatches}) must equal line quantity (${line.quantity})`
           );
           return;
         }
+      }
+
+      if (line.quantity <= 0) {
+        setError(`Line #${lineNum} (${itemName}) has invalid quantity (${line.quantity}). Must be ≥ 0.5.`);
+        return;
+      }
+
+      if (line.rate < 0) {
+        setError(`Line #${lineNum} (${itemName}) has negative purchase price.`);
+        return;
       }
     }
 
@@ -474,7 +649,7 @@ export const CreatePurchaseInvoicePage: React.FC<Props> = ({
           ? `${notes.trim()} | Payment: ${paymentMode} | Terms: ${paymentTerms}`
           : `Payment: ${paymentMode} | Terms: ${paymentTerms}`,
         status: andPost ? 'POSTED' : 'DRAFT',
-        lines: lines.map(l => ({
+        lines: nonBlankLines.map(l => ({
           uniqueItemId: l.uniqueItemId,
           quantity: l.quantity,
           rate: l.rate,
@@ -489,15 +664,16 @@ export const CreatePurchaseInvoicePage: React.FC<Props> = ({
             add: b.add,
             side: b.side,
             quantity: b.quantity,
-            rate: b.rate,
+            rate: b.rate !== undefined ? b.rate : l.rate,
           })),
         })),
       };
 
       let resultId = editInvoiceId;
+      let finalInvoice: any = null;
 
       if (editInvoiceId) {
-        const updated = await apiRequest<{ id: string; invoiceNumber: string }>(
+        const updated = await apiRequest<any>(
           `/api/purchases/invoices/${editInvoiceId}`,
           {
             method: 'PUT',
@@ -505,8 +681,15 @@ export const CreatePurchaseInvoicePage: React.FC<Props> = ({
           }
         );
         resultId = updated.id;
+        finalInvoice = updated;
+
+        if (andPost && updated.status !== 'POSTED') {
+          finalInvoice = await apiRequest(`/api/purchases/invoices/${editInvoiceId}/post`, {
+            method: 'POST',
+          });
+        }
       } else {
-        const created = await apiRequest<{ id: string; invoiceNumber: string }>(
+        const created = await apiRequest<any>(
           '/api/purchases/invoices',
           {
             method: 'POST',
@@ -514,15 +697,21 @@ export const CreatePurchaseInvoicePage: React.FC<Props> = ({
           }
         );
         resultId = created.id;
+        finalInvoice = created;
 
         if (andPost) {
-          await apiRequest(`/api/purchases/invoices/${created.id}/post`, {
+          finalInvoice = await apiRequest(`/api/purchases/invoices/${created.id}/post`, {
             method: 'POST',
           });
         }
       }
 
-      onSuccess(resultId!);
+      setCreatedInvoice(finalInvoice);
+      setShowPrintModal(true);
+
+      if (onSuccess && resultId) {
+        onSuccess(resultId);
+      }
     } catch (err: any) {
       setError(err.message || 'Failed to save purchase invoice');
     } finally {
@@ -541,9 +730,6 @@ export const CreatePurchaseInvoicePage: React.FC<Props> = ({
     );
   }
 
-  const activeBatchLine =
-    activeBatchModalIndex !== null ? lines[activeBatchModalIndex] : null;
-
   return (
     <div
       id="normal-purchase-voucher-page"
@@ -555,10 +741,14 @@ export const CreatePurchaseInvoicePage: React.FC<Props> = ({
         isEditing={!!editInvoiceId}
         voucherNumber={existingInvoiceNumber || 'AUTO'}
         voucherDate={invoiceDate}
-        onVoucherDateChange={setInvoiceDate}
+        onVoucherDateChange={val => {
+          setInvoiceDate(val);
+          updateDueDate(val, paymentTerms);
+        }}
         parties={suppliers}
         selectedPartyId={supplierPartyId}
-        onPartyChange={setSupplierPartyId}
+        onPartyChange={handlePartyChange}
+        partyBalance={partyBalance || undefined}
         gstMode={gstMode}
         onGstModeChange={setGstMode}
         referenceNumber={supplierInvoiceNumber}
@@ -583,8 +773,14 @@ export const CreatePurchaseInvoicePage: React.FC<Props> = ({
           lines={lines}
           computedLines={computedLines}
           allItems={uniqueItemsList}
+          focusRequest={focusRequest}
           onItemSelect={handleLineItemChange}
-          onBatchClick={idx => setActiveBatchModalIndex(idx)}
+          onBatchClick={idx => {
+            setActiveBatchModalIndex(idx);
+            if (lines[idx]) {
+              setActiveBatchLineId(lines[idx].id);
+            }
+          }}
           onQuantityChange={(idx, qty) => {
             setLines(prev =>
               prev.map((l, i) =>
@@ -616,9 +812,7 @@ export const CreatePurchaseInvoicePage: React.FC<Props> = ({
               prev.map((l, i) => (i === idx ? { ...l, gstRate: gst } : l))
             );
           }}
-          onRemoveLine={idx => {
-            setLines(prev => prev.filter((_, i) => i !== idx));
-          }}
+          onRemoveLine={handleRemoveLine}
           onAddBlankLine={handleAddBlankLine}
         />
       </div>
@@ -633,7 +827,10 @@ export const CreatePurchaseInvoicePage: React.FC<Props> = ({
         paymentMode={paymentMode}
         onPaymentModeChange={setPaymentMode}
         paymentTerms={paymentTerms}
-        onPaymentTermsChange={setPaymentTerms}
+        onPaymentTermsChange={terms => {
+          setPaymentTerms(terms);
+          updateDueDate(invoiceDate, terms);
+        }}
         dueDate={dueDate}
         onDueDateChange={setDueDate}
         errorMessage={error}
@@ -643,22 +840,17 @@ export const CreatePurchaseInvoicePage: React.FC<Props> = ({
       {activeBatchModalIndex !== null && activeBatchLine && (
         <OpticalBatchModal
           isOpen={true}
-          onClose={() => setActiveBatchModalIndex(null)}
+          onClose={() => {
+            setActiveBatchModalIndex(null);
+            setActiveBatchLineId(null);
+          }}
           onApply={(batches, totalQty) => {
-            setLines(prev =>
-              prev.map((l, i) =>
-                i === activeBatchModalIndex
-                  ? {
-                      ...l,
-                      batches: batches,
-                      quantity: totalQty !== undefined && totalQty > 0 ? totalQty : l.quantity,
-                    }
-                  : l
-              )
-            );
+            handleLineBatchApply(activeBatchModalIndex, batches, totalQty);
           }}
           mode="purchase"
           itemName={activeBatchLine.uniqueItemName}
+          itemCode={activeBatchLine.uniqueItemCode}
+          uniqueItemId={activeBatchLine.uniqueItemId}
           categoryCode={activeBatchLine.categoryCode}
           initialBatches={activeBatchLine.batches}
           availableBatches={[]}
@@ -666,6 +858,107 @@ export const CreatePurchaseInvoicePage: React.FC<Props> = ({
           lineRate={activeBatchLine.rate}
         />
       )}
+
+      {/* 5. Purchase Voucher Created & Confirmation Modal */}
+      {showPrintModal && createdInvoice && (
+        <div
+          id="modal-purchase-voucher-created"
+          className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/70 backdrop-blur-xs animate-in fade-in"
+        >
+          <div className="bg-white rounded-xl max-w-xl w-full p-5 shadow-2xl border border-slate-300 space-y-4">
+            <div className="flex items-start justify-between border-b border-slate-200 pb-3">
+              <div className="flex items-center gap-3">
+                <div className="p-2 bg-indigo-50 text-indigo-600 rounded-lg">
+                  <CheckCircle2 className="w-5 h-5" />
+                </div>
+                <div>
+                  <h3 className="text-base font-bold text-slate-900">
+                    Purchase Voucher Saved Successfully!
+                  </h3>
+                  <p className="text-xs text-slate-500 font-mono">
+                    Voucher #{createdInvoice.invoiceNumber || existingInvoiceNumber} • Status: {createdInvoice.status}
+                  </p>
+                </div>
+              </div>
+              <button
+                onClick={() => setShowPrintModal(false)}
+                className="text-slate-400 hover:text-slate-700 font-bold p-1"
+              >
+                ✕
+              </button>
+            </div>
+
+            <div className="p-3 bg-slate-50 rounded-md border border-slate-200 space-y-2 text-xs">
+              <div className="flex justify-between">
+                <span className="text-slate-500">Supplier A/c:</span>
+                <span className="font-bold text-slate-900">
+                  {createdInvoice.supplier?.name || selectedParty?.name}
+                </span>
+              </div>
+              <div className="flex justify-between">
+                <span className="text-slate-500">Invoice Date:</span>
+                <span className="font-mono">
+                  {new Date(createdInvoice.invoiceDate || invoiceDate).toLocaleDateString()}
+                </span>
+              </div>
+              {supplierInvoiceNumber && (
+                <div className="flex justify-between">
+                  <span className="text-slate-500">Supplier Bill #:</span>
+                  <span className="font-mono font-semibold text-slate-800">
+                    {supplierInvoiceNumber}
+                  </span>
+                </div>
+              )}
+              <div className="flex justify-between">
+                <span className="text-slate-500">Invoice Total:</span>
+                <span className="font-mono font-bold text-indigo-700 text-sm">
+                  ₹{parseFloat(createdInvoice.grandTotal || grandTotal).toFixed(2)}
+                </span>
+              </div>
+              <div className="flex justify-between">
+                <span className="text-slate-500">Stock &amp; Ledger:</span>
+                <span className="text-indigo-600 font-semibold">
+                  {createdInvoice.status === 'POSTED'
+                    ? '✓ Stock Added to Inventory & Supplier Ledger Credited'
+                    : 'Draft Saved (Stock Inwards Pending)'}
+                </span>
+              </div>
+            </div>
+
+            <div className="flex flex-wrap items-center justify-between gap-3 pt-2">
+              <button
+                id="btn-print-purchase-voucher"
+                onClick={() => window.print()}
+                className="flex items-center gap-2 px-3.5 py-1.5 text-xs font-semibold text-slate-700 bg-slate-100 hover:bg-slate-200 rounded border border-slate-300 transition-colors"
+              >
+                <Printer className="w-4 h-4 text-slate-600" />
+                Print Voucher
+              </button>
+
+              <div className="flex items-center gap-2">
+                <button
+                  id="btn-create-another-purchase-voucher"
+                  onClick={handleResetForm}
+                  className="px-3.5 py-1.5 text-xs font-semibold text-indigo-700 bg-indigo-50 hover:bg-indigo-100 rounded border border-indigo-200 transition-colors"
+                >
+                  Create Another Voucher
+                </button>
+                <button
+                  id="btn-go-to-purchase-invoices-register"
+                  onClick={() =>
+                    onNavigate ? onNavigate('/purchase/invoices') : onBack()
+                  }
+                  className="px-4 py-1.5 text-xs font-bold text-white bg-indigo-600 hover:bg-indigo-700 rounded transition-colors shadow-xs"
+                >
+                  View Invoices Register
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 };
+
+export const NormalPurchaseVoucherPage = CreatePurchaseInvoicePage;

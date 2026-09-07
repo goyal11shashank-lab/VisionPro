@@ -369,6 +369,7 @@ export const uniqueItems = pgTable('unique_items', {
   purchaseRate: numeric('purchase_rate', { precision: 12, scale: 2 }).default('0.00'),
   lastPurchasePrice: numeric('last_purchase_price', { precision: 12, scale: 2 }).default('0.00'),
   mrp: numeric('mrp', { precision: 12, scale: 2 }).default('0.00'),
+  gstRate: numeric('gst_rate', { precision: 5, scale: 2 }).default('5.00').notNull(),
   status: varchar('status', { length: 20 }).default('ACTIVE').notNull(),
   createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
   updatedAt: timestamp('updated_at', { withTimezone: true }).defaultNow().notNull(),

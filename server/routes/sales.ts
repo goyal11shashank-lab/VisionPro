@@ -462,15 +462,27 @@ router.get(
  */
 router.get(
   '/unique-items/:itemId/batches',
-  requireAnyPermission(['sales:view', 'sales.view', 'inventory:view']),
+  requireAnyPermission([
+    'sales:view',
+    'sales.view',
+    'inventory:view',
+    'purchase:view',
+    'purchase.view',
+    'purchase:create',
+    'purchase.create',
+    'sales:create',
+    'master:view',
+  ]),
   async (req: Request, res: Response) => {
     try {
       const businessId = req.user!.currentBusinessId;
       const onlyInStock = req.query.onlyInStock === 'true';
       const search = typeof req.query.search === 'string' ? req.query.search : undefined;
+      const limit = req.query.limit ? parseInt(String(req.query.limit), 10) : undefined;
       const batches = await SalesService.getBatchesForUniqueItem(businessId, req.params.itemId, {
         search,
         onlyInStock,
+        limit,
       });
       res.json({ batches });
     } catch (err: any) {

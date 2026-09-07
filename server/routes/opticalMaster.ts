@@ -1690,10 +1690,11 @@ const uniqueItemSchema = z.object({
   purchaseRate: z.union([z.number(), z.string()]).default(0),
   lastPurchasePrice: z.union([z.number(), z.string()]).default(0),
   mrp: z.union([z.number(), z.string()]).default(0),
+  gstRate: z.union([z.number(), z.string()]).default(5),
   status: z.enum(['ACTIVE', 'INACTIVE']).default('ACTIVE'),
 });
 
-router.get(['/unique-items', '/stock-items'], requirePermission('master:view'), async (req: Request, res: Response): Promise<void> => {
+router.get(['/unique-items', '/stock-items', '/'], requireAnyPermission(['master:view', 'master.view', 'sales:view', 'sales:create', 'purchase:view', 'purchase:create', 'inventory:view']), async (req: Request, res: Response): Promise<void> => {
   try {
     const bizId = req.user!.currentBusinessId;
     const { primaryItemId, search } = req.query;
@@ -1710,6 +1711,7 @@ router.get(['/unique-items', '/stock-items'], requirePermission('master:view'), 
         purchaseRate: uniqueItems.purchaseRate,
         lastPurchasePrice: uniqueItems.lastPurchasePrice,
         mrp: uniqueItems.mrp,
+        gstRate: uniqueItems.gstRate,
         status: uniqueItems.status,
         createdAt: uniqueItems.createdAt,
         updatedAt: uniqueItems.updatedAt,
@@ -1764,7 +1766,7 @@ router.post(['/unique-items', '/stock-items'], requirePermission('master:create'
       return;
     }
 
-    const { primaryItemId, name, code, description, maintainBatches, opticalCategory, purchaseRate, lastPurchasePrice, mrp, status } = parsed.data;
+    const { primaryItemId, name, code, description, maintainBatches, opticalCategory, purchaseRate, lastPurchasePrice, mrp, gstRate, status } = parsed.data;
 
     const existing = await db
       .select()
@@ -1790,6 +1792,7 @@ router.post(['/unique-items', '/stock-items'], requirePermission('master:create'
         purchaseRate: String(purchaseRate),
         lastPurchasePrice: String(lastPurchasePrice),
         mrp: String(mrp),
+        gstRate: String(gstRate !== undefined ? gstRate : '5.00'),
         status,
         createdBy: req.user!.id,
         updatedBy: req.user!.id,
@@ -1935,6 +1938,7 @@ router.patch(['/unique-items/:id', '/stock-items/:id'], requireAnyPermission(['m
         purchaseRate: req.body.purchaseRate !== undefined ? String(req.body.purchaseRate) : current.purchaseRate,
         lastPurchasePrice: req.body.lastPurchasePrice !== undefined ? String(req.body.lastPurchasePrice) : current.lastPurchasePrice,
         mrp: req.body.mrp !== undefined ? String(req.body.mrp) : current.mrp,
+        gstRate: req.body.gstRate !== undefined ? String(req.body.gstRate) : current.gstRate,
         status: req.body.status ?? current.status,
         updatedAt: new Date(),
         updatedBy: req.user!.id,
@@ -2344,7 +2348,10 @@ router.get('/batches/:id', requirePermission('master:view'), async (req: Request
  * POST /api/optical-master/batches/find-or-create
  * Canonical endpoint to find or create optical batch with permanent barcode
  */
-router.post('/batches/find-or-create', requirePermission('master:create'), async (req: Request, res: Response): Promise<void> => {
+router.post(
+  '/batches/find-or-create',
+  requireAnyPermission(['master:create', 'master.create', 'purchase:create', 'purchase.create', 'purchase:edit', 'sales:create']),
+  async (req: Request, res: Response): Promise<void> => {
   try {
     const bizId = req.user!.currentBusinessId;
     const { uniqueItemId, categoryId, sph, cyl, axis, add, side } = req.body;
