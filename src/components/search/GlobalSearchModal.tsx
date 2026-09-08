@@ -261,8 +261,11 @@ export const GlobalSearchModal: React.FC<GlobalSearchModalProps> = ({
                           <div className="text-[11px] text-slate-500 flex items-center gap-2 mt-0.5">
                             <span>Power: SPH {b.sph} | CYL {b.cyl} | AXIS {b.axis}</span>
                             <span>•</span>
-                            <span className={b.physical_stock > 0 ? 'text-emerald-600 font-semibold' : 'text-rose-600 font-semibold'}>
-                              Stock: {b.physical_stock} (Avail: {b.available_stock})
+                            <span className="flex items-center gap-1">
+                              <span className={Number(b.physical_stock || 0) < 0 ? 'text-rose-600 font-bold bg-rose-50 px-1 rounded' : Number(b.physical_stock || 0) > 0 ? 'text-emerald-700 font-semibold' : 'text-slate-600'}>
+                                Stock: {b.physical_stock}
+                              </span>
+                              <span>(Avail: <span className={Number(b.available_stock || 0) < 0 ? 'text-rose-600 font-bold bg-rose-50 px-1 rounded' : Number(b.available_stock || 0) > 0 ? 'text-emerald-700 font-semibold' : 'text-slate-600'}>{b.available_stock}</span>)</span>
                             </span>
                           </div>
                         </div>
@@ -306,7 +309,7 @@ export const GlobalSearchModal: React.FC<GlobalSearchModalProps> = ({
                             <div className="flex items-center gap-2">
                               <span className="font-mono font-bold text-slate-900 text-xs">{d.doc_number}</span>
                               <span className="text-[10px] px-1.5 py-0.5 rounded-md bg-indigo-100 text-indigo-700 font-bold uppercase">
-                                {d.type.replace('_', ' ')}
+                                {String(d.type || 'DOCUMENT').replace(/_/g, ' ')}
                               </span>
                               <span
                                 className={`text-[10px] px-1.5 py-0.5 rounded-md font-semibold ${

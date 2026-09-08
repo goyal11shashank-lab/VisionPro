@@ -575,7 +575,7 @@ export const OpticalBatchesPage: React.FC = () => {
                   <th className="px-5 py-4">Category</th>
                   <th className="px-5 py-4">Optical Powers</th>
                   <th className="px-5 py-4">Canonical Identity Key</th>
-                  <th className="px-5 py-4">Physical Stock</th>
+                  <th className="px-5 py-4">Stock</th>
                   <th className="px-5 py-4">Available</th>
                   <th className="px-5 py-4">Status</th>
                   <th className="px-5 py-4 text-right">Actions</th>
@@ -667,10 +667,14 @@ export const OpticalBatchesPage: React.FC = () => {
                         <td className="px-5 py-4 font-mono text-xs text-slate-500 max-w-xs truncate" title={b.identityKey}>
                           {b.identityKey}
                         </td>
-                        <td className="px-5 py-4 font-mono font-semibold text-slate-900">
+                        <td className={`px-5 py-4 font-mono font-semibold ${
+                          Number(b.physicalStock || 0) < 0 ? 'text-rose-600 font-bold bg-rose-50/40' : 'text-slate-900'
+                        }`}>
                           {Number(b.physicalStock || 0).toFixed(2)}
                         </td>
-                        <td className="px-5 py-4 font-mono font-semibold text-emerald-700">
+                        <td className={`px-5 py-4 font-mono font-semibold ${
+                          Number(b.availableStock || 0) < 0 ? 'text-rose-600 font-bold bg-rose-50/40' : 'text-emerald-700'
+                        }`}>
                           {Number(b.availableStock || 0).toFixed(2)}
                         </td>
                         <td className="px-5 py-4">
@@ -1352,15 +1356,15 @@ export const OpticalBatchesPage: React.FC = () => {
                     <div className="grid grid-cols-3 gap-2 bg-slate-50 p-3 rounded-xl border border-slate-200 text-center font-mono">
                       <div>
                         <span className="text-[10px] text-slate-500 block font-sans">Physical Stock</span>
-                        <span className="text-xs font-bold text-slate-900">{inspectData.stockInfo.physicalStock}</span>
+                        <span className={`text-xs font-bold ${Number(inspectData.stockInfo.physicalStock || 0) < 0 ? 'text-rose-600 font-extrabold' : 'text-slate-900'}`}>{inspectData.stockInfo.physicalStock}</span>
                       </div>
                       <div>
                         <span className="text-[10px] text-amber-600 block font-sans">Reserved</span>
                         <span className="text-xs font-bold text-amber-700">{inspectData.stockInfo.reservedStock}</span>
                       </div>
                       <div>
-                        <span className="text-[10px] text-emerald-600 block font-sans">Available</span>
-                        <span className="text-xs font-bold text-emerald-700">{inspectData.stockInfo.availableStock}</span>
+                        <span className={`text-[10px] block font-sans ${Number(inspectData.stockInfo.availableStock || 0) < 0 ? 'text-rose-600' : 'text-emerald-600'}`}>Available</span>
+                        <span className={`text-xs font-bold ${Number(inspectData.stockInfo.availableStock || 0) < 0 ? 'text-rose-600 font-extrabold' : 'text-emerald-700'}`}>{inspectData.stockInfo.availableStock}</span>
                       </div>
                     </div>
                   )}

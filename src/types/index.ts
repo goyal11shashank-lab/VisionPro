@@ -200,6 +200,7 @@ export interface UniqueItem {
   description?: string | null;
   maintainBatches: boolean;
   opticalCategory?: 'SV' | 'KT' | 'PROG' | 'OTHER' | string;
+  unit?: 'PRS' | 'PCS' | string;
   batchesCount?: number;
   purchaseRate: string | number;
   lastPurchasePrice: string | number;
@@ -379,5 +380,66 @@ export interface SupplierLedgerEntry {
   transactionDate: string;
   notes?: string | null;
   createdAt: string;
+}
+
+export interface PurchaseOrderLineBatch {
+  id?: string;
+  purchaseOrderLineId?: string;
+  batchId?: string;
+  batch?: OpticalBatch;
+  sph?: number | string;
+  cyl?: number | string;
+  axis?: number | string;
+  add?: number | string;
+  side?: 'NONE' | 'R' | 'L' | 'BE';
+  quantity: number | string;
+  rate: number | string;
+  totalCost?: number | string;
+}
+
+export interface PurchaseOrderLine {
+  id?: string;
+  purchaseOrderId?: string;
+  uniqueItemId: string;
+  uniqueItem?: UniqueItem;
+  quantity: number | string;
+  rate: number | string;
+  discountType?: 'PERCENTAGE' | 'FIXED' | 'NONE';
+  discountValue?: number | string;
+  discountAmount?: number | string;
+  taxableAmount?: number | string;
+  gstRate?: number | string;
+  taxAmount?: number | string;
+  lineTotal?: number | string;
+  batches?: PurchaseOrderLineBatch[];
+}
+
+export interface PurchaseOrder {
+  id: string;
+  businessId: string;
+  orderNumber: string;
+  supplierPartyId: string;
+  supplier?: Party;
+  orderDate: string;
+  expectedDeliveryDate?: string | null;
+  status: 'OPEN' | 'CONVERTED' | 'CANCELLED';
+  convertedInvoiceId?: string | null;
+  subtotal: string | number;
+  discountTotal: string | number;
+  taxableAmount: string | number;
+  gstMode: 'INTRA_STATE' | 'INTER_STATE' | 'EXEMPT';
+  cgstRate: string | number;
+  cgstAmount: string | number;
+  sgstRate: string | number;
+  sgstAmount: string | number;
+  igstRate: string | number;
+  igstAmount: string | number;
+  roundOff: string | number;
+  grandTotal: string | number;
+  supplierReference?: string | null;
+  notes?: string | null;
+  lines?: PurchaseOrderLine[];
+  createdAt: string;
+  updatedAt?: string;
 }
 

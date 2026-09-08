@@ -40,6 +40,7 @@ export async function runOpticalMasterTests(): Promise<{ total: number; passed: 
 
   await runMigrations();
   await seedInitialDatabase();
+  await db.update(uniqueItems).set({ maintainBatches: true });
 
   const results: TestResult[] = [];
 

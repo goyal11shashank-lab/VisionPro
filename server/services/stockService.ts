@@ -49,6 +49,7 @@ export interface CreateReservationInput {
   referenceType?: string;
   referenceId?: string;
   notes?: string;
+  allowNegative?: boolean;
 }
 
 export interface ConvertReservationInput {
@@ -59,6 +60,16 @@ export interface ConvertReservationInput {
 
 function round2(val: number): number {
   return Math.round((val + Number.EPSILON) * 100) / 100;
+}
+
+export function roundToHalf(val: number): number {
+  return Math.round((val + Number.EPSILON) * 2) / 2;
+}
+
+export function isValidOpticalQuantity(qty: number): boolean {
+  if (isNaN(qty) || qty <= 0) return false;
+  const doubled = qty * 2;
+  return Math.abs(Math.round(doubled) - doubled) < 0.0001;
 }
 
 export class StockService {
@@ -167,8 +178,8 @@ export class StockService {
     const { batchId, reason } = input;
     const quantity = round2(input.quantity);
 
-    if (isNaN(quantity) || quantity <= 0) {
-      throw new Error('Opening stock quantity must be a positive number of pairs (e.g. 1.0, 0.5).');
+    if (!isValidOpticalQuantity(quantity)) {
+      throw new Error('Opening stock quantity must be a positive value in steps of 0.5 (e.g. 0.5, 1.0, 1.5, 2.0).');
     }
 
     const client = await pool.connect();
@@ -268,8 +279,8 @@ export class StockService {
     const { batchId, adjustmentType, reason, remarks, referenceType, referenceId } = input;
     const quantity = round2(input.quantity);
 
-    if (isNaN(quantity) || quantity <= 0) {
-      throw new Error('Adjustment quantity must be a positive number of pairs (e.g. 1.0, 0.5).');
+    if (!isValidOpticalQuantity(quantity)) {
+      throw new Error('Adjustment quantity must be a positive value in steps of 0.5 (e.g. 0.5, 1.0, 1.5, 2.0).');
     }
 
     if (!reason || reason.trim() === '') {
@@ -384,8 +395,8 @@ export class StockService {
     const { batchId, referenceType, referenceId, notes } = input;
     const quantity = round2(input.quantity);
 
-    if (isNaN(quantity) || quantity <= 0) {
-      throw new Error('Reservation quantity must be a positive number of pairs (e.g. 1.0, 0.5).');
+    if (!isValidOpticalQuantity(quantity)) {
+      throw new Error('Reservation quantity must be a positive value in steps of 0.5 (e.g. 0.5, 1.0, 1.5, 2.0).');
     }
 
     const client = await pool.connect();
@@ -394,13 +405,14 @@ export class StockService {
 
       const stock = await this.lockAndGetStock(client, businessId, batchId);
 
-      // Rule: Requested reservation quantity must not exceed available stock.
-      if (quantity > stock.availableStock) {
+      // Manual holds / non-sales reservations require available stock unless allowNegative is explicitly permitted
+      if (!input.allowNegative && referenceType !== 'SALES_ORDER' && quantity > stock.availableStock) {
         throw new Error(
-          `Cannot create reservation: Requested quantity (${quantity} prs) exceeds available stock (${stock.availableStock} prs). Current Physical: ${stock.physicalStock} prs, Current Reserved: ${stock.reservedStock} prs.`
+          `Requested quantity (${quantity}) exceeds available stock (${stock.availableStock}).`
         );
       }
 
+      // Negative available stock is permitted for sales orders or when allowNegative is true
       const newReserved = round2(stock.reservedStock + quantity);
       const newAvailable = round2(stock.physicalStock - newReserved);
 

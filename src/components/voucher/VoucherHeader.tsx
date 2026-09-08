@@ -4,7 +4,6 @@ import {
   ArrowLeft,
   Save,
   Send,
-  Barcode,
   Search,
   CheckCircle2,
   AlertTriangle,
@@ -16,7 +15,7 @@ import {
 import { SearchableMasterSelect, SearchableOption } from '../common/SearchableMasterSelect';
 
 interface VoucherHeaderProps {
-  voucherType: 'SALES' | 'PURCHASE';
+  voucherType: 'SALES' | 'PURCHASE' | 'SALES_ORDER' | 'PURCHASE_ORDER';
   isEditing?: boolean;
   voucherNumber: string;
   onVoucherNumberChange?: (val: string) => void;
@@ -27,22 +26,22 @@ interface VoucherHeaderProps {
   selectedPartyId: string;
   onPartyChange: (partyId: string) => void;
   partyBalance?: { balance: number; type: 'Dr' | 'Cr'; isOverLimit?: boolean; creditLimit?: number };
-  // Secondary voucher fields
-  gstMode: 'INTRA_STATE' | 'INTER_STATE' | 'EXEMPT';
-  onGstModeChange: (mode: 'INTRA_STATE' | 'INTER_STATE' | 'EXEMPT') => void;
+  // Secondary voucher fields (optional / compatibility)
+  gstMode?: 'INTRA_STATE' | 'INTER_STATE' | 'EXEMPT';
+  onGstModeChange?: (mode: 'INTRA_STATE' | 'INTER_STATE' | 'EXEMPT') => void;
   referenceNumber?: string;
   onReferenceNumberChange?: (val: string) => void;
   supplierInvoiceDate?: string;
   onSupplierInvoiceDateChange?: (val: string) => void;
-  // Barcode quick scan
-  barcodeInput: string;
-  onBarcodeInput: (val: string) => void;
-  onBarcodeSubmit: (e: React.FormEvent) => void;
+  // Barcode quick scan (optional / compatibility)
+  barcodeInput?: string;
+  onBarcodeInput?: (val: string) => void;
+  onBarcodeSubmit?: (e: React.FormEvent) => void;
   barcodeLoading?: boolean;
   barcodeMsg?: { type: 'success' | 'error'; text: string } | null;
   // Actions
   submitting: boolean;
-  onSaveDraft: () => void;
+  onSaveDraft?: () => void;
   onSavePost: () => void;
   onBack: () => void;
 }
@@ -58,25 +57,18 @@ export const VoucherHeader: React.FC<VoucherHeaderProps> = ({
   selectedPartyId,
   onPartyChange,
   partyBalance,
-  gstMode,
-  onGstModeChange,
   referenceNumber = '',
   onReferenceNumberChange,
   supplierInvoiceDate = '',
   onSupplierInvoiceDateChange,
-  barcodeInput,
-  onBarcodeInput,
-  onBarcodeSubmit,
-  barcodeLoading = false,
-  barcodeMsg,
   submitting,
   onSaveDraft,
   onSavePost,
   onBack,
 }) => {
-  const isSales = voucherType === 'SALES';
+  const isSales = voucherType === 'SALES' || voucherType === 'SALES_ORDER';
+  const isOrder = voucherType === 'SALES_ORDER' || voucherType === 'PURCHASE_ORDER';
   const partySelectRef = useRef<any>(null);
-  const barcodeInputRef = useRef<HTMLInputElement>(null);
 
   const partyOptions: SearchableOption[] = parties.map(p => ({
     id: p.id,
@@ -86,14 +78,10 @@ export const VoucherHeader: React.FC<VoucherHeaderProps> = ({
     meta: p,
   }));
 
-  // Global hotkeys (F3 for barcode scan, Ctrl+A for save, Esc for back)
+  // Global hotkeys (Ctrl+A for save, Esc for back)
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
-      if (e.key === 'F3') {
-        e.preventDefault();
-        barcodeInputRef.current?.focus();
-        barcodeInputRef.current?.select();
-      } else if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'a') {
+      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'a') {
         // Only trigger if not inside a textarea
         const target = e.target as HTMLElement;
         if (target.tagName !== 'TEXTAREA') {
@@ -126,15 +114,29 @@ export const VoucherHeader: React.FC<VoucherHeaderProps> = ({
           <div className="flex items-center gap-2">
             <span
               className={`px-2 py-0.5 rounded text-xs font-bold font-mono uppercase tracking-wider ${
-                isSales
+                isOrder
+                  ? 'bg-blue-600 text-white'
+                  : isSales
                   ? 'bg-emerald-600 text-white'
                   : 'bg-indigo-600 text-white'
               }`}
             >
-              {isSales ? 'Sales Voucher' : 'Purchase Voucher'}
+              {isOrder
+                ? voucherType === 'SALES_ORDER'
+                  ? 'Sales Order'
+                  : 'Purchase Order'
+                : isSales
+                ? 'Sales Invoice'
+                : 'Purchase Invoice'}
             </span>
             <span className="text-[11px] text-slate-500 font-mono">
-              {isEditing ? 'Accounting Voucher Alteration' : 'Accounting Voucher Creation'}
+              {isOrder
+                ? isEditing
+                  ? 'Order Alteration (Open / Editable)'
+                  : 'Order Booking'
+                : isEditing
+                ? 'Accounting Voucher Alteration'
+                : 'Actual Transaction Posting'}
             </span>
           </div>
         </div>
@@ -142,7 +144,7 @@ export const VoucherHeader: React.FC<VoucherHeaderProps> = ({
         {/* Voucher Number & Date */}
         <div className="flex items-center gap-4 text-xs font-mono">
           <div className="flex items-center gap-1.5">
-            <span className="text-slate-500 font-semibold font-sans">Voucher No:</span>
+            <span className="text-slate-500 font-semibold font-sans">{isOrder ? 'Order No:' : 'Voucher No:'}</span>
             {onVoucherNumberChange ? (
               <input
                 type="text"
@@ -169,34 +171,46 @@ export const VoucherHeader: React.FC<VoucherHeaderProps> = ({
 
           {/* Action buttons */}
           <div className="flex items-center gap-1.5 ml-2 font-sans">
-            <button
-              type="button"
-              disabled={submitting}
-              onClick={onSaveDraft}
-              className="px-2.5 py-1 text-xs font-medium text-slate-700 bg-slate-100 hover:bg-slate-200 rounded border border-slate-300 transition-colors disabled:opacity-50"
-            >
-              Draft
-            </button>
+            {onSaveDraft && (
+              <button
+                type="button"
+                disabled={submitting}
+                onClick={onSaveDraft}
+                className="px-2.5 py-1 text-xs font-medium text-slate-700 bg-slate-100 hover:bg-slate-200 rounded border border-slate-300 transition-colors disabled:opacity-50"
+              >
+                {isEditing ? 'Update Draft' : 'Draft'}
+              </button>
+            )}
             <button
               type="button"
               disabled={submitting}
               onClick={onSavePost}
-              className={`px-3 py-1 text-xs font-bold text-white rounded shadow-xs transition-all flex items-center gap-1.5 disabled:opacity-50 ${
-                isSales
+              className={`px-3.5 py-1.5 text-xs font-bold text-white rounded shadow-xs transition-all flex items-center gap-1.5 disabled:opacity-50 ${
+                isOrder
+                  ? 'bg-blue-600 hover:bg-blue-700 shadow-blue-600/20'
+                  : isSales
                   ? 'bg-emerald-600 hover:bg-emerald-700 shadow-emerald-600/20'
                   : 'bg-indigo-600 hover:bg-indigo-700 shadow-indigo-600/20'
               }`}
-              title="Save & Post Voucher (Ctrl+A)"
+              title={isOrder ? (isEditing ? 'Update Order' : 'Save Order') : (isEditing ? 'Update Invoice' : 'Save & Post Invoice')}
             >
               {submitting ? (
                 <>
                   <RefreshCw className="w-3.5 h-3.5 animate-spin" />
-                  <span>Posting...</span>
+                  <span>{isEditing ? 'Updating...' : 'Saving...'}</span>
                 </>
               ) : (
                 <>
                   <Send className="w-3.5 h-3.5" />
-                  <span>Save &amp; Post (Ctrl+A)</span>
+                  <span>
+                    {isOrder
+                      ? isEditing
+                        ? 'Update Order'
+                        : 'Save Order'
+                      : isEditing
+                      ? 'Update Invoice'
+                      : 'Save Invoice'}
+                  </span>
                 </>
               )}
             </button>
@@ -204,10 +218,10 @@ export const VoucherHeader: React.FC<VoucherHeaderProps> = ({
         </div>
       </div>
 
-      {/* Second Strip: Party Selection & Ledger Accounting Details */}
-      <div className="grid grid-cols-1 md:grid-cols-12 gap-2 pt-2 items-center text-xs">
+      {/* Second Strip: Party Selection & Reference Details */}
+      <div className="grid grid-cols-1 md:grid-cols-12 gap-3 pt-2 items-center text-xs">
         {/* Party A/c Name */}
-        <div className={`${isSales ? 'md:col-span-5' : 'md:col-span-4'} flex items-center gap-2`}>
+        <div className={`${isSales ? 'md:col-span-8' : 'md:col-span-6'} flex items-center gap-2`}>
           <span className="w-24 text-slate-600 font-semibold shrink-0 text-right">
             Party A/c name:
           </span>
@@ -235,24 +249,8 @@ export const VoucherHeader: React.FC<VoucherHeaderProps> = ({
           )}
         </div>
 
-        {/* GST / Taxation Mode */}
-        <div className={`${isSales ? 'md:col-span-3' : 'md:col-span-2'} flex items-center gap-2`}>
-          <span className="text-slate-600 font-semibold shrink-0">
-            GST Ledger:
-          </span>
-          <select
-            value={gstMode}
-            onChange={e => onGstModeChange(e.target.value as any)}
-            className="flex-1 py-1 px-1.5 text-xs bg-slate-50 border border-slate-300 rounded focus:bg-white focus:ring-1 focus:ring-blue-500 font-sans"
-          >
-            <option value="INTRA_STATE">Intra-State (CGST + SGST)</option>
-            <option value="INTER_STATE">Inter-State (IGST)</option>
-            <option value="EXEMPT">Exempt / Non-GST</option>
-          </select>
-        </div>
-
         {/* Reference / Supplier Invoice No */}
-        <div className="md:col-span-2 flex items-center gap-1.5">
+        <div className={`${isSales ? 'md:col-span-4' : 'md:col-span-3'} flex items-center gap-1.5`}>
           <span className="text-slate-600 font-semibold shrink-0">
             {isSales ? 'Ref No:' : 'Supp Inv:'}
           </span>
@@ -267,7 +265,7 @@ export const VoucherHeader: React.FC<VoucherHeaderProps> = ({
 
         {/* Supplier Invoice Date for Purchase */}
         {!isSales && (
-          <div className="md:col-span-2 flex items-center gap-1.5">
+          <div className="md:col-span-3 flex items-center gap-1.5">
             <span className="text-slate-600 font-semibold shrink-0">
               Supp Date:
             </span>
@@ -279,36 +277,6 @@ export const VoucherHeader: React.FC<VoucherHeaderProps> = ({
             />
           </div>
         )}
-
-        {/* Fast Barcode Scanner Quick Input */}
-        <div className="md:col-span-2">
-          <form onSubmit={onBarcodeSubmit} className="relative flex items-center">
-            <Barcode className="w-3.5 h-3.5 absolute left-2 text-slate-400 pointer-events-none" />
-            <input
-              ref={barcodeInputRef}
-              type="text"
-              value={barcodeInput ?? ''}
-              onChange={e => onBarcodeInput(e.target.value)}
-              placeholder="Scan Barcode (F3)..."
-              disabled={barcodeLoading}
-              className="w-full pl-7 pr-2 py-1 text-xs border border-slate-300 rounded bg-slate-50 focus:bg-white focus:ring-1 focus:ring-blue-500 font-mono placeholder:text-slate-400"
-            />
-            {barcodeLoading && (
-              <RefreshCw className="w-3 h-3 animate-spin absolute right-2 text-slate-400" />
-            )}
-          </form>
-          {barcodeMsg && (
-            <div
-              className={`absolute mt-0.5 text-[10px] font-mono px-1.5 py-0.5 rounded border z-30 ${
-                barcodeMsg.type === 'success'
-                  ? 'bg-emerald-50 text-emerald-700 border-emerald-200'
-                  : 'bg-red-50 text-red-700 border-red-200'
-              }`}
-            >
-              {barcodeMsg.text}
-            </div>
-          )}
-        </div>
       </div>
     </div>
   );

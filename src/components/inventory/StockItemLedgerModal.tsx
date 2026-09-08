@@ -325,25 +325,25 @@ export const StockItemLedgerModal: React.FC<StockItemLedgerModalProps> = ({
         {/* Stock Summary Strip */}
         {ledgerData && (
           <div className="px-6 py-3.5 bg-slate-50 border-b border-slate-200 grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-3 shrink-0">
-            <div className="bg-white p-2.5 rounded-xl border border-slate-200/80 shadow-2xs">
-              <span className="text-[11px] font-medium text-slate-500 block">Physical Stock</span>
-              <span className="text-base font-bold text-slate-900 font-mono">
+            <div className={`p-2.5 rounded-xl border shadow-2xs ${Number(ledgerData.stockSummary.physicalStock || 0) < 0 ? 'bg-rose-50/60 border-rose-200' : 'bg-white border-slate-200/80'}`}>
+              <span className={`text-[11px] font-medium block ${Number(ledgerData.stockSummary.physicalStock || 0) < 0 ? 'text-rose-600 font-semibold' : 'text-slate-500'}`}>Stock</span>
+              <span className={`text-base font-bold font-mono ${Number(ledgerData.stockSummary.physicalStock || 0) < 0 ? 'text-rose-600' : 'text-slate-900'}`}>
                 {ledgerData.stockSummary.physicalStock}{' '}
                 <span className="text-xs font-normal text-slate-500">pcs</span>
               </span>
             </div>
             <div className="bg-white p-2.5 rounded-xl border border-slate-200/80 shadow-2xs">
-              <span className="text-[11px] font-medium text-amber-600 block">Reserved Stock</span>
+              <span className="text-[11px] font-medium text-amber-600 block">Reserved</span>
               <span className="text-base font-bold text-amber-700 font-mono">
                 {ledgerData.stockSummary.reservedStock}{' '}
                 <span className="text-xs font-normal text-amber-600">pcs</span>
               </span>
             </div>
-            <div className="bg-white p-2.5 rounded-xl border border-slate-200/80 shadow-2xs">
-              <span className="text-[11px] font-medium text-emerald-600 block">Available to Sell</span>
-              <span className="text-base font-bold text-emerald-700 font-mono">
+            <div className={`p-2.5 rounded-xl border shadow-2xs ${Number(ledgerData.stockSummary.availableStock || 0) < 0 ? 'bg-rose-50/60 border-rose-200' : 'bg-white border-slate-200/80'}`}>
+              <span className={`text-[11px] font-medium block ${Number(ledgerData.stockSummary.availableStock || 0) < 0 ? 'text-rose-600 font-semibold' : 'text-emerald-600'}`}>Available</span>
+              <span className={`text-base font-bold font-mono ${Number(ledgerData.stockSummary.availableStock || 0) < 0 ? 'text-rose-600' : 'text-emerald-700'}`}>
                 {ledgerData.stockSummary.availableStock}{' '}
-                <span className="text-xs font-normal text-emerald-600">pcs</span>
+                <span className={`text-xs font-normal ${Number(ledgerData.stockSummary.availableStock || 0) < 0 ? 'text-rose-500' : 'text-emerald-600'}`}>pcs</span>
               </span>
             </div>
             <div className="bg-white p-2.5 rounded-xl border border-slate-200/80 shadow-2xs">
@@ -560,7 +560,9 @@ export const StockItemLedgerModal: React.FC<StockItemLedgerModalProps> = ({
                                 {netFlow > 0 ? `+${netFlow}` : netFlow}
                               </span>
                             </td>
-                            <td className="py-3 px-4 text-right font-mono font-bold text-slate-900 bg-slate-50 text-sm">
+                            <td className={`py-3 px-4 text-right font-mono font-bold text-sm ${
+                              Number(m.closingQty || 0) < 0 ? 'text-rose-600 bg-rose-50/50' : 'text-slate-900 bg-slate-50'
+                            }`}>
                               {m.closingQty}
                             </td>
                             <td className="py-3 px-4 text-center">
@@ -733,7 +735,9 @@ export const StockItemLedgerModal: React.FC<StockItemLedgerModalProps> = ({
                               <td className="py-2.5 px-3 text-right font-mono text-slate-900 font-medium">
                                 {tx.value > 0 ? `₹${Number(tx.value).toFixed(2)}` : '—'}
                               </td>
-                              <td className="py-2.5 px-4 text-right font-mono font-bold text-slate-900 bg-slate-50 text-xs">
+                              <td className={`py-2.5 px-4 text-right font-mono font-bold text-xs ${
+                                Number(tx.runningBalance || 0) < 0 ? 'text-rose-600 bg-rose-50/50' : 'text-slate-900 bg-slate-50'
+                              }`}>
                                 {tx.runningBalance}
                               </td>
                             </tr>

@@ -533,7 +533,7 @@ export const ReportsCenterPage: React.FC<{ initialTab?: ReportTab }> = ({ initia
             return (
               <div key={key} className="p-4 rounded-2xl bg-white border border-slate-200 shadow-sm">
                 <div className="text-[11px] font-bold uppercase tracking-wider text-slate-400">
-                  {key.replace(/([A-Z])/g, ' $1').trim()}
+                  {String(key || '').replace(/([A-Z])/g, ' $1').trim()}
                 </div>
                 <div className="text-lg md:text-xl font-bold text-slate-900 mt-1">
                   {typeof val === 'number' && key.toLowerCase().includes('amount') || key.toLowerCase().includes('total') || key.toLowerCase().includes('balance')
@@ -580,7 +580,7 @@ export const ReportsCenterPage: React.FC<{ initialTab?: ReportTab }> = ({ initia
                     <th className="py-3 px-4 text-center">AXIS</th>
                     <th className="py-3 px-4 text-center">ADD</th>
                     <th className="py-3 px-4 text-center">SIDE</th>
-                    <th className="py-3 px-4 text-right">Physical Stock</th>
+                    <th className="py-3 px-4 text-right">Stock</th>
                     <th className="py-3 px-4 text-right">Reserved</th>
                     <th className="py-3 px-4 text-right">Available</th>
                     <th className="py-3 px-4 text-right">MRP</th>
@@ -612,24 +612,45 @@ export const ReportsCenterPage: React.FC<{ initialTab?: ReportTab }> = ({ initia
                       <td className="py-2.5 px-4 text-center font-mono">{row.axis ?? '-'}</td>
                       <td className="py-2.5 px-4 text-center font-mono">{row.add ?? '-'}</td>
                       <td className="py-2.5 px-4 text-center font-mono">{row.side ?? '-'}</td>
-                      <td className="py-2.5 px-4 text-right font-bold text-slate-900">{row.physical_stock}</td>
-                      <td className="py-2.5 px-4 text-right text-amber-600 font-semibold">{row.reserved_stock}</td>
-                      <td className="py-2.5 px-4 text-right font-bold text-emerald-600">{row.available_stock}</td>
+                      <td className={`py-2.5 px-4 text-right font-bold ${
+                        Number(row.physical_stock ?? row.physicalStock ?? 0) < 0
+                          ? 'text-rose-600 bg-rose-50/50'
+                          : 'text-slate-900'
+                      }`}>
+                        {row.physical_stock ?? row.physicalStock}
+                      </td>
+                      <td className="py-2.5 px-4 text-right text-amber-600 font-semibold">{row.reserved_stock ?? row.reservedStock}</td>
+                      <td className={`py-2.5 px-4 text-right font-bold ${
+                        Number(row.available_stock ?? row.availableStock ?? 0) < 0
+                          ? 'text-rose-600 bg-rose-50/50'
+                          : 'text-emerald-600'
+                      }`}>
+                        {row.available_stock ?? row.availableStock}
+                      </td>
                       <td className="py-2.5 px-4 text-right font-bold text-slate-800">₹{Number(row.mrp || 0).toLocaleString()}</td>
                       <td className="py-2.5 px-4 text-center">
-                        <span
-                          className={`px-2 py-0.5 rounded-full text-[10px] font-bold ${
-                            row.stock_status === 'IN_STOCK'
-                              ? 'bg-emerald-100 text-emerald-700'
-                              : row.stock_status === 'LOW_STOCK'
-                              ? 'bg-amber-100 text-amber-700'
-                              : row.stock_status === 'ZERO_STOCK'
-                              ? 'bg-slate-100 text-slate-600'
-                              : 'bg-rose-100 text-rose-700'
-                          }`}
-                        >
-                          {row.stock_status.replace('_', ' ')}
-                        </span>
+                        {(() => {
+                          const statusStr = row.stock_status || row.stockStatus || (
+                            (row.physical_stock ?? row.physicalStock ?? 0) < 0 ? 'NEGATIVE_STOCK' :
+                            (row.physical_stock ?? row.physicalStock ?? 0) === 0 ? 'ZERO_STOCK' :
+                            row.isLowStock ? 'LOW_STOCK' : 'IN_STOCK'
+                          );
+                          return (
+                            <span
+                              className={`px-2 py-0.5 rounded-full text-[10px] font-bold ${
+                                statusStr === 'IN_STOCK'
+                                  ? 'bg-emerald-100 text-emerald-700'
+                                  : statusStr === 'LOW_STOCK'
+                                  ? 'bg-amber-100 text-amber-700'
+                                  : statusStr === 'ZERO_STOCK'
+                                  ? 'bg-slate-100 text-slate-600'
+                                  : 'bg-rose-100 text-rose-700'
+                              }`}
+                            >
+                              {String(statusStr).replace(/_/g, ' ')}
+                            </span>
+                          );
+                        })()}
                       </td>
                     </tr>
                   ))}

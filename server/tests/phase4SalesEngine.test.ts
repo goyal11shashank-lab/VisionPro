@@ -262,36 +262,105 @@ async function runTests() {
     if (parseFloat(resRes.rows[0].quantity) !== 10.00) throw new Error('Expected reservation quantity 10.00');
   });
 
-  // Test 4: Prevent overselling / reserving more than available stock
-  await test('Reject Sales Order confirmation when available stock is insufficient', async () => {
-    // Current available is 90 pairs. Attempting to reserve 95 pairs should fail.
+  // Test 4: Allow sales beyond available stock / Negative inventory enforcement
+  await test('Allow Sales Invoice beyond available stock resulting in negative inventory', async () => {
+    // Current Batch stock: 2.0 PRS, Sales quantity: 5.0 PRS -> Expected: Physical Stock: -3.0 PRS
+    const batchRes = await pool.query(
+      `INSERT INTO optical_batches (business_id, unique_item_id, category_id, barcode, sph, cyl, axis, "add", side, identity_key) 
+       VALUES ($1, $2, $3, $4, 0.00, 0.00, 0, 0, 'NONE', $5) 
+       RETURNING id`,
+      [ctx.businessId, ctx.uniqueItemId, ctx.categoryId, `BAR_NEG_${Date.now()}`, `KEY_NEG_${Date.now()}`]
+    );
+    const negBatchId = batchRes.rows[0].id;
+
+    await pool.query(
+      `INSERT INTO optical_stocks (business_id, batch_id, physical_stock, reserved_stock, available_stock) 
+       VALUES ($1, $2, 2.00, 0.00, 2.00)`,
+      [ctx.businessId, negBatchId]
+    );
+
+    // Create separate customer party for this test so as not to affect other tests' ledger balances
+    const custRes = await pool.query(
+      `INSERT INTO parties (business_id, party_code, name, party_type, state, gstin, credit_limit, status) 
+       VALUES ($1, $2, 'Negative Stock Customer', 'CUSTOMER', 'Delhi', '07BBBBB2222B1Z3', 50000.00, 'ACTIVE') 
+       RETURNING id`,
+      [ctx.businessId, `CUST_NEG_${Date.now()}`]
+    );
+    const negCustomerPartyId = custRes.rows[0].id;
+
+    // Sales quantity: 5.0 PRS (exceeds current stock 2.0 PRS)
+    const invoice = await SalesService.createSalesInvoice(
+      ctx.businessId,
+      {
+        partyId: negCustomerPartyId,
+        invoiceDate: '2026-08-20',
+        status: 'POSTED',
+        lines: [
+          {
+            uniqueItemId: ctx.uniqueItemId,
+            quantity: 5.0,
+            rate: 500.0,
+            gstRate: 12,
+            batches: [{ batchId: negBatchId, quantity: 5.0 }],
+          },
+        ],
+      },
+      ctx.userId
+    );
+
+    if (invoice.status !== 'POSTED') {
+      throw new Error(`Expected invoice to be POSTED, got ${invoice.status}`);
+    }
+
+    // Expected after Sales: Physical Stock: -3.00, Available Stock: -3.00
+    const stockRes = await pool.query(
+      `SELECT physical_stock, reserved_stock, available_stock FROM optical_stocks WHERE business_id = $1 AND batch_id = $2`,
+      [ctx.businessId, negBatchId]
+    );
+    const stock = stockRes.rows[0];
+    if (parseFloat(stock.physical_stock) !== -3.00) {
+      throw new Error(`Expected physical stock -3.00, got ${stock.physical_stock}`);
+    }
+    if (parseFloat(stock.available_stock) !== -3.00) {
+      throw new Error(`Expected available stock -3.00, got ${stock.available_stock}`);
+    }
+
+    // Verify stock ledger entry has negative balance (-3.00)
+    const ledgerRes = await pool.query(
+      `SELECT balance, quantity_out FROM stock_ledger WHERE business_id = $1 AND batch_id = $2 ORDER BY created_at DESC LIMIT 1`,
+      [ctx.businessId, negBatchId]
+    );
+    if (parseFloat(ledgerRes.rows[0].quantity_out) !== 5.00) {
+      throw new Error(`Expected quantity_out 5.00, got ${ledgerRes.rows[0].quantity_out}`);
+    }
+    if (parseFloat(ledgerRes.rows[0].balance) !== -3.00) {
+      throw new Error(`Expected stock ledger balance -3.00, got ${ledgerRes.rows[0].balance}`);
+    }
+
+    // Verify that invalid quantity (<= 0) is still strictly rejected
     let threw = false;
     try {
-      await SalesService.createSalesOrder(
+      await SalesService.createSalesInvoice(
         ctx.businessId,
         {
           partyId: ctx.customerPartyId,
-          orderDate: '2026-08-20',
-          status: 'CONFIRMED',
+          invoiceDate: '2026-08-20',
+          status: 'POSTED',
           lines: [
             {
               uniqueItemId: ctx.uniqueItemId,
-              quantity: 95,
-              rate: 400.0,
+              quantity: -1,
+              rate: 500.0,
               gstRate: 12,
-              batches: [{ batchId: ctx.batchId1, quantity: 95 }],
             },
           ],
         },
         ctx.userId
       );
-    } catch (err: any) {
+    } catch {
       threw = true;
-      if (!err.message.includes('Insufficient available stock')) {
-        throw new Error(`Unexpected error message: ${err.message}`);
-      }
     }
-    if (!threw) throw new Error('Expected rejection for overselling batch');
+    if (!threw) throw new Error('Expected rejection for invalid negative sales quantity input');
   });
 
   // Test 5: Convert Sales Order to Sales Invoice (Full Conversion)

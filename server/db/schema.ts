@@ -366,6 +366,7 @@ export const uniqueItems = pgTable('unique_items', {
   description: text('description'),
   maintainBatches: boolean('maintain_batches').default(false).notNull(),
   opticalCategory: varchar('optical_category', { length: 20 }).default('SV').notNull(), // SV, KT, PROG, OTHER
+  unit: varchar('unit', { length: 10 }).default('PRS').notNull(), // Allowed values: PRS (Pairs), PCS (Pieces)
   purchaseRate: numeric('purchase_rate', { precision: 12, scale: 2 }).default('0.00'),
   lastPurchasePrice: numeric('last_purchase_price', { precision: 12, scale: 2 }).default('0.00'),
   mrp: numeric('mrp', { precision: 12, scale: 2 }).default('0.00'),
@@ -631,6 +632,82 @@ export const parties = pgTable('parties', {
 ]);
 
 /**
+ * 18b. Purchase Orders
+ * Vendor procurement bookings and purchase orders (purely documentary; does not impact stock or accounting).
+ */
+export const purchaseOrders = pgTable('purchase_orders', {
+  id: uuid('id').defaultRandom().primaryKey(),
+  businessId: uuid('business_id').references(() => businesses.id, { onDelete: 'cascade' }).notNull(),
+  supplierPartyId: uuid('supplier_party_id').references(() => parties.id, { onDelete: 'restrict' }).notNull(),
+  orderNumber: varchar('order_number', { length: 100 }).notNull(), // PO-000001
+  orderDate: timestamp('order_date', { withTimezone: true }).defaultNow().notNull(),
+  expectedDeliveryDate: timestamp('expected_delivery_date', { withTimezone: true }),
+  gstMode: varchar('gst_mode', { length: 20 }).default('INTRA_STATE').notNull(),
+  
+  // Financial amounts
+  subtotal: numeric('subtotal', { precision: 12, scale: 2 }).default('0.00').notNull(),
+  discountTotal: numeric('discount_total', { precision: 12, scale: 2 }).default('0.00').notNull(),
+  taxableAmount: numeric('taxable_amount', { precision: 12, scale: 2 }).default('0.00').notNull(),
+  igstRate: numeric('igst_rate', { precision: 5, scale: 2 }).default('0.00').notNull(),
+  igstAmount: numeric('igst_amount', { precision: 12, scale: 2 }).default('0.00').notNull(),
+  cgstRate: numeric('cgst_rate', { precision: 5, scale: 2 }).default('0.00').notNull(),
+  cgstAmount: numeric('cgst_amount', { precision: 12, scale: 2 }).default('0.00').notNull(),
+  sgstRate: numeric('sgst_rate', { precision: 5, scale: 2 }).default('0.00').notNull(),
+  sgstAmount: numeric('sgst_amount', { precision: 12, scale: 2 }).default('0.00').notNull(),
+  roundOff: numeric('round_off', { precision: 12, scale: 2 }).default('0.00').notNull(),
+  grandTotal: numeric('grand_total', { precision: 12, scale: 2 }).default('0.00').notNull(),
+  
+  status: varchar('status', { length: 50 }).default('OPEN').notNull(), // OPEN, CONVERTED, CANCELLED
+  notes: text('notes'),
+  supplierReference: varchar('supplier_reference', { length: 100 }),
+  convertedInvoiceId: uuid('converted_invoice_id'),
+  createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
+  updatedAt: timestamp('updated_at', { withTimezone: true }).defaultNow().notNull(),
+  createdBy: uuid('created_by').references(() => users.id, { onDelete: 'set null' }),
+  updatedBy: uuid('updated_by').references(() => users.id, { onDelete: 'set null' }),
+}, (table) => [
+  uniqueIndex('purchase_orders_biz_num_idx').on(table.businessId, table.orderNumber),
+  index('purchase_orders_biz_idx').on(table.businessId),
+  index('purchase_orders_supplier_idx').on(table.supplierPartyId),
+  index('purchase_orders_status_idx').on(table.status),
+  index('purchase_orders_date_idx').on(table.orderDate),
+]);
+
+export const purchaseOrderLines = pgTable('purchase_order_lines', {
+  id: uuid('id').defaultRandom().primaryKey(),
+  purchaseOrderId: uuid('purchase_order_id').references(() => purchaseOrders.id, { onDelete: 'cascade' }).notNull(),
+  uniqueItemId: uuid('unique_item_id').references(() => uniqueItems.id, { onDelete: 'restrict' }).notNull(),
+  quantity: numeric('quantity', { precision: 12, scale: 2 }).notNull(),
+  rate: numeric('rate', { precision: 12, scale: 2 }).notNull(),
+  discountType: varchar('discount_type', { length: 20 }).default('NONE').notNull(),
+  discountValue: numeric('discount_value', { precision: 12, scale: 2 }).default('0.00').notNull(),
+  discountAmount: numeric('discount_amount', { precision: 12, scale: 2 }).default('0.00').notNull(),
+  taxableAmount: numeric('taxable_amount', { precision: 12, scale: 2 }).default('0.00').notNull(),
+  gstRate: numeric('gst_rate', { precision: 5, scale: 2 }).default('0.00').notNull(),
+  taxAmount: numeric('tax_amount', { precision: 12, scale: 2 }).default('0.00').notNull(),
+  lineTotal: numeric('line_total', { precision: 12, scale: 2 }).default('0.00').notNull(),
+  createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
+  updatedAt: timestamp('updated_at', { withTimezone: true }).defaultNow().notNull(),
+}, (table) => [
+  index('purchase_order_lines_order_idx').on(table.purchaseOrderId),
+  index('purchase_order_lines_item_idx').on(table.uniqueItemId),
+]);
+
+export const purchaseOrderLineBatches = pgTable('purchase_order_line_batches', {
+  id: uuid('id').defaultRandom().primaryKey(),
+  purchaseOrderLineId: uuid('purchase_order_line_id').references(() => purchaseOrderLines.id, { onDelete: 'cascade' }).notNull(),
+  batchId: uuid('batch_id').references(() => opticalBatches.id, { onDelete: 'restrict' }).notNull(),
+  quantity: numeric('quantity', { precision: 12, scale: 2 }).notNull(),
+  rate: numeric('rate', { precision: 12, scale: 2 }),
+  totalCost: numeric('total_cost', { precision: 12, scale: 2 }),
+  createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
+  updatedAt: timestamp('updated_at', { withTimezone: true }).defaultNow().notNull(),
+}, (table) => [
+  index('purchase_order_line_batches_line_idx').on(table.purchaseOrderLineId),
+  index('purchase_order_line_batches_batch_idx').on(table.batchId),
+]);
+
+/**
  * 19. Purchase Invoices
  * Vendor procurement bills and stock inward vouchers.
  */
@@ -638,6 +715,7 @@ export const purchaseInvoices = pgTable('purchase_invoices', {
   id: uuid('id').defaultRandom().primaryKey(),
   businessId: uuid('business_id').references(() => businesses.id, { onDelete: 'cascade' }).notNull(),
   supplierPartyId: uuid('supplier_party_id').references(() => parties.id, { onDelete: 'restrict' }).notNull(),
+  purchaseOrderId: uuid('purchase_order_id').references(() => purchaseOrders.id, { onDelete: 'set null' }),
   invoiceNumber: varchar('invoice_number', { length: 50 }).notNull(), // Internal e.g. PUR-000001
   invoiceDate: timestamp('invoice_date', { withTimezone: true }).notNull(),
   supplierInvoiceNumber: varchar('supplier_invoice_number', { length: 100 }), // Vendor external bill no.
@@ -658,7 +736,7 @@ export const purchaseInvoices = pgTable('purchase_invoices', {
   grandTotal: numeric('grand_total', { precision: 12, scale: 2 }).default('0.00').notNull(),
   
   paymentStatus: varchar('payment_status', { length: 20 }).default('UNPAID').notNull(), // UNPAID, PARTIAL, PAID
-  status: varchar('status', { length: 20 }).default('DRAFT').notNull(), // DRAFT, POSTED, CANCELLED
+  status: varchar('status', { length: 20 }).default('POSTED').notNull(), // POSTED, CANCELLED
   notes: text('notes'),
   createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
   updatedAt: timestamp('updated_at', { withTimezone: true }).defaultNow().notNull(),
@@ -668,6 +746,7 @@ export const purchaseInvoices = pgTable('purchase_invoices', {
   uniqueIndex('purchase_invoices_biz_num_idx').on(table.businessId, table.invoiceNumber),
   index('purchase_invoices_biz_idx').on(table.businessId),
   index('purchase_invoices_supplier_idx').on(table.supplierPartyId),
+  index('purchase_invoices_order_idx').on(table.purchaseOrderId),
   index('purchase_invoices_date_idx').on(table.invoiceDate),
   index('purchase_invoices_status_idx').on(table.status),
 ]);
@@ -770,10 +849,46 @@ export const partiesRelations = relations(parties, ({ many }) => ({
   ledgerEntries: many(supplierLedgers),
 }));
 
+export const purchaseOrdersRelations = relations(purchaseOrders, ({ one, many }) => ({
+  supplier: one(parties, {
+    fields: [purchaseOrders.supplierPartyId],
+    references: [parties.id],
+  }),
+  lines: many(purchaseOrderLines),
+  invoices: many(purchaseInvoices),
+}));
+
+export const purchaseOrderLinesRelations = relations(purchaseOrderLines, ({ one, many }) => ({
+  order: one(purchaseOrders, {
+    fields: [purchaseOrderLines.purchaseOrderId],
+    references: [purchaseOrders.id],
+  }),
+  uniqueItem: one(uniqueItems, {
+    fields: [purchaseOrderLines.uniqueItemId],
+    references: [uniqueItems.id],
+  }),
+  batches: many(purchaseOrderLineBatches),
+}));
+
+export const purchaseOrderLineBatchesRelations = relations(purchaseOrderLineBatches, ({ one }) => ({
+  line: one(purchaseOrderLines, {
+    fields: [purchaseOrderLineBatches.purchaseOrderLineId],
+    references: [purchaseOrderLines.id],
+  }),
+  batch: one(opticalBatches, {
+    fields: [purchaseOrderLineBatches.batchId],
+    references: [opticalBatches.id],
+  }),
+}));
+
 export const purchaseInvoicesRelations = relations(purchaseInvoices, ({ one, many }) => ({
   supplier: one(parties, {
     fields: [purchaseInvoices.supplierPartyId],
     references: [parties.id],
+  }),
+  order: one(purchaseOrders, {
+    fields: [purchaseInvoices.purchaseOrderId],
+    references: [purchaseOrders.id],
   }),
   lines: many(purchaseInvoiceLines),
   lots: many(purchaseLots),

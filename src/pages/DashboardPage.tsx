@@ -270,21 +270,21 @@ export const DashboardPage: React.FC<Props> = ({ onNavigate }) => {
         </div>
       </div>
 
-      {/* Row 2: Physical & Optical Inventory Stats */}
+      {/* Row 2: Stock, Reserved & Available Stats */}
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
-        {/* Total Physical Stock */}
+        {/* Total Stock */}
         <div
           onClick={() => onNavigate('/reports/inventory')}
           className="bg-white border border-slate-200 rounded-2xl p-5 flex flex-col justify-between gap-3 shadow-2xs hover:border-cyan-300 transition-all cursor-pointer"
         >
           <div className="flex items-center justify-between">
-            <span className="text-xs text-slate-500 font-bold uppercase tracking-wider">Physical Stock</span>
+            <span className="text-xs text-slate-500 font-bold uppercase tracking-wider">Stock</span>
             <div className="p-2 rounded-xl bg-cyan-50 text-cyan-600">
               <Boxes className="w-4 h-4" />
             </div>
           </div>
           <div>
-            <div className="text-2xl font-bold text-slate-900 tracking-tight">
+            <div className={`text-2xl font-bold tracking-tight ${Number(stockKPIs.totalPhysicalStock || 0) < 0 ? 'text-rose-600' : 'text-slate-900'}`}>
               {Number(stockKPIs.totalPhysicalStock || 0).toFixed(2)} <span className="text-xs font-normal text-slate-500">prs</span>
             </div>
             <div className="mt-2 flex items-center justify-between text-[11px] text-slate-500">
@@ -300,7 +300,7 @@ export const DashboardPage: React.FC<Props> = ({ onNavigate }) => {
           className="bg-white border border-slate-200 rounded-2xl p-5 flex flex-col justify-between gap-3 shadow-2xs hover:border-indigo-300 transition-all cursor-pointer"
         >
           <div className="flex items-center justify-between">
-            <span className="text-xs text-slate-500 font-bold uppercase tracking-wider">Reserved In Orders</span>
+            <span className="text-xs text-slate-500 font-bold uppercase tracking-wider">Reserved</span>
             <div className="p-2 rounded-xl bg-indigo-50 text-indigo-600">
               <Lock className="w-4 h-4" />
             </div>
@@ -322,17 +322,17 @@ export const DashboardPage: React.FC<Props> = ({ onNavigate }) => {
           className="bg-white border border-slate-200 rounded-2xl p-5 flex flex-col justify-between gap-3 shadow-2xs hover:border-teal-300 transition-all cursor-pointer"
         >
           <div className="flex items-center justify-between">
-            <span className="text-xs text-slate-500 font-bold uppercase tracking-wider">Available Stock</span>
+            <span className="text-xs text-slate-500 font-bold uppercase tracking-wider">Available</span>
             <div className="p-2 rounded-xl bg-teal-50 text-teal-600">
               <Sparkles className="w-4 h-4" />
             </div>
           </div>
           <div>
-            <div className="text-2xl font-bold text-slate-900 tracking-tight">
+            <div className={`text-2xl font-bold tracking-tight ${Number(stockKPIs.totalAvailableStock || 0) < 0 ? 'text-rose-600' : 'text-slate-900'}`}>
               {Number(stockKPIs.totalAvailableStock || 0).toFixed(2)} <span className="text-xs font-normal text-slate-500">prs</span>
             </div>
             <div className="mt-2 flex items-center justify-between text-[11px] text-slate-500">
-              <span className="text-teal-700 font-semibold">Physical - Reserved</span>
+              <span className="text-teal-700 font-semibold">Stock - Reserved</span>
               <span className="text-emerald-600 font-bold">Ready to dispatch</span>
             </div>
           </div>
@@ -390,11 +390,11 @@ export const DashboardPage: React.FC<Props> = ({ onNavigate }) => {
                 <div key={cat.categoryId ? `cat-${cat.categoryId}` : `cat-idx-${idx}-${cat.categoryName || 'item'}`} className="space-y-1">
                   <div className="flex items-center justify-between text-xs">
                     <span className="font-semibold text-slate-800">{cat.categoryName}</span>
-                    <span className="font-bold text-slate-900">{cat.physicalStock} prs</span>
+                    <span className={`font-bold ${Number(cat.physicalStock || 0) < 0 ? 'text-rose-600' : 'text-slate-900'}`}>{cat.physicalStock} prs</span>
                   </div>
                   <div className="w-full bg-slate-100 rounded-full h-2 overflow-hidden flex">
                     <div
-                      className="bg-blue-600 h-2 rounded-full"
+                      className={`${Number(cat.physicalStock || 0) < 0 ? 'bg-rose-500' : 'bg-blue-600'} h-2 rounded-full`}
                       style={{
                         width: `${Math.min(100, Math.max(5, (cat.physicalStock / Math.max(1, stockKPIs.totalPhysicalStock)) * 100))}%`,
                       }}
@@ -402,7 +402,7 @@ export const DashboardPage: React.FC<Props> = ({ onNavigate }) => {
                   </div>
                   <div className="flex items-center justify-between text-[10px] text-slate-400">
                     <span>{cat.batchCount} Batches</span>
-                    <span>Avail: {cat.availableStock} prs</span>
+                    <span className={Number(cat.availableStock || 0) < 0 ? 'text-rose-600 font-semibold' : ''}>Avail: {cat.availableStock} prs</span>
                   </div>
                 </div>
               ))
@@ -502,9 +502,9 @@ export const DashboardPage: React.FC<Props> = ({ onNavigate }) => {
                     </td>
                     <td className="py-2.5 px-3">
                       <span className={`px-2 py-0.5 rounded-md font-bold text-[10px] ${
-                        tx.type.includes('SALES') ? 'bg-blue-100 text-blue-700' : 'bg-purple-100 text-purple-700'
+                        String(tx.type || '').includes('SALES') ? 'bg-blue-100 text-blue-700' : 'bg-purple-100 text-purple-700'
                       }`}>
-                        {tx.type.replace('_', ' ')}
+                        {String(tx.type || 'TRANSACTION').replace(/_/g, ' ')}
                       </span>
                     </td>
                     <td className="py-2.5 px-3 font-mono font-bold text-slate-900">{tx.docNumber}</td>

@@ -22,9 +22,11 @@ import {
   Layers,
   HelpCircle,
   ArrowLeftRight,
+  Pencil,
 } from 'lucide-react';
 import { useAuth } from '../../context/AuthContext.js';
 import { getAuthHeaders, getStoredToken, apiRequest } from '../../api/client.js';
+import { NormalSalesVoucherPage } from './NormalSalesVoucherPage.js';
 
 interface SalesInvoiceLineBatch {
   id?: string;
@@ -153,6 +155,13 @@ export const SalesInvoicesPage: React.FC<{
 
   // Notification Banner State
   const [notification, setNotification] = useState<{ type: 'success' | 'error'; message: string } | null>(null);
+
+  // Edit Voucher / Invoice State
+  const [editingInvoiceId, setEditingInvoiceId] = useState<string | null>(null);
+
+  const handleEditInvoice = (invoiceId: string) => {
+    setEditingInvoiceId(invoiceId);
+  };
 
   useEffect(() => {
     if (notification) {
@@ -744,6 +753,27 @@ export const SalesInvoicesPage: React.FC<{
     }
   };
 
+  if (editingInvoiceId) {
+    return (
+      <NormalSalesVoucherPage
+        editInvoiceId={editingInvoiceId}
+        onBack={() => {
+          setEditingInvoiceId(null);
+          fetchInvoices();
+        }}
+        onSuccess={() => {
+          setEditingInvoiceId(null);
+          fetchInvoices();
+          setNotification({
+            type: 'success',
+            message: 'Sales invoice updated successfully.',
+          });
+        }}
+        onNavigate={onNavigate}
+      />
+    );
+  }
+
   return (
     <div id="sales-invoices-container" className="p-6 max-w-7xl mx-auto space-y-6">
       {/* Toast Notification Banner */}
@@ -843,7 +873,6 @@ export const SalesInvoicesPage: React.FC<{
           >
             <option value="ALL">All Statuses</option>
             <option value="POSTED">Posted (Finalized)</option>
-            <option value="DRAFT">Draft</option>
             <option value="CANCELLED">Cancelled</option>
           </select>
         </div>
@@ -920,6 +949,16 @@ export const SalesInvoicesPage: React.FC<{
                         >
                           <Eye className="w-4 h-4" />
                         </button>
+                        {inv.status !== 'CANCELLED' && (
+                          <button
+                            id={`btn-edit-invoice-${inv.id}`}
+                            onClick={() => handleEditInvoice(inv.id)}
+                            className="p-1.5 text-slate-500 hover:text-blue-600 hover:bg-blue-50 rounded transition"
+                            title="Edit Invoice / Voucher"
+                          >
+                            <Pencil className="w-4 h-4" />
+                          </button>
+                        )}
                         <button
                           id={`btn-delete-invoice-${inv.id}`}
                           onClick={() => promptDeleteInvoice(inv)}
@@ -1043,47 +1082,6 @@ export const SalesInvoicesPage: React.FC<{
                 </div>
               )}
 
-              {/* Barcode Quick Scan Bar */}
-              <div className="p-4 bg-slate-50 border border-slate-200 rounded-xl space-y-2">
-                <div className="flex items-center justify-between">
-                  <span className="text-xs font-bold uppercase tracking-wider text-slate-700 flex items-center gap-1.5">
-                    <Barcode className="w-4 h-4 text-emerald-600" />
-                    Optical Lens Barcode Scanner
-                  </span>
-                  <span className="text-xs text-slate-400">Scan barcode from lens pouch or packet</span>
-                </div>
-
-                <form onSubmit={handleBarcodeLookup} className="flex gap-2">
-                  <input
-                    type="text"
-                    placeholder="Scan Barcode (e.g. BAR1_...)..."
-                    value={barcodeInput}
-                    onChange={e => setBarcodeInput(e.target.value)}
-                    disabled={barcodeLoading}
-                    className="flex-1 px-3.5 py-2 text-sm rounded-lg border border-slate-300 font-mono focus:ring-2 focus:ring-emerald-500 focus:outline-none bg-white"
-                  />
-                  <button
-                    type="submit"
-                    disabled={barcodeLoading || !barcodeInput.trim()}
-                    className="px-4 py-2 bg-emerald-800 hover:bg-emerald-900 text-white text-xs font-semibold rounded-lg transition disabled:opacity-50"
-                  >
-                    {barcodeLoading ? 'Scanning...' : 'Scan & Add'}
-                  </button>
-                </form>
-
-                {barcodeMessage && (
-                  <div
-                    className={`text-xs p-2 rounded-lg ${
-                      barcodeMessage.type === 'success'
-                        ? 'bg-emerald-50 text-emerald-800 border border-emerald-200'
-                        : 'bg-rose-50 text-rose-800 border border-rose-200'
-                    }`}
-                  >
-                    {barcodeMessage.text}
-                  </div>
-                )}
-              </div>
-
               {/* Line Items Table */}
               <div className="space-y-3">
                 <div className="flex items-center justify-between">
@@ -1137,7 +1135,11 @@ export const SalesInvoicesPage: React.FC<{
                                     <span className="px-1.5 py-0.5 bg-emerald-50 text-emerald-800 font-mono rounded border border-emerald-200">
                                       SPH: {line.batches[0].sph || '0.00'} | CYL: {line.batches[0].cyl || '0.00'}
                                     </span>
-                                    <span className="px-1.5 py-0.5 bg-slate-100 text-slate-600 font-mono rounded">
+                                    <span className={`px-1.5 py-0.5 font-mono rounded ${
+                                      Number(line.batches[0].availableStock ?? 0) < 0
+                                        ? 'bg-rose-100 text-rose-700 font-bold border border-rose-300'
+                                        : 'bg-slate-100 text-slate-600'
+                                    }`}>
                                       Avail: {line.batches[0].availableStock ?? '—'}
                                     </span>
                                   </div>
@@ -1288,9 +1290,19 @@ export const SalesInvoicesPage: React.FC<{
                     <span>Round Off:</span>
                     <span className="font-mono">₹{totals.roundOff.toFixed(2)}</span>
                   </div>
+                  {partyCreditInfo && (
+                    <div className="flex justify-between text-slate-700 font-medium">
+                      <span>Previous Balance:</span>
+                      <span className="font-mono text-amber-800">
+                        {(partyCreditInfo.currentBalance || 0) >= 0 ? '+ ' : '- '}₹{Math.abs(partyCreditInfo.currentBalance || 0).toFixed(2)}
+                      </span>
+                    </div>
+                  )}
                   <div className="pt-2 border-t border-slate-200 flex justify-between font-bold text-sm text-slate-900">
                     <span>Grand Total:</span>
-                    <span className="font-mono text-emerald-800">₹{totals.grandTotal.toFixed(2)}</span>
+                    <span className="font-mono text-emerald-800">
+                      ₹{(totals.grandTotal + (partyCreditInfo?.currentBalance || 0)).toFixed(2)}
+                    </span>
                   </div>
                 </div>
               </div>
@@ -1478,6 +1490,21 @@ export const SalesInvoicesPage: React.FC<{
                 {getStatusBadge(selectedInvoice.status)}
               </div>
               <div className="flex items-center gap-2">
+                {selectedInvoice.status !== 'CANCELLED' && (
+                  <button
+                    id="btn-edit-invoice-modal"
+                    onClick={() => {
+                      const id = selectedInvoice.id;
+                      setIsDetailOpen(false);
+                      handleEditInvoice(id);
+                    }}
+                    className="flex items-center gap-1.5 px-3 py-1.5 bg-blue-600 hover:bg-blue-700 text-xs font-semibold rounded-lg transition text-white shadow-xs"
+                    title="Edit Sales Voucher / Invoice"
+                  >
+                    <Pencil className="w-3.5 h-3.5" />
+                    Edit Invoice
+                  </button>
+                )}
                 <button
                   onClick={() => window.print()}
                   className="flex items-center gap-1.5 px-3 py-1.5 bg-slate-800 hover:bg-slate-700 text-xs font-semibold rounded-lg transition"
@@ -1613,6 +1640,20 @@ export const SalesInvoicesPage: React.FC<{
             {/* Footer Cancellation Actions */}
             <div className="px-6 py-4 bg-slate-50 border-t border-slate-200 flex items-center justify-between print:hidden">
               <div className="flex items-center gap-2">
+                {selectedInvoice.status !== 'CANCELLED' && (
+                  <button
+                    id="btn-edit-invoice-footer"
+                    onClick={() => {
+                      const id = selectedInvoice.id;
+                      setIsDetailOpen(false);
+                      handleEditInvoice(id);
+                    }}
+                    className="px-4 py-2 bg-blue-50 hover:bg-blue-100 text-blue-700 text-xs font-semibold rounded-lg border border-blue-200 transition flex items-center gap-1.5"
+                  >
+                    <Pencil className="w-3.5 h-3.5" />
+                    Edit Invoice
+                  </button>
+                )}
                 {selectedInvoice.status === 'POSTED' && (
                   <button
                     id="btn-cancel-posted-invoice"

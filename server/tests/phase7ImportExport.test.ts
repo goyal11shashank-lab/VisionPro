@@ -153,24 +153,24 @@ async function runTests() {
 
     // 6. Setup Unique Items
     const uiSVRes = await client.query(
-      `INSERT INTO unique_items (business_id, primary_item_id, name, code, purchase_rate, mrp, status)
-       VALUES ($1, $2, 'Crizal Alize 1.56 SV HMC', 'ITEM-SV-001', 450.00, 900.00, 'ACTIVE')
+      `INSERT INTO unique_items (business_id, primary_item_id, name, code, purchase_rate, mrp, status, maintain_batches, optical_category)
+       VALUES ($1, $2, 'Crizal Alize 1.56 SV HMC', 'ITEM-SV-001', 450.00, 900.00, 'ACTIVE', true, 'SV')
        RETURNING id`,
       [testBizId1, piSVId]
     );
     itemSVId = uiSVRes.rows[0].id;
 
     const uiKTRes = await client.query(
-      `INSERT INTO unique_items (business_id, primary_item_id, name, code, purchase_rate, mrp, status)
-       VALUES ($1, $2, '1.50 KT Bifocal Hard Coat', 'ITEM-KT-001', 600.00, 1200.00, 'ACTIVE')
+      `INSERT INTO unique_items (business_id, primary_item_id, name, code, purchase_rate, mrp, status, maintain_batches, optical_category)
+       VALUES ($1, $2, '1.50 KT Bifocal Hard Coat', 'ITEM-KT-001', 600.00, 1200.00, 'ACTIVE', true, 'KT')
        RETURNING id`,
       [testBizId1, piKTId]
     );
     itemKTId = uiKTRes.rows[0].id;
 
     const uiProgRes = await client.query(
-      `INSERT INTO unique_items (business_id, primary_item_id, name, code, purchase_rate, mrp, status)
-       VALUES ($1, $2, 'Varilux Comfort Max 1.60', 'ITEM-PROG-001', 1800.00, 3500.00, 'ACTIVE')
+      `INSERT INTO unique_items (business_id, primary_item_id, name, code, purchase_rate, mrp, status, maintain_batches, optical_category)
+       VALUES ($1, $2, 'Varilux Comfort Max 1.60', 'ITEM-PROG-001', 1800.00, 3500.00, 'ACTIVE', true, 'PROG')
        RETURNING id`,
       [testBizId1, piProgId]
     );
@@ -598,7 +598,7 @@ async function runTests() {
   // ==========================================
   // 6. SALES INVOICE STOCK VERIFICATION
   // ==========================================
-  await test('TEST 12: Sales invoice import should reject if available stock is insufficient', async () => {
+  await test('TEST 12: Sales invoice import allows sales beyond available stock with non-blocking warning', async () => {
     const rawRows = [
       {
         'Customer': 'CUST-MODERN',
@@ -606,7 +606,7 @@ async function runTests() {
         'Unique Item': 'ITEM-SV-001',
         'SPH': '-2.00',
         'CYL': '-0.50',
-        'Quantity': '999', // Available is 25
+        'Quantity': '999', // Available is 25 - allowed per negative inventory business rule
         'Rate': '900.00',
       },
     ];
@@ -622,8 +622,13 @@ async function runTests() {
     };
 
     const validation = await ImportValidationService.validateImportData(testBizId1, 'SALES_INVOICE', rawRows, mapping);
-    if (validation.validRows !== 0 || validation.invalidRows !== 1) {
-      throw new Error('Sales invoice with insufficient stock should be rejected');
+    if (validation.validRows !== 1 || validation.invalidRows !== 0) {
+      throw new Error('Sales invoice with insufficient stock should be allowed (non-blocking)');
+    }
+    const row = validation.rows[0];
+    const hasStockWarning = row.errors?.some((w: any) => w.severity === 'WARNING' && w.message?.includes('Available stock is insufficient'));
+    if (!hasStockWarning) {
+      throw new Error(`Expected warning about insufficient available stock, got: ${JSON.stringify(row.errors)}`);
     }
   });
 
@@ -727,6 +732,242 @@ async function runTests() {
     if (!wb.SheetNames.includes('Validation Errors')) throw new Error('Validation Errors sheet missing');
     const rows = XLSX.utils.sheet_to_json(wb.Sheets['Validation Errors']);
     if (rows.length !== 2) throw new Error(`Expected 2 error rows, got ${rows.length}`);
+  });
+
+  // ==========================================
+  // 8. STOCK ITEM BULK IMPORT SUITE
+  // ==========================================
+  await test('TEST 16: Stock Item import template generation', () => {
+    const buf = ExcelTemplateService.generateTemplateWorkbook('STOCK_ITEM');
+    if (!buf || buf.length === 0) throw new Error('Failed to generate STOCK_ITEM template');
+    const wb = XLSX.read(buf, { type: 'buffer' });
+    if (!wb.SheetNames.includes('Import Data') || !wb.SheetNames.includes('Instructions & Rules')) {
+      throw new Error('STOCK_ITEM template missing required sheets');
+    }
+  });
+
+  await test('TEST 17: Stock Item validation in CREATE_ONLY mode', async () => {
+    const rawRows = [
+      {
+        'stock_item_code': 'BULK-SV-100',
+        'stock_item_name': 'Bulk Single Vision 1.56 Anti-Glare',
+        'category': 'SV',
+        'maintain_batches': 'YES',
+        'status': 'ACTIVE',
+        'purchase_rate': '150.00',
+        'mrp': '350.00',
+        'gst_rate': '5.00',
+        'description': 'Bulk test SV item',
+      },
+      {
+        'stock_item_code': 'BULK-ACC-101',
+        'stock_item_name': 'Bulk Microfiber Cleaning Cloth',
+        'category': 'OTHER',
+        'maintain_batches': 'NO',
+        'status': 'ACTIVE',
+        'purchase_rate': '25.00',
+        'mrp': '80.00',
+        'gst_rate': '18.00',
+        'description': 'Bulk test accessory item',
+      },
+    ];
+
+    const mapping = {
+      stock_item_code: 'stock_item_code',
+      stock_item_name: 'stock_item_name',
+      category: 'category',
+      maintain_batches: 'maintain_batches',
+      status: 'status',
+      purchase_rate: 'purchase_rate',
+      mrp: 'mrp',
+      gst_rate: 'gst_rate',
+      description: 'description',
+    };
+
+    const validation = await ImportValidationService.validateImportData(testBizId1, 'STOCK_ITEM', rawRows, mapping, { importMode: 'CREATE_ONLY' });
+    if (validation.validRows !== 2 || validation.invalidRows !== 0) {
+      throw new Error(`Expected 2 valid rows in CREATE_ONLY mode, got valid=${validation.validRows}, invalid=${validation.invalidRows}`);
+    }
+
+    // Now insert one of them
+    const [session] = await db
+      .insert(importSessions)
+      .values({
+        businessId: testBizId1,
+        importType: 'STOCK_ITEM',
+        fileName: 'stock_items_test.xlsx',
+        status: 'READY',
+        totalRows: '2',
+        validRows: '2',
+        invalidRows: '0',
+        columnMapping: mapping,
+        previewData: validation,
+        errorSummary: validation.errorSummary,
+        createdBy: adminUserId,
+      })
+      .returning();
+
+    const postResult = await ImportPostingService.postImportSession(testBizId1, session.id, adminUserId);
+    if (postResult.status !== 'COMPLETED' || postResult.postedRows !== 2) {
+      throw new Error(`Stock Item posting failed: ${JSON.stringify(postResult.errors)}`);
+    }
+
+    // Verify DB records
+    const [svItem] = await db.select().from(uniqueItems).where(and(eq(uniqueItems.businessId, testBizId1), eq(uniqueItems.code, 'BULK-SV-100')));
+    if (!svItem || svItem.opticalCategory !== 'SV' || svItem.maintainBatches !== true) {
+      throw new Error('Created SV item did not match expected schema');
+    }
+
+    const [accItem] = await db.select().from(uniqueItems).where(and(eq(uniqueItems.businessId, testBizId1), eq(uniqueItems.code, 'BULK-ACC-101')));
+    if (!accItem || accItem.opticalCategory !== 'OTHER' || accItem.maintainBatches !== false) {
+      throw new Error('Created accessory item did not match expected schema');
+    }
+  });
+
+  await test('TEST 18: Stock Item validation rejects existing code in CREATE_ONLY mode', async () => {
+    const rawRows = [
+      {
+        'stock_item_code': 'BULK-SV-100', // Already created in TEST 17
+        'stock_item_name': 'Duplicate Code Test',
+        'category': 'SV',
+      },
+    ];
+
+    const mapping = {
+      stock_item_code: 'stock_item_code',
+      stock_item_name: 'stock_item_name',
+      category: 'category',
+    };
+
+    const validation = await ImportValidationService.validateImportData(testBizId1, 'STOCK_ITEM', rawRows, mapping, { importMode: 'CREATE_ONLY' });
+    if (validation.validRows !== 0 || validation.invalidRows !== 1) {
+      throw new Error('Existing item code must be rejected in CREATE_ONLY mode');
+    }
+    const hasExistingError = validation.errorSummary.some(e => e.message.includes('already exists'));
+    if (!hasExistingError) throw new Error('Expected "already exists" error message for existing code');
+  });
+
+  await test('TEST 19: Stock Item validation in UPSERT mode allows update', async () => {
+    const rawRows = [
+      {
+        'stock_item_code': 'BULK-ACC-101',
+        'stock_item_name': 'Bulk Microfiber Cleaning Cloth Updated',
+        'category': 'OTHER',
+        'maintain_batches': 'NO',
+        'status': 'ACTIVE',
+        'purchase_rate': '30.00', // Updated rate
+        'mrp': '90.00', // Updated MRP
+        'gst_rate': '18.00',
+        'description': 'Updated description',
+      },
+    ];
+
+    const mapping = {
+      stock_item_code: 'stock_item_code',
+      stock_item_name: 'stock_item_name',
+      category: 'category',
+      maintain_batches: 'maintain_batches',
+      status: 'status',
+      purchase_rate: 'purchase_rate',
+      mrp: 'mrp',
+      gst_rate: 'gst_rate',
+      description: 'description',
+    };
+
+    const validation = await ImportValidationService.validateImportData(testBizId1, 'STOCK_ITEM', rawRows, mapping, { importMode: 'UPSERT' });
+    if (validation.validRows !== 1 || validation.invalidRows !== 0) {
+      throw new Error(`Expected 1 valid row in UPSERT mode, got valid=${validation.validRows}, invalid=${validation.invalidRows}`);
+    }
+    if (!validation.rows[0].resolvedData?.isUpdate) {
+      throw new Error('Expected row to be marked as isUpdate=true');
+    }
+
+    const [session] = await db
+      .insert(importSessions)
+      .values({
+        businessId: testBizId1,
+        importType: 'STOCK_ITEM',
+        fileName: 'stock_items_upsert_test.xlsx',
+        status: 'READY',
+        totalRows: '1',
+        validRows: '1',
+        invalidRows: '0',
+        columnMapping: mapping,
+        previewData: validation,
+        errorSummary: validation.errorSummary,
+        createdBy: adminUserId,
+      })
+      .returning();
+
+    const postResult = await ImportPostingService.postImportSession(testBizId1, session.id, adminUserId);
+    if (postResult.status !== 'COMPLETED' || postResult.postedRows !== 1) {
+      throw new Error(`Stock Item UPSERT post failed: ${JSON.stringify(postResult.errors)}`);
+    }
+
+    const [updatedItem] = await db.select().from(uniqueItems).where(and(eq(uniqueItems.businessId, testBizId1), eq(uniqueItems.code, 'BULK-ACC-101')));
+    if (updatedItem.name !== 'Bulk Microfiber Cleaning Cloth Updated' || Number(updatedItem.purchaseRate) !== 30) {
+      throw new Error('Stock Item was not updated as expected in DB');
+    }
+  });
+
+  await test('TEST 20: Stock Item safety checks prevent disabling maintain_batches or changing category when batches exist', async () => {
+    // 1. First add an optical batch to BULK-SV-100
+    const [svItem] = await db.select().from(uniqueItems).where(and(eq(uniqueItems.businessId, testBizId1), eq(uniqueItems.code, 'BULK-SV-100')));
+    const batchRes = await findOrCreateOpticalBatch({
+      businessId: testBizId1,
+      uniqueItemId: svItem.id,
+      sph: '-1.00',
+      cyl: '0.00',
+      userId: adminUserId,
+    });
+    const batch = batchRes.batch;
+
+    // Update stock so history exists
+    await db.update(opticalStocks).set({
+      physicalStock: '10',
+      availableStock: '10',
+    }).where(eq(opticalStocks.batchId, batch.id));
+
+    // Now try to UPSERT with maintain_batches = NO
+    const rawRowsDisable = [
+      {
+        'stock_item_code': 'BULK-SV-100',
+        'stock_item_name': 'BULK SV Try Disable',
+        'category': 'SV',
+        'maintain_batches': 'NO', // UNSAFE!
+      },
+    ];
+
+    const mapping = {
+      stock_item_code: 'stock_item_code',
+      stock_item_name: 'stock_item_name',
+      category: 'category',
+      maintain_batches: 'maintain_batches',
+    };
+
+    const valDisable = await ImportValidationService.validateImportData(testBizId1, 'STOCK_ITEM', rawRowsDisable, mapping, { importMode: 'UPSERT' });
+    if (valDisable.validRows !== 0 || valDisable.invalidRows !== 1) {
+      throw new Error('Disabling maintain_batches when batch stock exists should be rejected');
+    }
+    const hasMaintainError = valDisable.errorSummary.some(e => e.message.includes('Maintain Batches cannot be disabled'));
+    if (!hasMaintainError) throw new Error('Expected maintain_batches safety error message');
+
+    // Now try to change category to KT when batches exist
+    const rawRowsChangeCat = [
+      {
+        'stock_item_code': 'BULK-SV-100',
+        'stock_item_name': 'BULK SV Try Change Cat',
+        'category': 'KT', // UNSAFE!
+        'maintain_batches': 'YES',
+      },
+    ];
+
+    const valCat = await ImportValidationService.validateImportData(testBizId1, 'STOCK_ITEM', rawRowsChangeCat, mapping, { importMode: 'UPSERT' });
+    if (valCat.validRows !== 0 || valCat.invalidRows !== 1) {
+      throw new Error('Changing category when batches exist should be rejected');
+    }
+    const hasCatError = valCat.errorSummary.some(e => e.message.includes('Optical Category cannot be changed'));
+    if (!hasCatError) throw new Error('Expected category change safety error message');
   });
 
   // Cleanup

@@ -1,9 +1,10 @@
 import React, { useState, useEffect } from 'react';
-import { QrCode, Plus, Search, RefreshCw, CheckCircle2, XCircle, Edit3, Trash2, ShieldAlert, AlertTriangle, Filter, IndianRupee, Layers, BookOpen } from 'lucide-react';
+import { QrCode, Plus, Search, RefreshCw, CheckCircle2, XCircle, Edit3, Trash2, ShieldAlert, AlertTriangle, Filter, IndianRupee, Layers, BookOpen, FileSpreadsheet } from 'lucide-react';
 import { apiRequest } from '../../api/client.js';
 import { UniqueItem, PrimaryItem } from '../../types/index.js';
 import { useAuth } from '../../context/AuthContext.js';
 import { StockItemLedgerModal } from '../../components/inventory/StockItemLedgerModal.js';
+import { StockItemImportModal } from '../../components/master/StockItemImportModal.js';
 import { rankSearchMatch } from '../../utils/searchNormalization.js';
 
 export const UniqueItemsPage: React.FC = () => {
@@ -16,6 +17,7 @@ export const UniqueItemsPage: React.FC = () => {
   const [search, setSearch] = useState<string>('');
   const [selectedPrimaryItem, setSelectedPrimaryItem] = useState<string>('');
   const [showModal, setShowModal] = useState<boolean>(false);
+  const [showImportModal, setShowImportModal] = useState<boolean>(false);
   const [editingItem, setEditingItem] = useState<UniqueItem | null>(null);
   const [itemToDelete, setItemToDelete] = useState<UniqueItem | null>(null);
   const [deleting, setDeleting] = useState<boolean>(false);
@@ -38,6 +40,7 @@ export const UniqueItemsPage: React.FC = () => {
     description: '',
     maintainBatches: false,
     opticalCategory: 'SV' as 'SV' | 'KT' | 'PROG' | 'OTHER',
+    unit: 'PRS' as 'PRS' | 'PCS',
     purchaseRate: 0,
     lastPurchasePrice: 0,
     mrp: 0,
@@ -79,6 +82,7 @@ export const UniqueItemsPage: React.FC = () => {
       description: '',
       maintainBatches: false,
       opticalCategory: 'SV',
+      unit: 'PRS',
       purchaseRate: 0,
       lastPurchasePrice: 0,
       mrp: 0,
@@ -98,6 +102,7 @@ export const UniqueItemsPage: React.FC = () => {
       description: item.description || '',
       maintainBatches: Boolean(item.maintainBatches),
       opticalCategory: (item.opticalCategory || item.categoryCode || 'SV') as any,
+      unit: ((item.unit || 'PRS').toUpperCase()) as 'PRS' | 'PCS',
       purchaseRate: Number(item.purchaseRate) || 0,
       lastPurchasePrice: Number(item.lastPurchasePrice) || 0,
       mrp: Number(item.mrp) || 0,
@@ -197,6 +202,7 @@ export const UniqueItemsPage: React.FC = () => {
             primaryItemId: formData.primaryItemId ? formData.primaryItemId : null,
             maintainBatches: formData.maintainBatches,
             opticalCategory: formData.opticalCategory,
+            unit: formData.unit,
             description: formData.description,
             purchaseRate: formData.purchaseRate,
             lastPurchasePrice: formData.lastPurchasePrice,
@@ -280,13 +286,24 @@ export const UniqueItemsPage: React.FC = () => {
             Refresh
           </button>
           {hasPermission('master:create') && (
-            <button
-              onClick={handleOpenCreate}
-              className="inline-flex items-center gap-2 px-4 py-2 text-sm font-medium text-white bg-indigo-600 rounded-lg hover:bg-indigo-700 shadow-xs cursor-pointer"
-            >
-              <Plus className="h-4 w-4" />
-              New Stock Item
-            </button>
+            <>
+              <button
+                id="btn-bulk-import-stock-items"
+                onClick={() => setShowImportModal(true)}
+                className="inline-flex items-center gap-2 px-3.5 py-2 text-sm font-medium text-emerald-700 bg-emerald-50 border border-emerald-300 rounded-lg hover:bg-emerald-100 shadow-xs cursor-pointer transition-colors"
+              >
+                <FileSpreadsheet className="h-4 w-4" />
+                Bulk Import
+              </button>
+              <button
+                id="btn-new-stock-item"
+                onClick={handleOpenCreate}
+                className="inline-flex items-center gap-2 px-4 py-2 text-sm font-medium text-white bg-indigo-600 rounded-lg hover:bg-indigo-700 shadow-xs cursor-pointer"
+              >
+                <Plus className="h-4 w-4" />
+                New Stock Item
+              </button>
+            </>
           )}
         </div>
       </div>
@@ -414,6 +431,7 @@ export const UniqueItemsPage: React.FC = () => {
                   <th className="px-5 py-4">Stock Item Name</th>
                   <th className="px-5 py-4">Primary Item</th>
                   <th className="px-5 py-4">Category</th>
+                  <th className="px-5 py-4">Unit</th>
                   <th className="px-5 py-4">Batches</th>
                   <th className="px-5 py-4">Purchase Rate</th>
                   <th className="px-5 py-4">MRP</th>
@@ -425,14 +443,14 @@ export const UniqueItemsPage: React.FC = () => {
               <tbody className="divide-y divide-slate-200">
                 {loading ? (
                   <tr>
-                    <td colSpan={11} className="px-6 py-12 text-center text-slate-400">
+                    <td colSpan={12} className="px-6 py-12 text-center text-slate-400">
                       <RefreshCw className="h-6 w-6 animate-spin mx-auto mb-2 text-indigo-500" />
                       Loading stock item catalog...
                     </td>
                   </tr>
                 ) : filtered.length === 0 ? (
                   <tr>
-                    <td colSpan={11} className="px-6 py-12 text-center text-slate-400">
+                    <td colSpan={12} className="px-6 py-12 text-center text-slate-400">
                       No stock items found.
                     </td>
                   </tr>
@@ -495,6 +513,15 @@ export const UniqueItemsPage: React.FC = () => {
                               </span>
                             );
                           })()}
+                        </td>
+                        <td className="px-5 py-4">
+                          <span className={`inline-flex items-center px-2 py-0.5 rounded text-xs font-mono font-bold border ${
+                            (item.unit || 'PRS') === 'PRS'
+                              ? 'bg-blue-50 text-blue-700 border-blue-200'
+                              : 'bg-emerald-50 text-emerald-700 border-emerald-200'
+                          }`}>
+                            {item.unit || 'PRS'}
+                          </span>
                         </td>
                         <td className="px-5 py-4">
                           {item.maintainBatches ? (
@@ -785,26 +812,52 @@ export const UniqueItemsPage: React.FC = () => {
                 />
               </div>
 
-              {/* Category selector on Stock Item */}
-              <div>
-                <label className="block text-xs font-bold text-slate-900 mb-1">
-                  Category (Optical Type) *
-                </label>
-                <select
-                  id="select-stock-item-optical-category"
-                  value={formData.opticalCategory}
-                  onChange={(e) => setFormData({ ...formData, opticalCategory: e.target.value as any })}
-                  className="w-full px-3 py-2 text-sm bg-slate-50 border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-indigo-500 font-medium text-slate-800"
-                >
-                  <option value="SV">SV — Single Vision</option>
-                  <option value="KT">KT — Kryptok / Bifocal</option>
-                  <option value="PROG">PROG — Progressive</option>
-                  <option value="OTHER">OTHER — Non-Optical / General</option>
-                </select>
-                <p className="text-[11px] text-slate-500 mt-1">
-                  Category determines required optical parameters (SPH, CYL, AXIS, ADD, SIDE) during batch creation.
-                </p>
+              {/* Category & Unit selectors on Stock Item */}
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                <div>
+                  <label className="block text-xs font-bold text-slate-900 mb-1">
+                    Category (Optical Type) *
+                  </label>
+                  <select
+                    id="select-stock-item-optical-category"
+                    value={formData.opticalCategory}
+                    onChange={(e) => setFormData({ ...formData, opticalCategory: e.target.value as any })}
+                    className="w-full px-3 py-2 text-sm bg-slate-50 border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-indigo-500 font-medium text-slate-800"
+                  >
+                    <option value="SV">SV — Single Vision</option>
+                    <option value="KT">KT — Kryptok / Bifocal</option>
+                    <option value="PROG">PROG — Progressive</option>
+                    <option value="OTHER">OTHER — Non-Optical / General</option>
+                  </select>
+                  <p className="text-[11px] text-slate-500 mt-1">
+                    Category determines required optical parameters during batch creation.
+                  </p>
+                </div>
+
+                <div>
+                  <label className="block text-xs font-bold text-slate-900 mb-1">
+                    Unit *
+                  </label>
+                  <select
+                    id="select-stock-item-unit"
+                    value={formData.unit}
+                    onChange={(e) => setFormData({ ...formData, unit: e.target.value as 'PRS' | 'PCS' })}
+                    className="w-full px-3 py-2 text-sm bg-slate-50 border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-indigo-500 font-medium text-slate-800"
+                  >
+                    <option value="PRS">PRS — Pairs</option>
+                    <option value="PCS">PCS — Pieces</option>
+                  </select>
+                  <p className="text-[11px] text-slate-500 mt-1">
+                    {formData.unit === 'PRS' ? 'Pairs (allows 0.5 fractions for lenses)' : 'Pieces (whole integers only)'}
+                  </p>
+                </div>
               </div>
+
+              {editingItem && editingItem.unit && editingItem.unit !== formData.unit && (
+                <div className="text-[11px] text-amber-800 bg-amber-50 p-2.5 rounded-lg border border-amber-200">
+                  <strong>Warning:</strong> Changing unit from <strong>{editingItem.unit}</strong> to <strong>{formData.unit}</strong> will be rejected by the server if this item has stock or transaction history.
+                </div>
+              )}
 
               {/* Tally-Style Maintain Batches Control */}
               <div className="p-3.5 bg-slate-50/80 border border-slate-200 rounded-xl space-y-2">
@@ -959,6 +1012,17 @@ export const UniqueItemsPage: React.FC = () => {
           itemId={ledgerItemId}
           itemName={ledgerItemName}
           onClose={() => setLedgerItemId(null)}
+        />
+      )}
+
+      {/* Bulk Stock Items Excel Import Modal */}
+      {showImportModal && (
+        <StockItemImportModal
+          isOpen={showImportModal}
+          onClose={() => setShowImportModal(false)}
+          onSuccess={() => {
+            fetchData();
+          }}
         />
       )}
     </div>

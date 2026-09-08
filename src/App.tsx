@@ -16,6 +16,7 @@ import { UniqueItemsPage } from './pages/master/UniqueItemsPage.js';
 import { OpticalBatchesPage } from './pages/master/OpticalBatchesPage.js';
 import { PartiesPage } from './pages/parties/PartiesPage.js';
 import { PurchaseInvoicesPage } from './pages/purchases/PurchaseInvoicesPage.js';
+import { PurchaseOrdersPage } from './pages/purchases/PurchaseOrdersPage.js';
 import { CreatePurchaseInvoicePage } from './pages/purchases/CreatePurchaseInvoicePage.js';
 import { PurchaseLotsPage } from './pages/purchases/PurchaseLotsPage.js';
 import { SupplierLedgerPage } from './pages/parties/SupplierLedgerPage.js';
@@ -54,6 +55,10 @@ const AppContent: React.FC = () => {
   }
 
   const getPageTitle = (): string => {
+    if (currentPath.startsWith('/sales/voucher/edit/') || currentPath.startsWith('/sales/invoices/edit/')) {
+      return 'Alteration Sales Voucher';
+    }
+
     switch (currentPath) {
       case '/':
       case '/dashboard':
@@ -100,9 +105,11 @@ const AppContent: React.FC = () => {
       case '/sales/returns':
         return 'Sales Returns & Credit Notes';
       case '/purchases/orders':
+      case '/purchase/orders':
+        return 'Purchase Orders';
       case '/purchases/invoices':
       case '/purchase/invoices':
-        return 'Purchase Invoices & Bills';
+        return 'Purchase Invoices Register';
       case '/purchase/returns':
       case '/purchases/returns':
         return 'Purchase Returns & Debit Notes';
@@ -205,6 +212,33 @@ const AppContent: React.FC = () => {
       case '/sales/voucher':
       case '/sales/new':
         return <NormalSalesVoucherPage onNavigate={setCurrentPath} />;
+      default:
+        if (currentPath.startsWith('/sales/voucher/edit/')) {
+          const editId = currentPath.replace('/sales/voucher/edit/', '');
+          return (
+            <NormalSalesVoucherPage
+              editInvoiceId={editId}
+              onNavigate={setCurrentPath}
+              onBack={() => setCurrentPath('/sales/invoices')}
+              onSuccess={() => setCurrentPath('/sales/invoices')}
+            />
+          );
+        }
+        if (currentPath.startsWith('/sales/invoices/edit/')) {
+          const editId = currentPath.replace('/sales/invoices/edit/', '');
+          return (
+            <NormalSalesVoucherPage
+              editInvoiceId={editId}
+              onNavigate={setCurrentPath}
+              onBack={() => setCurrentPath('/sales/invoices')}
+              onSuccess={() => setCurrentPath('/sales/invoices')}
+            />
+          );
+        }
+        break;
+    }
+
+    switch (currentPath) {
       case '/sales/returns':
         return <SalesReturnsPage />;
       case '/sales/customer-ledger':
@@ -242,6 +276,9 @@ const AppContent: React.FC = () => {
         );
 
       case '/purchases/orders':
+      case '/purchase/orders':
+        return <PurchaseOrdersPage onNavigate={setCurrentPath} />;
+
       case '/purchases/invoices':
       case '/purchase/invoices':
         return <PurchaseInvoicesPage />;

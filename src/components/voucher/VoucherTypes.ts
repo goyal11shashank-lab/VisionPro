@@ -21,6 +21,7 @@ export interface VoucherLineItem {
   uniqueItemName: string;
   uniqueItemCode: string;
   categoryCode?: OpticalCategoryCode | string;
+  unit?: 'PRS' | 'PCS' | string;
   maintainBatches: boolean;
   quantity: number;
   rate: number;
@@ -54,6 +55,8 @@ export interface VoucherTotals {
   grandTotal: number;
   totalQuantity: number;
   totalItems: number;
+  previousBalance?: number;
+  finalTotal?: number;
 }
 
 /**
@@ -66,6 +69,7 @@ export function createEmptyVoucherLine(idPrefix: string = 'row'): VoucherLineIte
     uniqueItemName: '',
     uniqueItemCode: '',
     categoryCode: 'SV',
+    unit: 'PRS',
     maintainBatches: true,
     quantity: 0,
     rate: 0,

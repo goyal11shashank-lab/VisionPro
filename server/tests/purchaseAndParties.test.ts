@@ -266,6 +266,8 @@ export async function runPurchaseAndPartiesTests(): Promise<{
       code: `ZEISS-SV-${suffix}`,
       purchaseRate: '400.00',
       mrp: '1200.00',
+      maintainBatches: true,
+      opticalCategory: 'SV',
     }).returning();
     svUniqueItem = uSV;
 
@@ -285,6 +287,8 @@ export async function runPurchaseAndPartiesTests(): Promise<{
       code: `ZEISS-PAL-${suffix}`,
       purchaseRate: '1500.00',
       mrp: '4500.00',
+      maintainBatches: true,
+      opticalCategory: 'PROG',
     }).returning();
     progUniqueItem = uPAL;
 

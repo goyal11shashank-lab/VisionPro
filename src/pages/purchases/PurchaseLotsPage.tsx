@@ -174,7 +174,13 @@ export const PurchaseLotsPage: React.FC = () => {
                     </td>
 
                     {/* Remaining */}
-                    <td className="px-4 py-4 text-right font-mono font-bold text-xs text-emerald-700">
+                    <td className={`px-4 py-4 text-right font-mono font-bold text-xs ${
+                      Number(lot.remainingQuantity || 0) < 0
+                        ? 'text-rose-600 bg-rose-50/50'
+                        : Number(lot.remainingQuantity || 0) === 0
+                        ? 'text-slate-400'
+                        : 'text-emerald-700'
+                    }`}>
                       {lot.remainingQuantity} prs
                     </td>
 

@@ -230,10 +230,10 @@ export async function runPhase10ProductionAcceptanceSuite() {
     const [piProg] = await db.insert(primaryItems).values({ businessId: bizAId, categoryId: catProgId, baseId: baseCR39Id, name: 'Prog Standard', code: `P_PROG_${runSuffix}`, status: 'ACTIVE' }).returning();
 
     // Unique Items: HC SV, BCG SV, PG HC KT, PG HC PROG
-    const [uHCSV] = await db.insert(uniqueItems).values({ businessId: bizAId, primaryItemId: piSV.id, name: 'HC SV', code: `HC_SV_${runSuffix}`, purchaseRate: '100.00', lastPurchasePrice: '100.00', mrp: '150.00', status: 'ACTIVE' }).returning();
-    const [uBCGSV] = await db.insert(uniqueItems).values({ businessId: bizAId, primaryItemId: piSV.id, name: 'BCG SV', code: `BCG_SV_${runSuffix}`, purchaseRate: '150.00', lastPurchasePrice: '150.00', mrp: '220.00', status: 'ACTIVE' }).returning();
-    const [uPGHCKT] = await db.insert(uniqueItems).values({ businessId: bizAId, primaryItemId: piKT.id, name: 'PG HC KT', code: `PG_HC_KT_${runSuffix}`, purchaseRate: '200.00', lastPurchasePrice: '200.00', mrp: '300.00', status: 'ACTIVE' }).returning();
-    const [uPGHCProg] = await db.insert(uniqueItems).values({ businessId: bizAId, primaryItemId: piProg.id, name: 'PG HC PROG', code: `PG_HC_PROG_${runSuffix}`, purchaseRate: '500.00', lastPurchasePrice: '500.00', mrp: '800.00', status: 'ACTIVE' }).returning();
+    const [uHCSV] = await db.insert(uniqueItems).values({ businessId: bizAId, primaryItemId: piSV.id, name: 'HC SV', code: `HC_SV_${runSuffix}`, purchaseRate: '100.00', lastPurchasePrice: '100.00', mrp: '150.00', status: 'ACTIVE', maintainBatches: true, opticalCategory: 'SV' }).returning();
+    const [uBCGSV] = await db.insert(uniqueItems).values({ businessId: bizAId, primaryItemId: piSV.id, name: 'BCG SV', code: `BCG_SV_${runSuffix}`, purchaseRate: '150.00', lastPurchasePrice: '150.00', mrp: '220.00', status: 'ACTIVE', maintainBatches: true, opticalCategory: 'SV' }).returning();
+    const [uPGHCKT] = await db.insert(uniqueItems).values({ businessId: bizAId, primaryItemId: piKT.id, name: 'PG HC KT', code: `PG_HC_KT_${runSuffix}`, purchaseRate: '200.00', lastPurchasePrice: '200.00', mrp: '300.00', status: 'ACTIVE', maintainBatches: true, opticalCategory: 'KT' }).returning();
+    const [uPGHCProg] = await db.insert(uniqueItems).values({ businessId: bizAId, primaryItemId: piProg.id, name: 'PG HC PROG', code: `PG_HC_PROG_${runSuffix}`, purchaseRate: '500.00', lastPurchasePrice: '500.00', mrp: '800.00', status: 'ACTIVE', maintainBatches: true, opticalCategory: 'PROG' }).returning();
     itemHCSVId = uHCSV.id;
     itemBCGSVId = uBCGSV.id;
     itemPGHCKTId = uPGHCKT.id;

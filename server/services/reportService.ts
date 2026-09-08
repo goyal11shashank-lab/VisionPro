@@ -182,28 +182,38 @@ export class ReportService {
     const dataRes = await pool.query(dataQuery, [...params, limit, offset]);
 
     return {
-      data: dataRes.rows.map(r => ({
-        batchId: r.batch_id,
-        barcode: r.barcode,
-        uniqueItemId: r.unique_item_id,
-        uniqueItemName: r.unique_item_name,
-        sku: r.sku,
-        mrp: parseFloat(r.mrp) || 0,
-        primaryItemId: r.primary_item_id,
-        brand: r.primary_item_name,
-        categoryCode: r.category_code,
-        categoryName: r.category_name,
-        sph: parseFloat(r.sph) || 0,
-        cyl: parseFloat(r.cyl) || 0,
-        axis: parseFloat(r.axis) || 0,
-        add: parseFloat(r.add) || 0,
-        side: r.side,
-        physicalStock: parseFloat(r.physical_stock) || 0,
-        reservedStock: parseFloat(r.reserved_stock) || 0,
-        availableStock: parseFloat(r.available_stock) || 0,
-        isLowStock: Boolean(r.is_low_stock),
-        isNegativeStock: Boolean(r.is_negative_stock),
-      })),
+      data: dataRes.rows.map(r => {
+        const physical = parseFloat(r.physical_stock) || 0;
+        let stockStatus = 'IN_STOCK';
+        if (physical < 0) stockStatus = 'NEGATIVE_STOCK';
+        else if (physical === 0) stockStatus = 'ZERO_STOCK';
+        else if (r.is_low_stock) stockStatus = 'LOW_STOCK';
+
+        return {
+          batchId: r.batch_id,
+          barcode: r.barcode,
+          uniqueItemId: r.unique_item_id,
+          uniqueItemName: r.unique_item_name,
+          sku: r.sku,
+          mrp: parseFloat(r.mrp) || 0,
+          primaryItemId: r.primary_item_id,
+          brand: r.primary_item_name,
+          categoryCode: r.category_code,
+          categoryName: r.category_name,
+          sph: parseFloat(r.sph) || 0,
+          cyl: parseFloat(r.cyl) || 0,
+          axis: parseFloat(r.axis) || 0,
+          add: parseFloat(r.add) || 0,
+          side: r.side,
+          physicalStock: physical,
+          reservedStock: parseFloat(r.reserved_stock) || 0,
+          availableStock: parseFloat(r.available_stock) || 0,
+          isLowStock: Boolean(r.is_low_stock),
+          isNegativeStock: Boolean(r.is_negative_stock),
+          stock_status: stockStatus,
+          stockStatus: stockStatus,
+        };
+      }),
       summary,
       pagination: {
         page,

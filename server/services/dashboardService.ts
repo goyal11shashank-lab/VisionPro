@@ -795,7 +795,7 @@ export class DashboardService {
         const val = parseFloat(r.amount) || 0;
         recentTransactions.push({
           id: r.id,
-          type: r.payment_type,
+          type: r.payment_type || 'PAYMENT',
           docNumber: r.payment_number,
           partyName: r.party_name,
           amount: val,

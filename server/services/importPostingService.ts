@@ -488,6 +488,102 @@ export class ImportPostingService {
           }
           break;
         }
+        case 'STOCK_ITEM': {
+          for (const row of rows) {
+            if (!row.isValid) {
+              failedRowsCount++;
+              continue;
+            }
+
+            try {
+              const res = row.resolvedData || {};
+              const {
+                code,
+                name,
+                primaryItemId,
+                maintainBatches,
+                opticalCategory,
+                unit,
+                purchaseRate,
+                mrp,
+                gstRate,
+                description,
+                status,
+                isUpdate,
+                existingId,
+              } = res;
+
+              if (!code || !name) {
+                throw new Error('Stock Item Code and Name are required.');
+              }
+
+              if (isUpdate && existingId) {
+                const [updated] = await db
+                  .update(uniqueItems)
+                  .set({
+                    name,
+                    primaryItemId: primaryItemId !== undefined ? primaryItemId : null,
+                    maintainBatches: Boolean(maintainBatches),
+                    opticalCategory: opticalCategory || 'SV',
+                    unit: unit || 'PRS',
+                    purchaseRate: String(purchaseRate || '0.00'),
+                    mrp: String(mrp || '0.00'),
+                    gstRate: String(gstRate || '5.00'),
+                    description: description || null,
+                    status: status || 'ACTIVE',
+                    updatedAt: new Date(),
+                    updatedBy: userId || null,
+                  })
+                  .where(and(eq(uniqueItems.id, existingId), eq(uniqueItems.businessId, businessId)))
+                  .returning();
+
+                postedDocuments.push({
+                  id: updated.id,
+                  type: 'STOCK_ITEM',
+                  documentNumber: code,
+                  summary: `Updated: ${name} (${code}) | Category: ${opticalCategory} | Unit: ${unit || 'PRS'} | Batches: ${maintainBatches ? 'YES' : 'NO'} | Rate: ₹${purchaseRate} | MRP: ₹${mrp}`,
+                });
+                postedRowsCount++;
+              } else {
+                const [created] = await db
+                  .insert(uniqueItems)
+                  .values({
+                    businessId,
+                    name,
+                    code,
+                    primaryItemId: primaryItemId ? primaryItemId : null,
+                    maintainBatches: Boolean(maintainBatches),
+                    opticalCategory: opticalCategory || 'SV',
+                    unit: unit || 'PRS',
+                    purchaseRate: String(purchaseRate || '0.00'),
+                    lastPurchasePrice: '0.00',
+                    mrp: String(mrp || '0.00'),
+                    gstRate: String(gstRate || '5.00'),
+                    description: description || null,
+                    status: status || 'ACTIVE',
+                    createdBy: userId || null,
+                    updatedBy: userId || null,
+                  })
+                  .returning();
+
+                postedDocuments.push({
+                  id: created.id,
+                  type: 'STOCK_ITEM',
+                  documentNumber: code,
+                  summary: `Created: ${name} (${code}) | Category: ${opticalCategory} | Unit: ${unit || 'PRS'} | Batches: ${maintainBatches ? 'YES' : 'NO'} | Rate: ₹${purchaseRate} | MRP: ₹${mrp}`,
+                });
+                postedRowsCount++;
+              }
+            } catch (err: any) {
+              failedRowsCount++;
+              executionErrors.push({
+                row: row.rowNumber,
+                message: `Failed to import stock item for row ${row.rowNumber}: ${err.message}`,
+              });
+            }
+          }
+          break;
+        }
       }
     } catch (globalErr: any) {
       executionErrors.push({ message: `Fatal error during import execution: ${globalErr.message}` });

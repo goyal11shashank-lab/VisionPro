@@ -254,7 +254,7 @@ export const PurchaseInvoicesPage: React.FC = () => {
       <div className="bg-white p-4 rounded-2xl border border-slate-200/80 shadow-xs flex flex-col md:flex-row gap-4 justify-between items-center">
         {/* Status Tabs */}
         <div className="flex items-center p-1 bg-slate-100/80 rounded-xl w-full md:w-auto">
-          {(['ALL', 'DRAFT', 'POSTED', 'CANCELLED'] as const).map(status => (
+          {(['ALL', 'POSTED', 'CANCELLED'] as const).map(status => (
             <button
               key={status}
               id={`tab-invoice-${status.toLowerCase()}`}

@@ -1687,6 +1687,7 @@ const uniqueItemSchema = z.object({
   description: z.string().optional().nullable(),
   maintainBatches: z.boolean().default(false),
   opticalCategory: z.enum(['SV', 'KT', 'PROG', 'OTHER']).default('SV'),
+  unit: z.enum(['PRS', 'PCS']).default('PRS'),
   purchaseRate: z.union([z.number(), z.string()]).default(0),
   lastPurchasePrice: z.union([z.number(), z.string()]).default(0),
   mrp: z.union([z.number(), z.string()]).default(0),
@@ -1707,6 +1708,7 @@ router.get(['/unique-items', '/stock-items', '/'], requireAnyPermission(['master
         description: uniqueItems.description,
         maintainBatches: uniqueItems.maintainBatches,
         opticalCategory: uniqueItems.opticalCategory,
+        unit: uniqueItems.unit,
         batchesCount: sql<number>`(SELECT COUNT(*)::int FROM "optical_batches" WHERE "optical_batches"."unique_item_id" = ${uniqueItems.id})`,
         purchaseRate: uniqueItems.purchaseRate,
         lastPurchasePrice: uniqueItems.lastPurchasePrice,
@@ -1766,7 +1768,7 @@ router.post(['/unique-items', '/stock-items'], requirePermission('master:create'
       return;
     }
 
-    const { primaryItemId, name, code, description, maintainBatches, opticalCategory, purchaseRate, lastPurchasePrice, mrp, gstRate, status } = parsed.data;
+    const { primaryItemId, name, code, description, maintainBatches, opticalCategory, unit, purchaseRate, lastPurchasePrice, mrp, gstRate, status } = parsed.data;
 
     const existing = await db
       .select()
@@ -1789,6 +1791,7 @@ router.post(['/unique-items', '/stock-items'], requirePermission('master:create'
         description: description || null,
         maintainBatches: Boolean(maintainBatches),
         opticalCategory,
+        unit: unit || 'PRS',
         purchaseRate: String(purchaseRate),
         lastPurchasePrice: String(lastPurchasePrice),
         mrp: String(mrp),
@@ -1926,6 +1929,56 @@ router.patch(['/unique-items/:id', '/stock-items/:id'], requireAnyPermission(['m
       opticalCategoryToSet = String(incomingCat).toUpperCase();
     }
 
+    let unitToSet = current.unit || 'PRS';
+    const rawUnit = req.body.unit;
+    if (rawUnit !== undefined && rawUnit !== null && String(rawUnit).trim() !== '') {
+      const incomingUnit = String(rawUnit).trim().toUpperCase();
+      if (!['PRS', 'PCS'].includes(incomingUnit)) {
+        res.status(400).json({ error: 'Unit must be either PRS (Pairs) or PCS (Pieces).' });
+        return;
+      }
+      if (incomingUnit !== (current.unit || 'PRS')) {
+        // Safe check: verify if item has stock or transaction history
+        const stockCheck = await pool.query(
+          `SELECT 
+             COALESCE(SUM(os.physical_stock), 0) as total_physical,
+             COALESCE(SUM(os.reserved_stock), 0) as total_reserved
+           FROM "optical_stocks" os
+           JOIN "optical_batches" ob ON os.batch_id = ob.id
+           WHERE ob.unique_item_id = $1`,
+          [id]
+        );
+        const totalPhysical = Number(stockCheck.rows[0]?.total_physical || 0);
+        const totalReserved = Number(stockCheck.rows[0]?.total_reserved || 0);
+
+        const historyCheck = await pool.query(
+          `SELECT 
+             (SELECT COUNT(*)::int FROM "stock_ledger" sl JOIN "optical_batches" ob ON sl.batch_id = ob.id WHERE ob.unique_item_id = $1) as batch_ledger_count,
+             (SELECT COUNT(*)::int FROM "sales_invoice_lines" sil WHERE sil.unique_item_id = $1) as sales_lines_count,
+             (SELECT COUNT(*)::int FROM "purchase_invoice_lines" pil WHERE pil.unique_item_id = $1) as purchase_lines_count,
+             (SELECT COUNT(*)::int FROM "purchase_lots" pl WHERE pl.unique_item_id = $1) as lots_count,
+             (SELECT COUNT(*)::int FROM "sales_order_lines" sol WHERE sol.unique_item_id = $1) as order_lines_count,
+             (SELECT COUNT(*)::int FROM "sales_return_lines" srl WHERE srl.unique_item_id = $1) as sales_return_count,
+             (SELECT COUNT(*)::int FROM "purchase_return_lines" prl WHERE prl.unique_item_id = $1) as purchase_return_count
+          `,
+          [id]
+        );
+        const h = historyCheck.rows[0];
+        const totalHistory = (h?.batch_ledger_count || 0) + (h?.sales_lines_count || 0) + (h?.purchase_lines_count || 0) +
+                             (h?.lots_count || 0) + (h?.order_lines_count || 0) + (h?.sales_return_count || 0) +
+                             (h?.purchase_return_count || 0);
+
+        if (totalPhysical > 0 || totalReserved > 0 || totalHistory > 0) {
+          res.status(400).json({
+            error: 'Unit cannot be changed because this Stock Item already has stock or transaction history.'
+          });
+          return;
+        }
+
+        unitToSet = incomingUnit;
+      }
+    }
+
     const [updated] = await db
       .update(uniqueItems)
       .set({
@@ -1934,6 +1987,7 @@ router.patch(['/unique-items/:id', '/stock-items/:id'], requireAnyPermission(['m
         primaryItemId: primaryItemIdToSet,
         maintainBatches: maintainBatchesToSet,
         opticalCategory: opticalCategoryToSet,
+        unit: unitToSet,
         description: req.body.description !== undefined ? req.body.description : current.description,
         purchaseRate: req.body.purchaseRate !== undefined ? String(req.body.purchaseRate) : current.purchaseRate,
         lastPurchasePrice: req.body.lastPurchasePrice !== undefined ? String(req.body.lastPurchasePrice) : current.lastPurchasePrice,

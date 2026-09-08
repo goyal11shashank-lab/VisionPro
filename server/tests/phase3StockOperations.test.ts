@@ -150,6 +150,7 @@ export async function runPhase3StockTests(): Promise<{
       code: `U-TSV-${testTimestamp}`.toUpperCase(),
       purchaseRate: '500.00',
       mrp: '1200.00',
+      maintainBatches: true,
     })
     .returning();
 

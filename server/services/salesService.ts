@@ -21,6 +21,8 @@ import { calculateLineTax, calculateInvoiceTotals, round2 } from './taxCalculati
 import { AuditService } from './auditService.js';
 import { rankSearchMatch, formatOpticalBatchName } from '../utils/searchNormalization.js';
 import { PoolClient } from 'pg';
+import { StockService } from './stockService.js';
+import { findOrCreateOpticalBatch } from './opticalMasterService.js';
 
 const UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 function isValidUUID(id: string): boolean {
@@ -408,6 +410,9 @@ export class SalesService {
     // Calculate line items tax and invoice totals
     const computedLines = data.lines.map(line => {
       if (line.quantity <= 0) throw new Error('Line quantity must be greater than zero');
+      if (Math.abs(Math.round(line.quantity * 2) - line.quantity * 2) > 0.0001) {
+        throw new Error('Line quantity must be a positive value in steps of 0.5 (e.g. 0.5, 1.0, 1.5, 2.0)');
+      }
       if (line.rate < 0) throw new Error('Line rate cannot be negative');
 
       const discType =
@@ -507,6 +512,9 @@ export class SalesService {
         if (line.batches && line.batches.length > 0) {
           let batchSum = 0;
           for (const b of line.batches) {
+            if (b.quantity <= 0 || Math.abs(Math.round(b.quantity * 2) - b.quantity * 2) > 0.0001) {
+              throw new Error('Batch allocation quantity must be a positive value in steps of 0.5 (e.g. 0.5, 1.0, 1.5, 2.0)');
+            }
             batchSum += b.quantity;
             await client.query(
               `INSERT INTO sales_order_line_batches (sales_order_line_id, batch_id, quantity)
@@ -517,6 +525,23 @@ export class SalesService {
           if (round2(batchSum) !== round2(line.quantity)) {
             throw new Error(`Allocated batch quantity (${batchSum}) does not match line quantity (${line.quantity})`);
           }
+        } else {
+          // Auto-allocate default batch for items without batch allocation (e.g. non-batch items)
+          const defaultBatch = await findOrCreateOpticalBatch({
+            businessId,
+            uniqueItemId: line.uniqueItemId,
+            sph: 0,
+            cyl: 0,
+            axis: 0,
+            add: 0,
+            side: 'NONE',
+            userId,
+          });
+          await client.query(
+            `INSERT INTO sales_order_line_batches (sales_order_line_id, batch_id, quantity)
+             VALUES ($1, $2, $3)`,
+            [lineId, defaultBatch.batch.id, line.taxRes.quantity.toFixed(2)]
+          );
         }
       }
 
@@ -557,6 +582,36 @@ export class SalesService {
     userId?: string
   ) {
     // Select order lines and batches
+    // Auto-allocate default batch for lines that do not have batches yet
+    const allOrderLinesRes = await client.query(
+      `SELECT id, unique_item_id, quantity FROM sales_order_lines WHERE sales_order_id = $1`,
+      [orderId]
+    );
+
+    for (const l of allOrderLinesRes.rows) {
+      const bRes = await client.query(
+        `SELECT id FROM sales_order_line_batches WHERE sales_order_line_id = $1 LIMIT 1`,
+        [l.id]
+      );
+      if (bRes.rows.length === 0) {
+        const defaultBatch = await findOrCreateOpticalBatch({
+          businessId,
+          uniqueItemId: l.unique_item_id,
+          sph: 0,
+          cyl: 0,
+          axis: 0,
+          add: 0,
+          side: 'NONE',
+          userId,
+        });
+        await client.query(
+          `INSERT INTO sales_order_line_batches (sales_order_line_id, batch_id, quantity)
+           VALUES ($1, $2, $3)`,
+          [l.id, defaultBatch.batch.id, parseFloat(l.quantity).toFixed(2)]
+        );
+      }
+    }
+
     const linesRes = await client.query(
       `SELECT sol.id, sol.unique_item_id, sol.quantity, solb.batch_id, solb.quantity as batch_qty
        FROM sales_order_lines sol
@@ -573,37 +628,19 @@ export class SalesService {
       const batchId = row.batch_id;
       const qty = parseFloat(row.batch_qty);
 
-      // Lock optical_stocks row
-      const stockRes = await client.query(
-        `SELECT id, physical_stock, reserved_stock, available_stock 
-         FROM optical_stocks 
-         WHERE business_id = $1 AND batch_id = $2 
-         FOR UPDATE`,
-        [businessId, batchId]
-      );
+      // Lock optical_stocks row (auto-creates row with 0 stock if not exists)
+      const stock = await StockService.lockAndGetStock(client, businessId, batchId);
 
-      if (stockRes.rows.length === 0) {
-        throw new Error(`No stock entry found for batch ${batchId}`);
-      }
-
-      const currentStock = stockRes.rows[0];
-      const available = parseFloat(currentStock.available_stock || '0');
-
-      if (available < qty) {
-        throw new Error(
-          `Insufficient available stock for batch. Available: ${available} pairs, Required: ${qty} pairs.`
-        );
-      }
-
-      const newReserved = round2(parseFloat(currentStock.reserved_stock || '0') + qty);
-      const newAvailable = round2(parseFloat(currentStock.physical_stock || '0') - newReserved);
+      // Sales beyond available stock allowed per business rule: available stock can become negative
+      const newReserved = round2(stock.reservedStock + qty);
+      const newAvailable = round2(stock.physicalStock - newReserved);
 
       // Update optical_stocks
       await client.query(
         `UPDATE optical_stocks 
          SET reserved_stock = $1, available_stock = $2, updated_at = NOW() 
          WHERE id = $3`,
-        [newReserved.toFixed(2), newAvailable.toFixed(2), currentStock.id]
+        [newReserved.toFixed(2), newAvailable.toFixed(2), stock.stockId]
       );
 
       // Insert stock_reservations
@@ -632,7 +669,7 @@ export class SalesService {
           batchId,
           orderId,
           qty.toFixed(2),
-          parseFloat(currentStock.physical_stock).toFixed(2),
+          stock.physicalStock.toFixed(2),
           userId || null,
         ]
       );
@@ -736,6 +773,9 @@ export class SalesService {
         const gstMode = data.gstMode || 'INTRA_STATE';
         const computedLines = data.lines.map(line => {
           if (line.quantity <= 0) throw new Error('Line quantity must be greater than zero');
+          if (Math.abs(Math.round(line.quantity * 2) - line.quantity * 2) > 0.0001) {
+            throw new Error('Line quantity must be a positive value in steps of 0.5 (e.g. 0.5, 1.0, 1.5, 2.0)');
+          }
           if (line.rate < 0) throw new Error('Line rate cannot be negative');
 
           const taxRes = calculateLineTax({
@@ -829,12 +869,32 @@ export class SalesService {
 
           if (line.batches && line.batches.length > 0) {
             for (const b of line.batches) {
+              if (b.quantity <= 0 || Math.abs(Math.round(b.quantity * 2) - b.quantity * 2) > 0.0001) {
+                throw new Error('Batch allocation quantity must be a positive value in steps of 0.5 (e.g. 0.5, 1.0, 1.5, 2.0)');
+              }
               await client.query(
                 `INSERT INTO sales_order_line_batches (sales_order_line_id, batch_id, quantity)
                  VALUES ($1, $2, $3)`,
                 [lineId, b.batchId, b.quantity.toFixed(2)]
               );
             }
+          } else {
+            // Auto-allocate default batch for items without batch allocation (e.g. non-batch items)
+            const defaultBatch = await findOrCreateOpticalBatch({
+              businessId,
+              uniqueItemId: line.uniqueItemId,
+              sph: 0,
+              cyl: 0,
+              axis: 0,
+              add: 0,
+              side: 'NONE',
+              userId,
+            });
+            await client.query(
+              `INSERT INTO sales_order_line_batches (sales_order_line_id, batch_id, quantity)
+               VALUES ($1, $2, $3)`,
+              [lineId, defaultBatch.batch.id, line.taxRes.quantity.toFixed(2)]
+            );
           }
         }
       }
@@ -1242,10 +1302,13 @@ export class SalesService {
 
     const invoiceDate = new Date(data.invoiceDate || new Date());
     const invoiceNumber = data.invoiceNumber || (await this.generateInvoiceNumber(businessId));
-    const targetStatus = data.status || 'DRAFT';
+    const targetStatus = 'POSTED';
 
     const computedLines = data.lines.map(line => {
       if (line.quantity <= 0) throw new Error('Line quantity must be greater than zero');
+      if (Math.abs(Math.round(line.quantity * 2) - line.quantity * 2) > 0.0001) {
+        throw new Error('Line quantity must be a positive value in steps of 0.5 (e.g. 0.5, 1.0, 1.5, 2.0)');
+      }
       if (line.rate < 0) throw new Error('Line rate cannot be negative');
 
       const discType =
@@ -1305,7 +1368,7 @@ export class SalesService {
           totals.sgstAmount.toFixed(2),
           totals.roundOff.toFixed(2),
           totals.grandTotal.toFixed(2),
-          'DRAFT',
+          'POSTED',
           data.notes || null,
           userId || null,
           userId || null,
@@ -1346,6 +1409,9 @@ export class SalesService {
         if (line.batches && line.batches.length > 0) {
           let batchSum = 0;
           for (const b of line.batches) {
+            if (b.quantity <= 0 || Math.abs(Math.round(b.quantity * 2) - b.quantity * 2) > 0.0001) {
+              throw new Error('Batch allocation quantity must be a positive value in steps of 0.5 (e.g. 0.5, 1.0, 1.5, 2.0)');
+            }
             batchSum += b.quantity;
             await client.query(
               `INSERT INTO sales_invoice_line_batches (sales_invoice_line_id, batch_id, quantity)
@@ -1356,6 +1422,23 @@ export class SalesService {
           if (round2(batchSum) !== round2(line.quantity)) {
             throw new Error(`Allocated batch quantity (${batchSum}) does not match line quantity (${line.quantity})`);
           }
+        } else {
+          // Auto-allocate default batch for items without batch allocation (e.g. non-batch items)
+          const defaultBatch = await findOrCreateOpticalBatch({
+            businessId,
+            uniqueItemId: line.uniqueItemId,
+            sph: 0,
+            cyl: 0,
+            axis: 0,
+            add: 0,
+            side: 'NONE',
+            userId,
+          });
+          await client.query(
+            `INSERT INTO sales_invoice_line_batches (sales_invoice_line_id, batch_id, quantity)
+             VALUES ($1, $2, $3)`,
+            [lineId, defaultBatch.batch.id, line.taxRes.quantity.toFixed(2)]
+          );
         }
       }
 
@@ -1492,6 +1575,9 @@ export class SalesService {
 
       const computedLines = data.lines.map(line => {
         if (line.quantity <= 0) throw new Error('Line quantity must be greater than zero');
+        if (Math.abs(Math.round(line.quantity * 2) - line.quantity * 2) > 0.0001) {
+          throw new Error('Line quantity must be a positive value in steps of 0.5 (e.g. 0.5, 1.0, 1.5, 2.0)');
+        }
         if (line.rate < 0) throw new Error('Line rate cannot be negative');
 
         const discType =
@@ -1547,10 +1633,9 @@ export class SalesService {
           grand_total = $13,
           status = $14,
           notes = $15,
-          payment_terms = $16,
-          updated_by = $17,
+          updated_by = $16,
           updated_at = NOW()
-        WHERE business_id = $18 AND id = $19`,
+        WHERE business_id = $17 AND id = $18`,
         [
           data.partyId,
           invoiceDate,
@@ -1567,7 +1652,6 @@ export class SalesService {
           totals.grandTotal.toFixed(2),
           targetStatus,
           data.notes || null,
-          data.paymentTerms || existingInv.payment_terms || null,
           userId || null,
           businessId,
           invoiceId,
@@ -1606,6 +1690,9 @@ export class SalesService {
         if (line.batches && line.batches.length > 0) {
           let batchSum = 0;
           for (const b of line.batches) {
+            if (b.quantity <= 0 || Math.abs(Math.round(b.quantity * 2) - b.quantity * 2) > 0.0001) {
+              throw new Error('Batch allocation quantity must be a positive value in steps of 0.5 (e.g. 0.5, 1.0, 1.5, 2.0)');
+            }
             batchSum += b.quantity;
             await client.query(
               `INSERT INTO sales_invoice_line_batches (sales_invoice_line_id, batch_id, quantity)
@@ -1616,6 +1703,23 @@ export class SalesService {
           if (round2(batchSum) !== round2(line.quantity)) {
             throw new Error(`Allocated batch quantity (${batchSum}) does not match line quantity (${line.quantity})`);
           }
+        } else {
+          // Auto-allocate default batch for items without batch allocation (e.g. non-batch items)
+          const defaultBatch = await findOrCreateOpticalBatch({
+            businessId,
+            uniqueItemId: line.uniqueItemId,
+            sph: 0,
+            cyl: 0,
+            axis: 0,
+            add: 0,
+            side: 'NONE',
+            userId,
+          });
+          await client.query(
+            `INSERT INTO sales_invoice_line_batches (sales_invoice_line_id, batch_id, quantity)
+             VALUES ($1, $2, $3)`,
+            [lineId, defaultBatch.batch.id, line.taxRes.quantity.toFixed(2)]
+          );
         }
       }
 
@@ -1667,6 +1771,36 @@ export class SalesService {
     );
     const invoice = invRes.rows[0];
 
+    // Auto-allocate default batch for lines that do not have batches yet
+    const allLinesRes = await client.query(
+      `SELECT id, unique_item_id, quantity FROM sales_invoice_lines WHERE sales_invoice_id = $1`,
+      [invoiceId]
+    );
+
+    for (const l of allLinesRes.rows) {
+      const bRes = await client.query(
+        `SELECT id FROM sales_invoice_line_batches WHERE sales_invoice_line_id = $1 LIMIT 1`,
+        [l.id]
+      );
+      if (bRes.rows.length === 0) {
+        const defaultBatch = await findOrCreateOpticalBatch({
+          businessId,
+          uniqueItemId: l.unique_item_id,
+          sph: 0,
+          cyl: 0,
+          axis: 0,
+          add: 0,
+          side: 'NONE',
+          userId,
+        });
+        await client.query(
+          `INSERT INTO sales_invoice_line_batches (sales_invoice_line_id, batch_id, quantity)
+           VALUES ($1, $2, $3)`,
+          [l.id, defaultBatch.batch.id, parseFloat(l.quantity).toFixed(2)]
+        );
+      }
+    }
+
     const linesRes = await client.query(
       `SELECT sil.id, sil.unique_item_id, sil.rate, silb.batch_id, silb.quantity as batch_qty
        FROM sales_invoice_lines sil
@@ -1685,38 +1819,19 @@ export class SalesService {
       const uniqueItemId = row.unique_item_id;
       const lineRate = parseFloat(row.rate);
 
-      // Lock optical_stocks row
-      const stockRes = await client.query(
-        `SELECT id, physical_stock, reserved_stock, available_stock 
-         FROM optical_stocks 
-         WHERE business_id = $1 AND batch_id = $2 
-         FOR UPDATE`,
-        [businessId, batchId]
-      );
+      // Lock optical_stocks row (auto-creates row with 0 stock if not exists)
+      const stock = await StockService.lockAndGetStock(client, businessId, batchId);
 
-      if (stockRes.rows.length === 0) {
-        throw new Error(`Stock record not found for optical batch ${batchId}`);
-      }
-
-      const cur = stockRes.rows[0];
-      const avail = parseFloat(cur.available_stock || '0');
-      const phys = parseFloat(cur.physical_stock || '0');
-
-      if (avail < qty) {
-        throw new Error(
-          `Insufficient available stock for batch. Available: ${avail} pairs, Required: ${qty} pairs.`
-        );
-      }
-
-      const newPhys = round2(phys - qty);
-      const newAvail = round2(newPhys - parseFloat(cur.reserved_stock || '0'));
+      // Negative inventory allowed: physical and available stock can drop below zero
+      const newPhys = round2(stock.physicalStock - qty);
+      const newAvail = round2(newPhys - stock.reservedStock);
 
       // Update physical stock
       await client.query(
         `UPDATE optical_stocks 
          SET physical_stock = $1, available_stock = $2, updated_at = NOW() 
          WHERE id = $3`,
-        [newPhys.toFixed(2), newAvail.toFixed(2), cur.id]
+        [newPhys.toFixed(2), newAvail.toFixed(2), stock.stockId]
       );
 
       // Stock Ledger entry
@@ -1878,6 +1993,10 @@ export class SalesService {
 
       if (data.lines && data.lines.length > 0) {
         linesToConvert = data.lines.map(l => {
+          if (l.quantity <= 0) throw new Error('Line quantity must be greater than zero');
+          if (Math.abs(Math.round(l.quantity * 2) - l.quantity * 2) > 0.0001) {
+            throw new Error('Line quantity must be a positive value in steps of 0.5 (e.g. 0.5, 1.0, 1.5, 2.0)');
+          }
           const discType =
             l.discountType || (l.discountPercent !== undefined && l.discountPercent > 0 ? 'PERCENTAGE' : 'NONE');
           const discVal = l.discountValue !== undefined ? l.discountValue : (l.discountPercent ?? 0);
@@ -1998,42 +2117,46 @@ export class SalesService {
 
         const lineId = lineRes.rows[0].id;
 
-        if (line.batches) {
-          for (const b of line.batches) {
-            await client.query(
-              `INSERT INTO sales_invoice_line_batches (sales_invoice_line_id, batch_id, quantity)
-               VALUES ($1, $2, $3)`,
-              [lineId, b.batchId, b.quantity.toFixed(2)]
-            );
+        const batchesToConvert = (line.batches && line.batches.length > 0)
+          ? line.batches
+          : [{
+              batchId: (await findOrCreateOpticalBatch({
+                businessId,
+                uniqueItemId: line.uniqueItemId,
+                sph: 0,
+                cyl: 0,
+                axis: 0,
+                add: 0,
+                side: 'NONE',
+                userId,
+              })).batch.id,
+              quantity: line.taxRes.quantity,
+            }];
 
-            // Convert / consume the reservation
-            const batchId = b.batchId;
-            const convQty = b.quantity;
+        for (const b of batchesToConvert) {
+          await client.query(
+            `INSERT INTO sales_invoice_line_batches (sales_invoice_line_id, batch_id, quantity)
+             VALUES ($1, $2, $3)`,
+            [lineId, b.batchId, b.quantity.toFixed(2)]
+          );
 
-            // Lock optical_stocks
-            const stockRes = await client.query(
-              `SELECT id, physical_stock, reserved_stock, available_stock 
-               FROM optical_stocks 
-               WHERE business_id = $1 AND batch_id = $2 
-               FOR UPDATE`,
-              [businessId, batchId]
-            );
+          // Convert / consume the reservation
+          const batchId = b.batchId;
+          const convQty = b.quantity;
 
-            if (stockRes.rows.length === 0) {
-              throw new Error(`Stock record not found for batch ${batchId}`);
-            }
+          // Lock optical_stocks row (auto-creates if missing)
+          const stock = await StockService.lockAndGetStock(client, businessId, batchId);
 
-            const cur = stockRes.rows[0];
-            const newPhys = round2(parseFloat(cur.physical_stock) - convQty);
-            const newRes = round2(Math.max(0, parseFloat(cur.reserved_stock) - convQty));
-            const newAvail = round2(newPhys - newRes);
+          const newPhys = round2(stock.physicalStock - convQty);
+          const newRes = round2(Math.max(0, stock.reservedStock - convQty));
+          const newAvail = round2(newPhys - newRes);
 
-            await client.query(
-              `UPDATE optical_stocks 
-               SET physical_stock = $1, reserved_stock = $2, available_stock = $3, updated_at = NOW() 
-               WHERE id = $4`,
-              [newPhys.toFixed(2), newRes.toFixed(2), newAvail.toFixed(2), cur.id]
-            );
+          await client.query(
+            `UPDATE optical_stocks 
+             SET physical_stock = $1, reserved_stock = $2, available_stock = $3, updated_at = NOW() 
+             WHERE id = $4`,
+            [newPhys.toFixed(2), newRes.toFixed(2), newAvail.toFixed(2), stock.stockId]
+          );
 
             // Update reservation record
             const resRec = await client.query(
@@ -2087,7 +2210,6 @@ export class SalesService {
             await this.updatePartyItemPriceInTx(client, businessId, order.party_id, line.uniqueItemId, line.rate);
           }
         }
-      }
 
       // Customer Ledger entry
       const grandTotal = totals.grandTotal;
@@ -2585,9 +2707,17 @@ export class SalesService {
         .select({
           lineBatch: salesInvoiceLineBatches,
           batch: opticalBatches,
+          stock: opticalStocks,
         })
         .from(salesInvoiceLineBatches)
         .innerJoin(opticalBatches, eq(salesInvoiceLineBatches.batchId, opticalBatches.id))
+        .leftJoin(
+          opticalStocks,
+          and(
+            eq(opticalStocks.batchId, opticalBatches.id),
+            eq(opticalStocks.businessId, businessId)
+          )
+        )
         .where(inArray(salesInvoiceLineBatches.salesInvoiceLineId, lineIds));
     }
 
@@ -2597,7 +2727,12 @@ export class SalesService {
       if (!batchMap.has(lid)) batchMap.set(lid, []);
       batchMap.get(lid)!.push({
         ...b.lineBatch,
-        batch: b.batch,
+        batch: {
+          ...b.batch,
+          physicalStock: b.stock?.physicalStock,
+          reservedStock: b.stock?.reservedStock,
+          availableStock: b.stock?.availableStock,
+        },
       });
     }
 

@@ -300,32 +300,41 @@ export const VoucherItemGrid: React.FC<VoucherItemGridProps> = ({
                               onBatchClick(idx);
                             }
                           }}
-                          className="w-full text-right py-1 px-2 text-xs font-mono font-bold text-blue-900 bg-blue-50/40 hover:bg-blue-100/60 focus:bg-blue-100/80 focus:ring-2 focus:ring-blue-600 rounded-xs cursor-pointer select-none flex items-center justify-end gap-1"
+                          className={`w-full text-right py-1 px-2 text-xs font-mono font-bold ${
+                            Number(line.quantity || 0) < 0 ? 'text-rose-600 bg-rose-50/60' : 'text-blue-900 bg-blue-50/40'
+                          } hover:bg-blue-100/60 focus:bg-blue-100/80 focus:ring-2 focus:ring-blue-600 rounded-xs cursor-pointer select-none flex items-center justify-end gap-1`}
                           title="Quantity is calculated from batch allocations. Click or press Enter to edit allocations."
                         >
-                          <span>{Number(line.quantity || 0).toFixed(2)}</span>
-                          <span className="text-[9px] text-blue-600 font-sans font-normal">
-                            PRS
+                          <span className={Number(line.quantity || 0) < 0 ? 'text-rose-600 font-bold' : ''}>{Number(line.quantity || 0).toFixed(2)}</span>
+                          <span className={`text-[9px] font-sans font-normal uppercase ${Number(line.quantity || 0) < 0 ? 'text-rose-500' : 'text-blue-600'}`}>
+                            {line.unit || 'PRS'}
                           </span>
                         </div>
                       ) : (
-                        <input
-                          ref={el => setRef(idx, 'qty', el)}
-                          type="number"
-                          min="0.5"
-                          step="0.5"
-                          value={line.quantity !== undefined && line.quantity !== null ? line.quantity : ''}
-                          onChange={e =>
-                            onQuantityChange(idx, parseFloat(e.target.value) || 0)
-                          }
-                          onKeyDown={e => {
-                            if (e.key === 'Enter') {
-                              e.preventDefault();
-                              focusCell(idx, 'rate');
-                            }
-                          }}
-                          className="w-full text-right py-1 px-2 text-xs font-mono font-bold text-slate-900 border-0 bg-transparent hover:bg-slate-50 focus:bg-white focus:ring-2 focus:ring-blue-600 rounded-xs"
-                        />
+                        <div className="relative flex items-center">
+                          <input
+                            ref={el => setRef(idx, 'qty', el)}
+                            type="number"
+                            min={(line.unit || 'PRS').toUpperCase() === 'PCS' ? '1' : '0.5'}
+                            step={(line.unit || 'PRS').toUpperCase() === 'PCS' ? '1' : '0.5'}
+                            value={line.quantity !== undefined && line.quantity !== null ? line.quantity : ''}
+                            onChange={e => {
+                              const val = parseFloat(e.target.value) || 0;
+                              const isPcs = (line.unit || 'PRS').toUpperCase() === 'PCS';
+                              onQuantityChange(idx, isPcs ? Math.round(val) : val);
+                            }}
+                            onKeyDown={e => {
+                              if (e.key === 'Enter') {
+                                e.preventDefault();
+                                focusCell(idx, 'rate');
+                              }
+                            }}
+                            className="w-full text-right py-1 pr-7 pl-2 text-xs font-mono font-bold text-slate-900 border-0 bg-transparent hover:bg-slate-50 focus:bg-white focus:ring-2 focus:ring-blue-600 rounded-xs"
+                          />
+                          <span className="absolute right-1 text-[9px] text-slate-400 font-sans pointer-events-none uppercase">
+                            {line.unit || 'PRS'}
+                          </span>
+                        </div>
                       )}
                     </td>
 
@@ -480,8 +489,10 @@ export const VoucherItemGrid: React.FC<VoucherItemGridProps> = ({
                           </td>
 
                           {/* Batch Allocation Qty */}
-                          <td className="py-1 px-2 text-right font-mono font-bold text-blue-700">
-                            {batchQty.toFixed(2)} PRS
+                          <td className={`py-1 px-2 text-right font-mono font-bold ${
+                            batchQty < 0 ? 'text-rose-600 bg-rose-50/50' : 'text-blue-700'
+                          }`}>
+                            {batchQty.toFixed(2)} {line.unit || 'PRS'}
                           </td>
 
                           {/* Batch Rate */}

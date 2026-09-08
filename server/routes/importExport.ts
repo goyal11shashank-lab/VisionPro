@@ -53,6 +53,8 @@ function getImportPermission(type: ImportType): string {
       return 'import.opening_stock';
     case 'OPTICAL_BATCH':
       return 'inventory:create';
+    case 'STOCK_ITEM':
+      return 'master:create';
     default:
       return 'import.view';
   }
@@ -65,13 +67,13 @@ function getImportPermission(type: ImportType): string {
 router.get(
   '/templates/:type',
   authenticateToken,
-  requireAnyPermission(['import.view', 'import:view', 'inventory:view', 'inventory:create']),
+  requireAnyPermission(['import.view', 'import:view', 'inventory:view', 'inventory:create', 'master:view', 'master:create']),
   async (req: Request, res: Response) => {
     try {
       const type = (req.params.type || '').toUpperCase() as ImportType;
       const def = TEMPLATE_DEFINITIONS[type];
       if (!def) {
-        return res.status(400).json({ error: `Invalid import type "${req.params.type}". Supported types: PARTY, PURCHASE, SALES_ORDER, SALES_INVOICE, OPENING_STOCK, OPTICAL_BATCH` });
+        return res.status(400).json({ error: `Invalid import type "${req.params.type}". Supported types: PARTY, PURCHASE, SALES_ORDER, SALES_INVOICE, OPENING_STOCK, OPTICAL_BATCH, STOCK_ITEM` });
       }
 
       const buffer = ExcelTemplateService.generateTemplateWorkbook(type);
@@ -133,7 +135,7 @@ router.post(
 
       const importType = (req.body.importType || '').toUpperCase() as ImportType;
       if (!TEMPLATE_DEFINITIONS[importType]) {
-        return res.status(400).json({ error: `Invalid importType "${importType}". Allowed: PARTY, PURCHASE, SALES_ORDER, SALES_INVOICE, OPENING_STOCK, OPTICAL_BATCH` });
+        return res.status(400).json({ error: `Invalid importType "${importType}". Allowed: PARTY, PURCHASE, SALES_ORDER, SALES_INVOICE, OPENING_STOCK, OPTICAL_BATCH, STOCK_ITEM` });
       }
 
       // Read spreadsheet buffer
@@ -168,12 +170,15 @@ router.post(
         columnMapping = mappingDetection.columnMapping;
       }
 
+      const importMode = (req.body.importMode || 'CREATE_ONLY').toUpperCase() as 'CREATE_ONLY' | 'UPSERT';
+
       // Run deep validation
       const validation = await ImportValidationService.validateImportData(
         businessId,
         importType,
         rawRows,
-        columnMapping
+        columnMapping,
+        { importMode }
       );
 
       // Create import session in database
@@ -246,12 +251,14 @@ router.post(
 
       const prevPreview = session.previewData as any;
       const rawRows = (prevPreview?.rows || []).map((r: any) => r.raw);
+      const importMode = (req.body.importMode || prevPreview?.importMode || 'CREATE_ONLY').toUpperCase() as 'CREATE_ONLY' | 'UPSERT';
 
       const validation = await ImportValidationService.validateImportData(
         businessId,
         session.importType as ImportType,
         rawRows,
-        columnMapping || (session.columnMapping as any)
+        columnMapping || (session.columnMapping as any),
+        { importMode }
       );
 
       await db

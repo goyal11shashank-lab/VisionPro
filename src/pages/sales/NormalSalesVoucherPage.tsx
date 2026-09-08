@@ -113,13 +113,32 @@ export const NormalSalesVoucherPage: React.FC<Props> = ({ onNavigate, onSuccess,
         try {
           const inv = await apiRequest<any>(`/api/sales/invoices/${editInvoiceId}`);
           if (inv) {
-            setSelectedPartyId(inv.partyId || '');
-            setSelectedParty(inv.party || null);
+            const partyId = inv.partyId || '';
+            setSelectedPartyId(partyId);
+            const foundParty = validCustomers.find((p: any) => p.id === partyId) || inv.party || null;
+            setSelectedParty(foundParty);
+            if (partyId) {
+              apiRequest<any>(`/api/sales/parties/${partyId}/credit-check`)
+                .then(creditRes => setPartyCreditInfo(creditRes))
+                .catch(err => console.error('Credit check error:', err));
+            }
+
             setInvoiceNumber(inv.invoiceNumber || '');
             if (inv.invoiceDate) setInvoiceDate(inv.invoiceDate.split('T')[0]);
             if (inv.dueDate) setDueDate(inv.dueDate.split('T')[0]);
             if (inv.gstMode) setGstMode(inv.gstMode);
-            if (inv.notes) setNotes(inv.notes);
+            if (inv.paymentTerms) setPaymentTerms(inv.paymentTerms);
+            if (inv.notes) {
+              setNotes(inv.notes);
+              const refMatch = inv.notes.match(/Ref:\s*([^|]+)/i);
+              if (refMatch && refMatch[1]) {
+                setReferenceNumber(refMatch[1].trim());
+              }
+              const payModeMatch = inv.notes.match(/Payment Mode:\s*([^|]+)/i);
+              if (payModeMatch && payModeMatch[1]) {
+                setPaymentMode(payModeMatch[1].trim());
+              }
+            }
 
             const loadedLines: VoucherLineItem[] = (inv.lines || []).map((l: any, i: number) => ({
               id: `row-${i}-${l.id || i}`,
@@ -128,6 +147,7 @@ export const NormalSalesVoucherPage: React.FC<Props> = ({ onNavigate, onSuccess,
               uniqueItemCode: l.uniqueItem?.code || '',
               categoryCode: l.category?.code || l.uniqueItem?.categoryCode || 'SV',
               maintainBatches: l.uniqueItem?.maintainBatches !== false,
+              unit: l.uniqueItem?.unit || 'PRS',
               quantity: parseFloat(l.quantity) || 1,
               rate: parseFloat(l.rate) || 0,
               discountType: l.discountType || 'NONE',
@@ -150,8 +170,9 @@ export const NormalSalesVoucherPage: React.FC<Props> = ({ onNavigate, onSuccess,
             setLines(ensureTrailingBlankRow(loadedLines, 'row'));
             return;
           }
-        } catch (err) {
+        } catch (err: any) {
           console.error('Failed to load edit invoice:', err);
+          setFormError(err.message || 'Failed to load invoice for editing');
         }
       }
 
@@ -167,7 +188,7 @@ export const NormalSalesVoucherPage: React.FC<Props> = ({ onNavigate, onSuccess,
 
   useEffect(() => {
     loadPrerequisites();
-  }, [currentBusiness?.id]);
+  }, [currentBusiness?.id, editInvoiceId]);
 
   // Handle party change & auto-detect GST mode + credit check
   const handlePartyChange = async (partyId: string) => {
@@ -279,6 +300,7 @@ export const NormalSalesVoucherPage: React.FC<Props> = ({ onNavigate, onSuccess,
               uniqueItemName: item.name,
               uniqueItemCode: item.code,
               categoryCode: item.categoryCode || item.category?.code || 'SV',
+              unit: (item as any).unit || 'PRS',
               maintainBatches: itemMaintainBatches,
               rate: prefilledRate,
               gstRate:
@@ -580,12 +602,8 @@ export const NormalSalesVoucherPage: React.FC<Props> = ({ onNavigate, onSuccess,
         gstMode: gstMode,
         status: targetStatus,
         notes: notes.trim()
-          ? `${notes.trim()} | Payment Mode: ${paymentMode} | Terms: ${paymentTerms}${
-              referenceNumber ? ` | Ref: ${referenceNumber}` : ''
-            }`
-          : `Payment Mode: ${paymentMode} | Terms: ${paymentTerms}${
-              referenceNumber ? ` | Ref: ${referenceNumber}` : ''
-            }`,
+          ? `${notes.trim()}${referenceNumber ? ` | Ref: ${referenceNumber}` : ''}`
+          : (referenceNumber ? `Ref: ${referenceNumber}` : undefined),
         lines: nonBlankLines.map(l => ({
           uniqueItemId: l.uniqueItemId,
           quantity: l.quantity,
@@ -619,9 +637,6 @@ export const NormalSalesVoucherPage: React.FC<Props> = ({ onNavigate, onSuccess,
 
       setCreatedInvoice(result);
       setShowPrintModal(true);
-      if (onSuccess) {
-        onSuccess(result.id);
-      }
     } catch (err: any) {
       console.error('Save invoice error:', err);
       setFormError(
@@ -664,6 +679,7 @@ export const NormalSalesVoucherPage: React.FC<Props> = ({ onNavigate, onSuccess,
       {/* 1. Tally-style Voucher Header */}
       <VoucherHeader
         voucherType="SALES"
+        isEditing={!!editInvoiceId}
         voucherNumber={invoiceNumber}
         onVoucherNumberChange={setInvoiceNumber}
         voucherDate={invoiceDate}
@@ -674,8 +690,13 @@ export const NormalSalesVoucherPage: React.FC<Props> = ({ onNavigate, onSuccess,
         partyBalance={
           partyCreditInfo
             ? {
-                balance: parseFloat(partyCreditInfo.outstandingBalance || 0),
-                type: 'Dr',
+                balance: Math.abs(
+                  parseFloat(partyCreditInfo.currentBalance ?? partyCreditInfo.outstandingBalance ?? 0)
+                ),
+                type:
+                  parseFloat(partyCreditInfo.currentBalance ?? partyCreditInfo.outstandingBalance ?? 0) < 0
+                    ? 'Cr'
+                    : 'Dr',
                 isOverLimit: partyCreditInfo.isCreditLimitExceeded,
                 creditLimit: partyCreditInfo.creditLimit,
               }
@@ -685,13 +706,7 @@ export const NormalSalesVoucherPage: React.FC<Props> = ({ onNavigate, onSuccess,
         onGstModeChange={setGstMode}
         referenceNumber={referenceNumber}
         onReferenceNumberChange={setReferenceNumber}
-        barcodeInput={barcodeInput}
-        onBarcodeInput={setBarcodeInput}
-        onBarcodeSubmit={handleBarcodeLookup}
-        barcodeLoading={barcodeLoading}
-        barcodeMsg={barcodeMsg}
         submitting={submitting}
-        onSaveDraft={() => handleSaveVoucher('DRAFT')}
         onSavePost={() => handleSaveVoucher('POSTED')}
         onBack={() => (onBack ? onBack() : onNavigate ? onNavigate('/sales/invoices') : window.history.back())}
       />
@@ -754,15 +769,19 @@ export const NormalSalesVoucherPage: React.FC<Props> = ({ onNavigate, onSuccess,
         gstMode={gstMode}
         narration={notes}
         onNarrationChange={setNotes}
-        paymentMode={paymentMode}
-        onPaymentModeChange={setPaymentMode}
-        paymentTerms={paymentTerms}
-        onPaymentTermsChange={terms => {
-          setPaymentTerms(terms);
-          updateDueDate(invoiceDate, terms);
-        }}
-        dueDate={dueDate}
-        onDueDateChange={setDueDate}
+        previousBalance={
+          partyCreditInfo
+            ? {
+                balance: Math.abs(
+                  parseFloat(partyCreditInfo.currentBalance ?? partyCreditInfo.outstandingBalance ?? 0)
+                ),
+                type:
+                  parseFloat(partyCreditInfo.currentBalance ?? partyCreditInfo.outstandingBalance ?? 0) < 0
+                    ? 'Cr'
+                    : 'Dr',
+              }
+            : undefined
+        }
         errorMessage={formError}
       />
 
@@ -782,6 +801,7 @@ export const NormalSalesVoucherPage: React.FC<Props> = ({ onNavigate, onSuccess,
           itemCode={activeBatchLine.uniqueItemCode}
           uniqueItemId={activeBatchLine.uniqueItemId}
           categoryCode={activeBatchLine.categoryCode}
+          unit={activeBatchLine.unit}
           initialBatches={activeBatchLine.batches}
           availableBatches={activeBatchLine.availableBatches || []}
           lineQuantity={activeBatchLine.quantity}
@@ -803,7 +823,7 @@ export const NormalSalesVoucherPage: React.FC<Props> = ({ onNavigate, onSuccess,
                 </div>
                 <div>
                   <h3 className="text-base font-bold text-slate-900">
-                    Sales Voucher Saved Successfully!
+                    {editInvoiceId ? 'Sales Voucher Updated Successfully!' : 'Sales Voucher Saved Successfully!'}
                   </h3>
                   <p className="text-xs text-slate-500 font-mono">
                     Voucher #{createdInvoice.invoiceNumber} • Status: {createdInvoice.status}
@@ -811,7 +831,14 @@ export const NormalSalesVoucherPage: React.FC<Props> = ({ onNavigate, onSuccess,
                 </div>
               </div>
               <button
-                onClick={() => setShowPrintModal(false)}
+                onClick={() => {
+                  setShowPrintModal(false);
+                  if (onSuccess && createdInvoice?.id) {
+                    onSuccess(createdInvoice.id);
+                  } else if (onBack) {
+                    onBack();
+                  }
+                }}
                 className="text-slate-400 hover:text-slate-700 font-bold p-1"
               >
                 ✕
@@ -858,18 +885,48 @@ export const NormalSalesVoucherPage: React.FC<Props> = ({ onNavigate, onSuccess,
               </button>
 
               <div className="flex items-center gap-2">
-                <button
-                  id="btn-create-another-voucher"
-                  onClick={handleResetForm}
-                  className="px-3.5 py-1.5 text-xs font-semibold text-blue-700 bg-blue-50 hover:bg-blue-100 rounded border border-blue-200 transition-colors"
-                >
-                  Create Another Voucher
-                </button>
+                {editInvoiceId ? (
+                  <button
+                    id="btn-back-to-invoices"
+                    onClick={() => {
+                      setShowPrintModal(false);
+                      if (onSuccess && createdInvoice?.id) {
+                        onSuccess(createdInvoice.id);
+                      } else if (onBack) {
+                        onBack();
+                      } else if (onNavigate) {
+                        onNavigate('/sales/invoices');
+                      } else {
+                        window.history.back();
+                      }
+                    }}
+                    className="px-3.5 py-1.5 text-xs font-semibold text-slate-700 bg-slate-100 hover:bg-slate-200 rounded border border-slate-300 transition-colors"
+                  >
+                    Back to Invoices
+                  </button>
+                ) : (
+                  <button
+                    id="btn-create-another-voucher"
+                    onClick={handleResetForm}
+                    className="px-3.5 py-1.5 text-xs font-semibold text-blue-700 bg-blue-50 hover:bg-blue-100 rounded border border-blue-200 transition-colors"
+                  >
+                    Create Another Voucher
+                  </button>
+                )}
                 <button
                   id="btn-go-to-invoices-register"
-                  onClick={() =>
-                    onNavigate ? onNavigate('/sales/invoices') : window.history.back()
-                  }
+                  onClick={() => {
+                    setShowPrintModal(false);
+                    if (onSuccess && createdInvoice?.id) {
+                      onSuccess(createdInvoice.id);
+                    } else if (onBack) {
+                      onBack();
+                    } else if (onNavigate) {
+                      onNavigate('/sales/invoices');
+                    } else {
+                      window.history.back();
+                    }
+                  }}
                   className="px-4 py-1.5 text-xs font-bold text-white bg-blue-600 hover:bg-blue-700 rounded transition-colors shadow-xs"
                 >
                   View Invoices Register

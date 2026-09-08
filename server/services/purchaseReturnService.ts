@@ -315,6 +315,9 @@ export class PurchaseReturnService {
         if (returnQty <= 0) {
           throw new Error(`Line ${i + 1}: Return quantity must be greater than 0`);
         }
+        if (Math.abs(Math.round(returnQty * 2) - returnQty * 2) > 0.0001) {
+          throw new Error(`Line ${i + 1}: Return quantity must be a positive value in steps of 0.5 (e.g. 0.5, 1.0, 1.5, 2.0)`);
+        }
 
         const origLineQty = parseFloat(origLine.quantity);
         const alreadyReturned = cumulativeLineReturned.get(reqLine.purchaseInvoiceLineId) || 0;
@@ -339,6 +342,9 @@ export class PurchaseReturnService {
           const bQty = round2(b.quantity);
           if (bQty <= 0) {
             throw new Error(`Line ${i + 1}: Batch return quantity must be greater than 0`);
+          }
+          if (Math.abs(Math.round(bQty * 2) - bQty * 2) > 0.0001) {
+            throw new Error(`Line ${i + 1}: Batch return quantity must be a positive value in steps of 0.5 (e.g. 0.5, 1.0, 1.5, 2.0)`);
           }
           sumBatchQty = round2(sumBatchQty + bQty);
 

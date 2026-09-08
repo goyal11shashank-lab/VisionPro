@@ -47,6 +47,7 @@ export interface DocumentGroup {
 
 export interface ValidationResult {
   importType: ImportType;
+  importMode?: 'CREATE_ONLY' | 'UPSERT';
   totalRows: number;
   validRows: number;
   invalidRows: number;
@@ -65,13 +66,15 @@ export class ImportValidationService {
     businessId: string,
     importType: ImportType,
     rawRows: Record<string, any>[],
-    columnMapping: Record<string, string>
+    columnMapping: Record<string, string>,
+    options: { importMode?: 'CREATE_ONLY' | 'UPSERT' } = {}
   ): Promise<ValidationResult> {
+    const importMode = options.importMode || 'CREATE_ONLY';
     const rows: ValidatedRow[] = [];
     const allErrors: ImportError[] = [];
 
     // Pre-fetch reference data for this business to do ultra-fast in-memory validation
-    const [partyList, itemList, categoryList] = await Promise.all([
+    const [partyList, itemList, categoryList, allUniqueItemsList, allPrimaryItemsList] = await Promise.all([
       db.select().from(parties).where(eq(parties.businessId, businessId)),
       db
         .select({
@@ -90,6 +93,12 @@ export class ImportValidationService {
         .select()
         .from(categories)
         .where(or(eq(categories.businessId, businessId), sql`${categories.businessId} IS NULL`)),
+      importType === 'STOCK_ITEM'
+        ? db.select().from(uniqueItems).where(eq(uniqueItems.businessId, businessId))
+        : Promise.resolve([]),
+      importType === 'STOCK_ITEM'
+        ? db.select().from(primaryItems).where(eq(primaryItems.businessId, businessId))
+        : Promise.resolve([]),
     ]);
 
     const partyMapByName = new Map<string, typeof parties.$inferSelect>();
@@ -109,6 +118,29 @@ export class ImportValidationService {
     const categoryMapById = new Map<string, typeof categories.$inferSelect>();
     for (const cat of categoryList) {
       categoryMapById.set(cat.id, cat);
+    }
+
+    const stockItemByCode = new Map<string, typeof uniqueItems.$inferSelect>();
+    for (const item of allUniqueItemsList) {
+      if (item.code) stockItemByCode.set(item.code.trim().toUpperCase(), item);
+    }
+
+    const primaryItemByName = new Map<string, typeof primaryItems.$inferSelect>();
+    const primaryItemByCode = new Map<string, typeof primaryItems.$inferSelect>();
+    for (const pi of allPrimaryItemsList) {
+      primaryItemByName.set(pi.name.trim().toLowerCase(), pi);
+      if (pi.code) primaryItemByCode.set(pi.code.trim().toLowerCase(), pi);
+    }
+
+    const batchCountMap = new Map<string, number>();
+    if (importType === 'STOCK_ITEM') {
+      const bcRes = await pool.query(
+        `SELECT unique_item_id, COUNT(*)::int as batch_count FROM optical_batches WHERE business_id = $1 GROUP BY unique_item_id`,
+        [businessId]
+      );
+      for (const r of bcRes.rows) {
+        batchCountMap.set(r.unique_item_id, r.batch_count);
+      }
     }
 
     // Step 1: Map and Validate each row individually
@@ -205,6 +237,20 @@ export class ImportValidationService {
           );
           break;
         }
+        case 'STOCK_ITEM': {
+          resolvedData = await this.validateStockItemRow(
+            businessId,
+            rowNumber,
+            mapped,
+            stockItemByCode,
+            primaryItemByName,
+            primaryItemByCode,
+            batchCountMap,
+            importMode,
+            rowErrors
+          );
+          break;
+        }
       }
 
       const hasFatalErrors = rowErrors.some(e => e.severity === 'ERROR');
@@ -236,6 +282,7 @@ export class ImportValidationService {
 
     return {
       importType,
+      importMode,
       totalRows,
       validRows,
       invalidRows,
@@ -570,8 +617,8 @@ export class ImportValidationService {
             row: rowNumber,
             field: 'quantity',
             value: mapped.quantity,
-            severity: 'ERROR',
-            message: `Insufficient available stock for Batch ${existingBatch.barcode}. Required: ${resolved.quantity} pairs, Available: ${available} pairs.`,
+            severity: 'WARNING',
+            message: `Warning: Available stock is insufficient for Batch ${existingBatch.barcode}. Required: ${resolved.quantity} pairs, Available: ${available} pairs. Inventory will become negative upon sale.`,
           });
         }
       }
@@ -612,6 +659,8 @@ export class ImportValidationService {
       const qty = Number(mapped.quantity);
       if (isNaN(qty) || qty <= 0) {
         errors.push({ row: rowNumber, field: 'quantity', value: mapped.quantity, severity: 'ERROR', message: 'Quantity must be a positive number greater than 0.' });
+      } else if (Math.abs(Math.round(qty * 2) - qty * 2) > 0.0001) {
+        errors.push({ row: rowNumber, field: 'quantity', value: mapped.quantity, severity: 'ERROR', message: 'Quantity must be in steps of 0.5 pairs or pieces (e.g. 0.5, 1.0, 1.5, 2.0).' });
       } else {
         resolved.quantity = qty;
       }
@@ -784,6 +833,14 @@ export class ImportValidationService {
           value: qtyInput,
           severity: 'ERROR',
           message: `Opening stock quantity must be a positive number or zero (e.g. 10, 0.5, 1.5). Received "${qtyInput}".`,
+        });
+      } else if (qtyNum > 0 && Math.abs(Math.round(qtyNum * 2) - qtyNum * 2) > 0.0001) {
+        errors.push({
+          row: rowNumber,
+          field: 'opening_stock_quantity',
+          value: qtyInput,
+          severity: 'ERROR',
+          message: `Opening stock quantity must be in steps of 0.5 (e.g. 0.5, 1.0, 1.5, 2.0). Received "${qtyInput}".`,
         });
       } else {
         resolved.openingStockQuantity = qtyNum;
@@ -1172,6 +1229,8 @@ export class ImportValidationService {
       const qty = Number(mapped.quantity);
       if (isNaN(qty) || qty <= 0) {
         errors.push({ row: rowNumber, field: 'quantity', value: mapped.quantity, severity: 'ERROR', message: 'Quantity must be a positive number greater than 0.' });
+      } else if (Math.abs(Math.round(qty * 2) - qty * 2) > 0.0001) {
+        errors.push({ row: rowNumber, field: 'quantity', value: mapped.quantity, severity: 'ERROR', message: 'Quantity must be in steps of 0.5 pairs or pieces (e.g. 0.5, 1.0, 1.5, 2.0).' });
       } else {
         resolved.quantity = qty;
       }
@@ -1354,13 +1413,32 @@ export class ImportValidationService {
         }
       }
     }
+
+    if (importType === 'STOCK_ITEM') {
+      const seenCodes = new Map<string, number>();
+      for (const row of rows) {
+        if (row.resolvedData?.code) {
+          const code = String(row.resolvedData.code).trim().toUpperCase();
+          if (seenCodes.has(code)) {
+            row.isDuplicate = true;
+            row.isValid = false;
+            const prevRow = seenCodes.get(code);
+            const msg = `Duplicate Stock Item Code "${row.resolvedData.code}" in file (already on row ${prevRow}). Stock Item codes must be unique per file.`;
+            row.errors.push({ row: row.rowNumber, field: 'stock_item_code', value: row.resolvedData.code, severity: 'ERROR', message: msg });
+            allErrors.push({ row: row.rowNumber, field: 'stock_item_code', value: row.resolvedData.code, severity: 'ERROR', message: msg });
+          } else {
+            seenCodes.set(code, row.rowNumber);
+          }
+        }
+      }
+    }
   }
 
   /**
    * Groups rows into multi-line document structures (for Purchase, Sales Orders, Sales Invoices).
    */
   private static groupIntoDocuments(importType: ImportType, rows: ValidatedRow[]): DocumentGroup[] {
-    if (importType === 'PARTY' || importType === 'OPENING_STOCK' || importType === 'OPTICAL_BATCH') {
+    if (importType === 'PARTY' || importType === 'OPENING_STOCK' || importType === 'OPTICAL_BATCH' || importType === 'STOCK_ITEM') {
       return [];
     }
 
@@ -1406,5 +1484,377 @@ export class ImportValidationService {
     }
 
     return Array.from(groupMap.values());
+  }
+
+  /**
+   * Checks if an existing Stock Item has batch inventory or transaction history.
+   * Used to safely prevent disabling maintain_batches.
+   */
+  static async checkItemHasBatchHistory(uniqueItemId: string): Promise<boolean> {
+    try {
+      const stockCheck = await pool.query(
+        `SELECT 
+           COALESCE(SUM(os.physical_stock), 0) as total_physical,
+           COALESCE(SUM(os.reserved_stock), 0) as total_reserved
+         FROM optical_stocks os
+         JOIN optical_batches ob ON os.batch_id = ob.id
+         WHERE ob.unique_item_id = $1`,
+        [uniqueItemId]
+      );
+      const totalPhysical = Number(stockCheck.rows[0]?.total_physical || 0);
+      const totalReserved = Number(stockCheck.rows[0]?.total_reserved || 0);
+      if (totalPhysical > 0 || totalReserved > 0) return true;
+
+      const historyCheck = await pool.query(
+        `SELECT 
+           (SELECT COUNT(*)::int FROM stock_ledger sl JOIN optical_batches ob ON sl.batch_id = ob.id WHERE ob.unique_item_id = $1) as ledger_count,
+           (SELECT COUNT(*)::int FROM sales_invoice_lines sil WHERE sil.unique_item_id = $1) as sales_lines_count,
+           (SELECT COUNT(*)::int FROM purchase_invoice_lines pil WHERE pil.unique_item_id = $1) as purchase_lines_count,
+           (SELECT COUNT(*)::int FROM sales_invoice_line_batches silb JOIN optical_batches ob ON silb.batch_id = ob.id WHERE ob.unique_item_id = $1) as sales_count,
+           (SELECT COUNT(*)::int FROM purchase_invoice_line_batches pilb JOIN optical_batches ob ON pilb.batch_id = ob.id WHERE ob.unique_item_id = $1) as purchase_count,
+           (SELECT COUNT(*)::int FROM purchase_lots pl WHERE pl.unique_item_id = $1 OR pl.batch_id IN (SELECT id FROM optical_batches WHERE unique_item_id = $1)) as lot_count
+        `,
+        [uniqueItemId]
+      );
+      const h = historyCheck.rows[0];
+      const totalHistory = (h?.ledger_count || 0) + (h?.sales_lines_count || 0) + (h?.purchase_lines_count || 0) + (h?.sales_count || 0) + (h?.purchase_count || 0) + (h?.lot_count || 0);
+      return totalHistory > 0;
+    } catch {
+      return false;
+    }
+  }
+
+  /**
+   * Validates a single Stock Item import row.
+   */
+  private static async validateStockItemRow(
+    businessId: string,
+    rowNumber: number,
+    mapped: Record<string, any>,
+    stockItemByCode: Map<string, any>,
+    primaryItemByName: Map<string, any>,
+    primaryItemByCode: Map<string, any>,
+    batchCountMap: Map<string, number>,
+    importMode: 'CREATE_ONLY' | 'UPSERT',
+    errors: ImportError[]
+  ): Promise<Record<string, any>> {
+    const rawCode = mapped.stock_item_code ?? mapped.code ?? mapped.stockItemCode ?? mapped.sku;
+    const rawName = mapped.stock_item_name ?? mapped.name ?? mapped.stockItemName ?? mapped.item_name;
+    const rawCategory = mapped.category ?? mapped.optical_category ?? mapped.opticalCategory ?? mapped.type;
+    const rawMaintainBatches = mapped.maintain_batches ?? mapped.maintainBatches ?? mapped.batch;
+    const rawUnit = mapped.unit ?? mapped.uom;
+    const rawStatus = mapped.status ?? mapped.isActive ?? mapped.active;
+    const rawPurchaseRate = mapped.purchase_rate ?? mapped.purchaseRate ?? mapped.cost;
+    const rawMrp = mapped.mrp ?? mapped.selling_price ?? mapped.sellingPrice ?? mapped.price;
+    const rawGstRate = mapped.gst_rate ?? mapped.gstRate ?? mapped.gst;
+    const rawDescription = mapped.description ?? mapped.desc ?? mapped.remarks ?? mapped.notes;
+    const rawPrimaryItem = mapped.parent_primary_item ?? mapped.primary_item ?? mapped.primaryItem;
+    const rawLpp = mapped.last_purchase_price ?? mapped.lastPurchasePrice;
+
+    // 1. Code validation
+    if (!rawCode || String(rawCode).trim() === '') {
+      errors.push({
+        row: rowNumber,
+        field: 'stock_item_code',
+        value: rawCode,
+        severity: 'ERROR',
+        message: 'Stock Item Code is required.',
+      });
+    }
+    const cleanCode = String(rawCode || '').trim().toUpperCase();
+    if (cleanCode.length > 100) {
+      errors.push({
+        row: rowNumber,
+        field: 'stock_item_code',
+        value: cleanCode,
+        severity: 'ERROR',
+        message: 'Stock Item Code must not exceed 100 characters.',
+      });
+    }
+
+    // 2. Name validation
+    if (!rawName || String(rawName).trim() === '') {
+      errors.push({
+        row: rowNumber,
+        field: 'stock_item_name',
+        value: rawName,
+        severity: 'ERROR',
+        message: 'Stock Item Name is required.',
+      });
+    }
+    const cleanName = String(rawName || '').trim();
+    if (cleanName.length > 255) {
+      errors.push({
+        row: rowNumber,
+        field: 'stock_item_name',
+        value: cleanName,
+        severity: 'ERROR',
+        message: 'Stock Item Name must not exceed 255 characters.',
+      });
+    }
+
+    // 3. Category validation (SV, KT, PROG, OTHER)
+    let normCategory: 'SV' | 'KT' | 'PROG' | 'OTHER' = 'SV';
+    if (!rawCategory || String(rawCategory).trim() === '') {
+      errors.push({
+        row: rowNumber,
+        field: 'category',
+        value: rawCategory,
+        severity: 'ERROR',
+        message: 'Category is required (Allowed: SV, KT, PROG, OTHER).',
+      });
+    } else {
+      const c = String(rawCategory).trim().toUpperCase();
+      if (c === 'SV' || c.includes('SINGLE')) normCategory = 'SV';
+      else if (c === 'KT' || c.includes('KRYPTOK') || c.includes('BIFOCAL')) normCategory = 'KT';
+      else if (c === 'PROG' || c.includes('PROGRESSIVE') || c === 'PAL') normCategory = 'PROG';
+      else if (c === 'OTHER' || c.includes('MISC') || c.includes('ACCESSOR')) normCategory = 'OTHER';
+      else {
+        errors.push({
+          row: rowNumber,
+          field: 'category',
+          value: rawCategory,
+          severity: 'ERROR',
+          message: `Unsupported category "${rawCategory}". Must be SV, KT, PROG, or OTHER.`,
+        });
+      }
+    }
+
+    // 4. Maintain Batches (default: false)
+    let maintainBatches = false;
+    if (rawMaintainBatches !== undefined && rawMaintainBatches !== null && String(rawMaintainBatches).trim() !== '') {
+      if (typeof rawMaintainBatches === 'boolean') {
+        maintainBatches = rawMaintainBatches;
+      } else {
+        const mbStr = String(rawMaintainBatches).trim().toUpperCase();
+        if (['YES', 'Y', 'TRUE', '1'].includes(mbStr)) {
+          maintainBatches = true;
+        } else if (['NO', 'N', 'FALSE', '0'].includes(mbStr)) {
+          maintainBatches = false;
+        } else {
+          errors.push({
+            row: rowNumber,
+            field: 'maintain_batches',
+            value: rawMaintainBatches,
+            severity: 'ERROR',
+            message: `Maintain Batches must be YES or NO (received "${rawMaintainBatches}").`,
+          });
+        }
+      }
+    }
+
+    // 5. Unit (default: PRS, allowed: PRS, PCS)
+    let unit: 'PRS' | 'PCS' = 'PRS';
+    if (rawUnit !== undefined && rawUnit !== null && String(rawUnit).trim() !== '') {
+      const u = String(rawUnit).trim().toUpperCase();
+      if (['PRS', 'PAIRS', 'PAIR'].includes(u)) {
+        unit = 'PRS';
+      } else if (['PCS', 'PIECES', 'PIECE'].includes(u)) {
+        unit = 'PCS';
+      } else {
+        errors.push({
+          row: rowNumber,
+          field: 'unit',
+          value: rawUnit,
+          severity: 'ERROR',
+          message: 'Invalid unit. Allowed values are PRS or PCS.',
+        });
+      }
+    } else {
+      unit = 'PRS';
+    }
+
+    // 6. Status (default: ACTIVE)
+    let status = 'ACTIVE';
+    if (rawStatus !== undefined && rawStatus !== null && String(rawStatus).trim() !== '') {
+      const s = String(rawStatus).trim().toUpperCase();
+      if (['ACTIVE', 'ENABLE', 'ENABLED', 'TRUE', '1', 'YES'].includes(s)) {
+        status = 'ACTIVE';
+      } else if (['INACTIVE', 'DISABLE', 'DISABLED', 'FALSE', '0', 'NO'].includes(s)) {
+        status = 'INACTIVE';
+      } else {
+        errors.push({
+          row: rowNumber,
+          field: 'status',
+          value: rawStatus,
+          severity: 'ERROR',
+          message: `Status must be ACTIVE or INACTIVE (received "${rawStatus}").`,
+        });
+      }
+    }
+
+    // 6. Purchase Rate (default: 0.00)
+    let purchaseRate = '0.00';
+    if (rawPurchaseRate !== undefined && rawPurchaseRate !== null && String(rawPurchaseRate).trim() !== '') {
+      const pr = Number(rawPurchaseRate);
+      if (isNaN(pr) || pr < 0) {
+        errors.push({
+          row: rowNumber,
+          field: 'purchase_rate',
+          value: rawPurchaseRate,
+          severity: 'ERROR',
+          message: 'Purchase Rate must be a non-negative number.',
+        });
+      } else {
+        purchaseRate = pr.toFixed(2);
+      }
+    }
+
+    // 7. MRP (default: 0.00)
+    let mrp = '0.00';
+    if (rawMrp !== undefined && rawMrp !== null && String(rawMrp).trim() !== '') {
+      const m = Number(rawMrp);
+      if (isNaN(m) || m < 0) {
+        errors.push({
+          row: rowNumber,
+          field: 'mrp',
+          value: rawMrp,
+          severity: 'ERROR',
+          message: 'MRP must be a non-negative number.',
+        });
+      } else {
+        mrp = m.toFixed(2);
+      }
+    }
+
+    // 8. GST Rate (default: 5.00)
+    let gstRate = '5.00';
+    if (rawGstRate !== undefined && rawGstRate !== null && String(rawGstRate).trim() !== '') {
+      const gst = Number(rawGstRate);
+      if (isNaN(gst) || gst < 0 || gst > 100) {
+        errors.push({
+          row: rowNumber,
+          field: 'gst_rate',
+          value: rawGstRate,
+          severity: 'ERROR',
+          message: 'GST Rate must be a valid percentage between 0 and 100.',
+        });
+      } else {
+        gstRate = gst.toFixed(2);
+      }
+    }
+
+    // 9. Description (optional)
+    const description = rawDescription !== undefined && rawDescription !== null && String(rawDescription).trim() !== ''
+      ? String(rawDescription).trim()
+      : null;
+
+    // 10. Parent Primary Item (optional)
+    let primaryItemId: string | null = null;
+    let resolvedPrimaryItem: any = null;
+    if (rawPrimaryItem !== undefined && rawPrimaryItem !== null && String(rawPrimaryItem).trim() !== '') {
+      const pKey = String(rawPrimaryItem).trim().toLowerCase();
+      const match = primaryItemByCode.get(pKey) || primaryItemByName.get(pKey);
+      if (match) {
+        primaryItemId = match.id;
+        resolvedPrimaryItem = { id: match.id, name: match.name, code: match.code };
+      } else {
+        errors.push({
+          row: rowNumber,
+          field: 'parent_primary_item',
+          value: rawPrimaryItem,
+          severity: 'ERROR',
+          message: `Parent Primary Item "${rawPrimaryItem}" was not found in the database.`,
+        });
+      }
+    }
+
+    // 11. Last Purchase Price (READ ONLY notice)
+    if (rawLpp !== undefined && rawLpp !== null && String(rawLpp).trim() !== '' && !String(rawLpp).trim().toUpperCase().includes('READ ONLY')) {
+      errors.push({
+        row: rowNumber,
+        field: 'last_purchase_price',
+        value: rawLpp,
+        severity: 'WARNING',
+        message: 'Last Purchase Price is transaction-derived from purchase vouchers and will not be overwritten by bulk import.',
+      });
+    }
+
+    // 12. Mode & Safety Checks against existing database Stock Items
+    let isUpdate = false;
+    let existingId: string | null = null;
+    const existingItem = stockItemByCode.get(cleanCode);
+
+    if (existingItem) {
+      existingId = existingItem.id;
+      if (importMode === 'CREATE_ONLY') {
+        errors.push({
+          row: rowNumber,
+          field: 'stock_item_code',
+          value: cleanCode,
+          severity: 'ERROR',
+          message: `Stock Item code "${cleanCode}" already exists. Switch to "Create or Update" mode to update existing stock items.`,
+        });
+      } else {
+        // Mode is UPSERT -> Enforce safety rules
+        isUpdate = true;
+
+        // Safety 1: Maintain Batches YES -> NO
+        if (existingItem.maintainBatches === true && maintainBatches === false) {
+          const batchCount = batchCountMap.get(existingItem.id) || 0;
+          if (batchCount > 0) {
+            const hasHistory = await this.checkItemHasBatchHistory(existingItem.id);
+            if (hasHistory) {
+              errors.push({
+                row: rowNumber,
+                field: 'maintain_batches',
+                value: 'NO',
+                severity: 'ERROR',
+                message: `Maintain Batches cannot be disabled for "${cleanCode}" because this Stock Item has batch-wise inventory or transaction history.`,
+              });
+            }
+          }
+        }
+
+        // Safety 2: Optical Category change when batches exist
+        if (existingItem.opticalCategory !== normCategory) {
+          const batchCount = batchCountMap.get(existingItem.id) || 0;
+          if (batchCount > 0) {
+            errors.push({
+              row: rowNumber,
+              field: 'category',
+              value: normCategory,
+              severity: 'ERROR',
+              message: `Optical Category cannot be changed from "${existingItem.opticalCategory}" to "${normCategory}" because Stock Item "${cleanCode}" already contains ${batchCount} optical batches.`,
+            });
+          }
+        }
+
+        // Safety 3: Unit change when stock or transactions exist
+        const currentItemUnit = existingItem.unit || 'PRS';
+        if (currentItemUnit !== unit) {
+          const hasHistory = await this.checkItemHasBatchHistory(existingItem.id);
+          if (hasHistory) {
+            errors.push({
+              row: rowNumber,
+              field: 'unit',
+              value: unit,
+              severity: 'ERROR',
+              message: `Unit cannot be changed from "${currentItemUnit}" to "${unit}" because Stock Item "${cleanCode}" already has stock or transaction history.`,
+            });
+          }
+        }
+      }
+    } else {
+      isUpdate = false;
+    }
+
+    return {
+      code: cleanCode,
+      name: cleanName,
+      category: normCategory,
+      opticalCategory: normCategory,
+      maintainBatches,
+      unit,
+      status,
+      purchaseRate,
+      mrp,
+      gstRate,
+      description,
+      primaryItemId,
+      primaryItem: resolvedPrimaryItem,
+      isUpdate,
+      existingId,
+    };
   }
 }

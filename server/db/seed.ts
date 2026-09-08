@@ -500,6 +500,8 @@ export async function seedInitialDatabase() {
             lastPurchasePrice: '120.00',
             mrp: '350.00',
             status: 'ACTIVE',
+            maintainBatches: true,
+            opticalCategory: pItem.catCode,
           }).onConflictDoNothing();
         }
       }

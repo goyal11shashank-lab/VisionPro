@@ -104,6 +104,19 @@ export const FIELD_DEFINITIONS: Record<ImportType, ColumnDefinition[]> = {
     { key: 'reorder_level', label: 'Reorder Level', required: false, aliases: ['reorder level', 'reorder_level', 'min stock', 'minimum stock', 'reorder qty', 'alert level'] },
     { key: 'remarks', label: 'Remarks', required: false, aliases: ['remarks', 'notes', 'comments', 'description'] },
   ],
+  STOCK_ITEM: [
+    { key: 'stock_item_code', label: 'Stock Item Code', required: true, aliases: ['stock item code', 'stock_item_code', 'item code', 'item_code', 'code', 'sku', 'product code', 'stock code', 'item_sku'] },
+    { key: 'stock_item_name', label: 'Stock Item Name', required: true, aliases: ['stock item name', 'stock_item_name', 'item name', 'item_name', 'name', 'product name', 'product_name', 'item', 'product'] },
+    { key: 'category', label: 'Category / Optical Type', required: true, aliases: ['category', 'optical category', 'optical_category', 'optical type', 'type', 'category code', 'category_code', 'lens category', 'optical_type'] },
+    { key: 'maintain_batches', label: 'Maintain Batches', required: false, aliases: ['maintain batches', 'maintain_batches', 'maintain batch', 'maintain_batch', 'batches', 'batch tracking', 'maintain_batch_powers', 'batch'] },
+    { key: 'status', label: 'Status', required: false, aliases: ['status', 'is active', 'active', 'state'] },
+    { key: 'purchase_rate', label: 'Purchase Rate', required: false, aliases: ['purchase rate', 'purchase_rate', 'cost', 'cost price', 'purchase price', 'buying price', 'buy rate', 'rate'] },
+    { key: 'mrp', label: 'MRP', required: false, aliases: ['mrp', 'maximum retail price', 'selling price', 'selling_price', 'sale price', 'retail price', 'price', 'sale rate'] },
+    { key: 'gst_rate', label: 'GST Rate', required: false, aliases: ['gst rate', 'gst_rate', 'gst', 'gst%', 'tax rate', 'tax%'] },
+    { key: 'description', label: 'Description', required: false, aliases: ['description', 'desc', 'remarks', 'notes', 'comments', 'specification'] },
+    { key: 'parent_primary_item', label: 'Parent Primary Item', required: false, aliases: ['parent primary item', 'parent_primary_item', 'primary item', 'primary_item', 'parent item', 'primary item code', 'parent'] },
+    { key: 'last_purchase_price', label: 'Last Purchase Price', required: false, aliases: ['last purchase price', 'last_purchase_price', 'last purchase rate', 'lpp'] },
+  ],
 };
 
 export class ColumnMappingService {

@@ -245,6 +245,8 @@ CREATE TABLE IF NOT EXISTS "unique_items" (
   "code" VARCHAR(100) NOT NULL,
   "description" TEXT,
   "maintain_batches" BOOLEAN NOT NULL DEFAULT FALSE,
+  "optical_category" VARCHAR(20) NOT NULL DEFAULT 'SV',
+  "unit" VARCHAR(10) NOT NULL DEFAULT 'PRS',
   "purchase_rate" NUMERIC(12, 2) DEFAULT 0.00,
   "last_purchase_price" NUMERIC(12, 2) DEFAULT 0.00,
   "mrp" NUMERIC(12, 2) DEFAULT 0.00,
@@ -1198,6 +1200,16 @@ export async function runMigrations(): Promise<{ success: boolean; message: stri
             SET "gst_rate" = 5.00
             WHERE "gst_rate" IS NULL;
           END IF;
+          -- Stock Item Unit Migration: Ensure unique_items.unit exists and defaults to 'PRS'
+          IF NOT EXISTS (
+            SELECT 1 FROM information_schema.columns 
+            WHERE table_name='unique_items' AND column_name='unit'
+          ) THEN
+            ALTER TABLE "unique_items" ADD COLUMN "unit" VARCHAR(10) NOT NULL DEFAULT 'PRS';
+            UPDATE "unique_items"
+            SET "unit" = 'PRS'
+            WHERE "unit" IS NULL;
+          END IF;
         END $$;
       `);
     } catch (colErr: any) {
@@ -1445,6 +1457,27 @@ export async function runMigrations(): Promise<{ success: boolean; message: stri
       SELECT table_name 
       FROM information_schema.tables 
       WHERE table_schema = 'public'
+    `);
+
+    // Ensure optical stocks and ledgers adhere strictly to 0.5 step increments
+    await pool.query(`
+      UPDATE optical_stocks
+      SET physical_stock = ROUND(physical_stock * 2) / 2,
+          reserved_stock = ROUND(reserved_stock * 2) / 2,
+          available_stock = (ROUND(physical_stock * 2) / 2) - (ROUND(reserved_stock * 2) / 2)
+      WHERE physical_stock % 0.5 != 0 OR reserved_stock % 0.5 != 0 OR available_stock % 0.5 != 0;
+
+      UPDATE stock_reservations
+      SET quantity = ROUND(quantity * 2) / 2
+      WHERE quantity % 0.5 != 0;
+
+      UPDATE stock_ledger
+      SET quantity_in = ROUND(quantity_in * 2) / 2,
+          quantity_out = ROUND(quantity_out * 2) / 2,
+          reserved_in = ROUND(reserved_in * 2) / 2,
+          reserved_out = ROUND(reserved_out * 2) / 2,
+          balance = ROUND(balance * 2) / 2
+      WHERE quantity_in % 0.5 != 0 OR quantity_out % 0.5 != 0 OR reserved_in % 0.5 != 0 OR reserved_out % 0.5 != 0 OR balance % 0.5 != 0;
     `);
 
     const tableNames = tableRes.rows.map(r => r.table_name);

@@ -112,7 +112,7 @@ export const RolesPage: React.FC = () => {
         method: 'POST',
         body: JSON.stringify({
           name: newRoleName,
-          code: newRoleCode.toUpperCase().replace(/\s+/g, '_'),
+          code: String(newRoleCode || '').toUpperCase().replace(/\s+/g, '_'),
           description: newRoleDesc,
           permissionIds: newRolePermIds,
         }),

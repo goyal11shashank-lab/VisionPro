@@ -204,7 +204,7 @@ export class ExportService {
         p.email AS "Email",
         p.gstin AS "GSTIN",
         p.pan AS "PAN",
-        p.address_line1 AS "Address",
+        p.address_line_1 AS "Address",
         p.city AS "City",
         p.state AS "State",
         p.pincode AS "Pincode",

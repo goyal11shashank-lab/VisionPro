@@ -19,14 +19,21 @@ import {
 import { BatchAllocation, OpticalCategoryCode } from './VoucherTypes';
 
 /**
- * Checks whether a quantity is a valid half-step (multiple of 0.5) and strictly > 0.
- * e.g., 0.5, 1, 1.5, 2, 2.5 are valid.
- * 0.1, 0.25, 1.2, 0, -1 are invalid.
+ * Checks whether a quantity is a valid quantity for the item's unit:
+ * - PRS (Pairs): strictly > 0 and multiples of 0.5 (e.g. 0.5, 1.0, 1.5, 2.0).
+ * - PCS (Pieces): strictly > 0 and whole integer only (e.g. 1, 2, 3...).
  */
-export function isValidHalfStepQty(qty: number): boolean {
+export function isValidQtyForUnit(qty: number, unit: string = 'PRS'): boolean {
   if (isNaN(qty) || qty <= 0) return false;
+  if (unit.toUpperCase() === 'PCS') {
+    return Math.abs(Math.round(qty) - qty) < 0.0001;
+  }
   const doubled = qty * 2;
   return Math.abs(Math.round(doubled) - doubled) < 0.0001;
+}
+
+export function isValidHalfStepQty(qty: number): boolean {
+  return isValidQtyForUnit(qty, 'PRS');
 }
 
 interface OpticalBatchModalProps {
@@ -38,6 +45,7 @@ interface OpticalBatchModalProps {
   itemCode?: string;
   uniqueItemId?: string;
   categoryCode?: OpticalCategoryCode | string;
+  unit?: 'PRS' | 'PCS' | string;
   initialBatches: BatchAllocation[];
   availableBatches?: any[];
   lineQuantity?: number;
@@ -59,6 +67,7 @@ export const OpticalBatchModal: React.FC<OpticalBatchModalProps> = ({
   itemCode,
   uniqueItemId,
   categoryCode = 'SV',
+  unit = 'PRS',
   initialBatches,
   availableBatches: propAvailableBatches = [],
   lineQuantity = 1,
@@ -66,6 +75,8 @@ export const OpticalBatchModal: React.FC<OpticalBatchModalProps> = ({
 }) => {
   const normCategory = (String(categoryCode || 'SV').toUpperCase()) as OpticalCategoryCode;
   const isBifocalOrProg = normCategory === 'KT' || normCategory === 'PROG';
+  const unitDisplay = (unit || 'PRS').toUpperCase();
+  const isPcs = unitDisplay === 'PCS';
 
   // Search state
   const [searchQuery, setSearchQuery] = useState('');
@@ -355,8 +366,10 @@ export const OpticalBatchModal: React.FC<OpticalBatchModalProps> = ({
         const num = parseFloat(val);
         if (isNaN(num) || num <= 0) {
           errorMsg = 'Quantity must be > 0';
-        } else if (!isValidHalfStepQty(num)) {
-          errorMsg = 'Must be multiple of 0.5 (e.g. 0.5, 1, 1.5, 2)';
+        } else if (!isValidQtyForUnit(num, unitDisplay)) {
+          errorMsg = isPcs
+            ? 'Must be a whole integer (e.g. 1, 2, 3)'
+            : 'Must be multiple of 0.5 (e.g. 0.5, 1, 1.5, 2)';
         }
       }
 
@@ -382,12 +395,14 @@ export const OpticalBatchModal: React.FC<OpticalBatchModalProps> = ({
       const record = allocationsMap[batchId];
       const num = parseFloat(record?.quantityStr || '0');
 
-      if (isNaN(num) || num <= 0 || !isValidHalfStepQty(num)) {
+      if (isNaN(num) || num <= 0 || !isValidQtyForUnit(num, unitDisplay)) {
         setAllocationsMap(prev => ({
           ...prev,
           [batchId]: {
             ...prev[batchId],
-            error: 'Must be a positive multiple of 0.5 (e.g. 0.5, 1.0, 1.5, 2.0)',
+            error: isPcs
+              ? 'Must be a positive whole number (e.g. 1, 2, 3)'
+              : 'Must be a positive multiple of 0.5 (e.g. 0.5, 1.0, 1.5, 2.0)',
           },
         }));
         return;
@@ -477,7 +492,7 @@ export const OpticalBatchModal: React.FC<OpticalBatchModalProps> = ({
           categoryCode: normCategory,
         });
 
-      if (isNaN(num) || num <= 0 || !isValidHalfStepQty(num)) {
+      if (isNaN(num) || num <= 0 || !isValidQtyForUnit(num, unitDisplay)) {
         invalidEntries.push(`${batchName} (value: "${record?.quantityStr || ''}")`);
       } else {
         validAllocations.push({
@@ -497,14 +512,14 @@ export const OpticalBatchModal: React.FC<OpticalBatchModalProps> = ({
 
     if (invalidEntries.length > 0) {
       setErrorMessage(
-        `Invalid quantity for: ${invalidEntries.join(
-          ', '
-        )}. All quantities must be positive multiples of 0.5 (e.g. 0.5, 1.0, 1.5, 2.0).`
+        isPcs
+          ? `Invalid quantity for: ${invalidEntries.join(', ')}. All quantities for PCS items must be positive whole numbers (e.g. 1, 2, 3).`
+          : `Invalid quantity for: ${invalidEntries.join(', ')}. All quantities must be positive multiples of 0.5 (e.g. 0.5, 1.0, 1.5, 2.0).`
       );
       // Focus the first invalid field
       const firstInvalidId = allocatedIds.find(id => {
         const n = parseFloat(allocationsMap[id]?.quantityStr || '0');
-        return isNaN(n) || n <= 0 || !isValidHalfStepQty(n);
+        return isNaN(n) || n <= 0 || !isValidQtyForUnit(n, unitDisplay);
       });
       if (firstInvalidId) {
         const el = qtyInputRefs.current[firstInvalidId];
@@ -600,7 +615,7 @@ export const OpticalBatchModal: React.FC<OpticalBatchModalProps> = ({
                 </p>
                 {allocatedIds.length > 0 && (
                   <span className="text-[11px] font-mono font-semibold text-emerald-300 bg-emerald-950/80 px-2 py-0.2 rounded border border-emerald-500/40 shrink-0">
-                    {allocatedIds.length} batch{allocatedIds.length > 1 ? 'es' : ''} currently allocated • Total Qty: {totalAllocatedQty.toFixed(2)} PRS
+                    {allocatedIds.length} batch{allocatedIds.length > 1 ? 'es' : ''} currently allocated • Total Qty: {totalAllocatedQty.toFixed(2)} {unitDisplay}
                   </span>
                 )}
               </div>
@@ -804,12 +819,16 @@ export const OpticalBatchModal: React.FC<OpticalBatchModalProps> = ({
                         <div className="text-right">
                           <span
                             className={`font-semibold ${
-                              availStock <= 0 ? 'text-amber-600' : 'text-emerald-700'
+                              availStock < 0
+                                ? 'text-rose-600 font-bold bg-rose-50 px-1.5 py-0.5 rounded'
+                                : availStock === 0
+                                ? 'text-amber-600'
+                                : 'text-emerald-700'
                             }`}
                           >
                             {availStock.toFixed(2)}
                           </span>
-                          <span className="text-[10px] text-slate-400 ml-1 font-sans">PRS</span>
+                          <span className="text-[10px] text-slate-400 ml-1 font-sans uppercase">{unitDisplay}</span>
                         </div>
                       </div>
                     );
@@ -946,7 +965,7 @@ export const OpticalBatchModal: React.FC<OpticalBatchModalProps> = ({
                 <tr>
                   <th className="py-2 px-3">Batch / Power</th>
                   <th className="py-2 px-3 text-right">Available</th>
-                  <th className="py-2 px-3 text-right w-36">Qty (PRS)</th>
+                  <th className="py-2 px-3 text-right w-36">Qty ({unitDisplay})</th>
                   <th className="py-2 px-2 text-center w-12">Remove</th>
                 </tr>
               </thead>
@@ -992,12 +1011,16 @@ export const OpticalBatchModal: React.FC<OpticalBatchModalProps> = ({
                       <td className="py-2.5 px-3 text-right">
                         <span
                           className={`font-semibold ${
-                            availStock <= 0 ? 'text-amber-600' : 'text-emerald-700'
+                            availStock < 0
+                              ? 'text-rose-600 font-bold bg-rose-50 px-1.5 py-0.5 rounded'
+                              : availStock === 0
+                              ? 'text-amber-600'
+                              : 'text-emerald-700'
                           }`}
                         >
                           {availStock.toFixed(2)}
                         </span>
-                        <span className="text-[10px] text-slate-400 ml-1 font-sans">PRS</span>
+                        <span className="text-[10px] text-slate-400 ml-1 font-sans uppercase">{unitDisplay}</span>
                       </td>
 
                       {/* Manual Quantity Input (NO SPINNER ARROWS, NO +/- BUTTONS) */}
@@ -1053,7 +1076,7 @@ export const OpticalBatchModal: React.FC<OpticalBatchModalProps> = ({
             <div>
               <span className="text-slate-500">Total Quantity: </span>
               <span className="font-bold text-blue-800 font-mono text-sm">
-                {totalAllocatedQty.toFixed(2)} PRS
+                {totalAllocatedQty.toFixed(2)} {unitDisplay}
               </span>
             </div>
             {lineRate > 0 && totalAllocatedQty > 0 && (

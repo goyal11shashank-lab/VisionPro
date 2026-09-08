@@ -120,18 +120,10 @@ export const Sidebar: React.FC<SidebarProps> = ({
       icon: Truck,
       items: [
         { id: 'purchase-voucher', label: 'Normal Purchase Voucher', icon: FileSpreadsheet, path: '/purchase/voucher/new', permission: 'purchase:view' },
+        { id: 'purchase-orders', label: 'Purchase Orders', icon: ShoppingCart, path: '/purchase/orders', permission: 'purchase:view' },
         { id: 'purchase-invoices', label: 'Purchase Invoices Register', icon: Receipt, path: '/purchase/invoices', permission: 'purchase:view' },
         { id: 'purchase-returns', label: 'Purchase Returns', icon: RotateCcw, path: '/purchase/returns', permission: 'purchase:view' },
         { id: 'purchase-lots', label: 'Purchase Lots & Costing', icon: Layers, path: '/purchase/lots', permission: 'purchase:view' },
-      ],
-    },
-    {
-      title: 'Inventory',
-      icon: Boxes,
-      items: [
-        { id: 'inventory-stock', label: 'Inventory Stock Matrix', icon: Boxes, path: '/reports/inventory', permission: 'inventory:view' },
-        { id: 'inventory-stock-ledger', label: 'Stock Movement Ledger', icon: Layers, path: '/reports/stock-ledger', permission: 'inventory:view' },
-        { id: 'inventory-batches', label: 'Optical Batches & Barcodes', icon: Barcode, path: '/master/batches', permission: 'master:view' },
       ],
     },
     {

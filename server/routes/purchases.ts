@@ -14,6 +14,116 @@ function isValidUUID(id: string): boolean {
 }
 
 // ============================================================================
+// PURCHASE ORDERS
+// ============================================================================
+
+router.get(
+  '/orders/generate-number',
+  requireAnyPermission(['purchase:create', 'purchase:view', 'purchase.create', 'purchase.view']),
+  async (req: Request, res: Response) => {
+    try {
+      const businessId = req.user!.currentBusinessId;
+      const orderNumber = await PurchaseService.generatePurchaseOrderNumber(businessId);
+      res.json({ orderNumber });
+    } catch (err: any) {
+      res.status(400).json({ error: 'ORDER_NUM_GEN_FAILED', message: err.message });
+    }
+  }
+);
+
+router.get(
+  '/orders',
+  requireAnyPermission(['purchase:view', 'purchase.view']),
+  async (req: Request, res: Response) => {
+    try {
+      const businessId = req.user!.currentBusinessId;
+      const { supplierPartyId, status, search, limit, offset } = req.query;
+      const result = await PurchaseService.getPurchaseOrders(businessId, {
+        supplierPartyId: supplierPartyId as string,
+        status: status as string,
+        search: search as string,
+        limit: limit ? parseInt(limit as string, 10) : 50,
+        offset: offset ? parseInt(offset as string, 10) : 0,
+      });
+      res.json(result);
+    } catch (err: any) {
+      res.status(400).json({ error: 'FETCH_ORDERS_FAILED', message: err.message });
+    }
+  }
+);
+
+router.post(
+  '/orders',
+  requireAnyPermission(['purchase:create', 'purchase.create']),
+  async (req: Request, res: Response) => {
+    try {
+      const businessId = req.user!.currentBusinessId;
+      const order = await PurchaseService.createPurchaseOrder(businessId, req.body, req.user!.id);
+      res.status(201).json(order);
+    } catch (err: any) {
+      res.status(400).json({ error: 'CREATE_ORDER_FAILED', message: err.message });
+    }
+  }
+);
+
+router.get(
+  '/orders/:id',
+  requireAnyPermission(['purchase:view', 'purchase.view']),
+  async (req: Request, res: Response) => {
+    try {
+      const businessId = req.user!.currentBusinessId;
+      const order = await PurchaseService.getPurchaseOrderById(businessId, req.params.id);
+      res.json(order);
+    } catch (err: any) {
+      res.status(404).json({ error: 'ORDER_NOT_FOUND', message: err.message });
+    }
+  }
+);
+
+router.put(
+  '/orders/:id',
+  requireAnyPermission(['purchase:edit', 'purchase.edit']),
+  async (req: Request, res: Response) => {
+    try {
+      const businessId = req.user!.currentBusinessId;
+      const order = await PurchaseService.updatePurchaseOrder(businessId, req.params.id, req.body, req.user!.id);
+      res.json(order);
+    } catch (err: any) {
+      res.status(400).json({ error: 'UPDATE_ORDER_FAILED', message: err.message });
+    }
+  }
+);
+
+router.post(
+  '/orders/:id/cancel',
+  requireAnyPermission(['purchase:cancel', 'purchase.cancel']),
+  async (req: Request, res: Response) => {
+    try {
+      const businessId = req.user!.currentBusinessId;
+      const { reason } = req.body;
+      const order = await PurchaseService.cancelPurchaseOrder(businessId, req.params.id, reason, req.user!.id);
+      res.json(order);
+    } catch (err: any) {
+      res.status(400).json({ error: 'CANCEL_ORDER_FAILED', message: err.message });
+    }
+  }
+);
+
+router.post(
+  '/orders/:id/convert',
+  requireAnyPermission(['purchase:create', 'purchase.create']),
+  async (req: Request, res: Response) => {
+    try {
+      const businessId = req.user!.currentBusinessId;
+      const invoice = await PurchaseService.convertPurchaseOrderToInvoice(businessId, req.params.id, req.body, req.user!.id);
+      res.status(201).json(invoice);
+    } catch (err: any) {
+      res.status(400).json({ error: 'CONVERT_ORDER_FAILED', message: err.message });
+    }
+  }
+);
+
+// ============================================================================
 // PURCHASE INVOICES LIST & NUMBER PREVIEW
 // ============================================================================
 

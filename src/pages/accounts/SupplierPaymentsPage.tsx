@@ -640,7 +640,7 @@ export const SupplierPaymentsPage: React.FC = () => {
                           {v.paymentMode === 'UPI' && <Sparkles className="w-3.5 h-3.5 text-purple-600" />}
                           {v.paymentMode === 'CHEQUE' && <FileText className="w-3.5 h-3.5 text-amber-600" />}
                           {v.paymentMode === 'CARD' && <CreditCard className="w-3.5 h-3.5 text-indigo-600" />}
-                          <span>{v.paymentMode.replace('_', ' ')}</span>
+                          <span>{String(v.paymentMode || 'OTHER').replace(/_/g, ' ')}</span>
                         </div>
                         {v.referenceNumber && (
                           <div className="text-[11px] text-slate-400 mt-0.5 font-mono">
@@ -1089,7 +1089,7 @@ export const SupplierPaymentsPage: React.FC = () => {
                 </div>
                 <div>
                   <span className="text-slate-400 block">Payment Mode</span>
-                  <span className="font-semibold text-slate-900">{viewVoucher.paymentMode.replace('_', ' ')}</span>
+                  <span className="font-semibold text-slate-900">{String(viewVoucher.paymentMode || 'OTHER').replace(/_/g, ' ')}</span>
                 </div>
                 <div>
                   <span className="text-slate-400 block">Status</span>

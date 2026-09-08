@@ -930,7 +930,11 @@ export const SalesOrdersPage: React.FC<{ onNavigateToInvoice?: (orderId: string)
                                     <span className="px-1.5 py-0.5 bg-blue-50 text-blue-700 font-mono rounded border border-blue-200">
                                       SPH: {line.batches[0].sph || '0.00'} | CYL: {line.batches[0].cyl || '0.00'}
                                     </span>
-                                    <span className="px-1.5 py-0.5 bg-slate-100 text-slate-600 font-mono rounded">
+                                    <span className={`px-1.5 py-0.5 font-mono rounded ${
+                                      Number(line.batches[0].availableStock ?? 0) < 0
+                                        ? 'bg-rose-100 text-rose-700 font-bold border border-rose-300'
+                                        : 'bg-slate-100 text-slate-600'
+                                    }`}>
                                       Avail: {line.batches[0].availableStock ?? '—'}
                                     </span>
                                   </div>

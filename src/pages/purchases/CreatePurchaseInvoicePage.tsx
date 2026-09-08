@@ -26,13 +26,19 @@ import {
 
 interface Props {
   editInvoiceId?: string | null;
+  fromPurchaseOrderId?: string | null;
+  isOrder?: boolean;
+  editOrderId?: string | null;
   onBack?: () => void;
-  onSuccess?: (invoiceId: string) => void;
+  onSuccess?: (id: string) => void;
   onNavigate?: (path: string) => void;
 }
 
 export const CreatePurchaseInvoicePage: React.FC<Props> = ({
   editInvoiceId,
+  fromPurchaseOrderId,
+  isOrder = false,
+  editOrderId,
   onBack = () => window.history.back(),
   onSuccess,
   onNavigate,
@@ -45,6 +51,10 @@ export const CreatePurchaseInvoicePage: React.FC<Props> = ({
   const [loadingInitial, setLoadingInitial] = useState<boolean>(true);
   const [existingInvoiceNumber, setExistingInvoiceNumber] = useState<string>('');
   const [existingStatus, setExistingStatus] = useState<string>('');
+  const [linkedPurchaseOrderId, setLinkedPurchaseOrderId] = useState<string | null>(
+    fromPurchaseOrderId || null
+  );
+  const [expectedDeliveryDate, setExpectedDeliveryDate] = useState<string>('');
 
   // Form State
   const [supplierPartyId, setSupplierPartyId] = useState<string>('');
@@ -125,11 +135,15 @@ export const CreatePurchaseInvoicePage: React.FC<Props> = ({
         apiRequest<{ uniqueItems: UniqueItem[] }>('/api/optical-master/unique-items').catch(() =>
           apiRequest<UniqueItem[]>('/api/unique-items').then(items => ({ uniqueItems: items })).catch(() => ({ uniqueItems: [] }))
         ),
-        apiRequest<{ invoiceNumber: string }>('/api/purchases/invoices/number-preview').catch(() =>
-          apiRequest<{ invoiceNumber: string }>('/api/purchases/number-preview').catch(() => ({
-            invoiceNumber: `PUR-${Date.now().toString().slice(-6)}`,
-          }))
-        ),
+        isOrder
+          ? apiRequest<{ orderNumber: string }>('/api/purchases/orders/generate-number').catch(() => ({
+              orderNumber: `PO-${Date.now().toString().slice(-6)}`,
+            }))
+          : apiRequest<{ invoiceNumber: string }>('/api/purchases/invoices/number-preview').catch(() =>
+              apiRequest<{ invoiceNumber: string }>('/api/purchases/number-preview').catch(() => ({
+                invoiceNumber: `PUR-${Date.now().toString().slice(-6)}`,
+              }))
+            ),
       ]);
 
       const allParties = supData.parties || [];
@@ -141,12 +155,134 @@ export const CreatePurchaseInvoicePage: React.FC<Props> = ({
       const items = (itemData as any).uniqueItems || (Array.isArray(itemData) ? itemData : []);
       setUniqueItemsList(items);
 
-      if (!editInvoiceId) {
-        setExistingInvoiceNumber(numRes.invoiceNumber);
+      if (!editInvoiceId && !editOrderId) {
+        setExistingInvoiceNumber(isOrder ? (numRes as any).orderNumber : (numRes as any).invoiceNumber);
         updateDueDate(invoiceDate, paymentTerms);
       }
 
-      if (editInvoiceId) {
+      if (isOrder && editOrderId) {
+        const ord = await apiRequest<any>(`/api/purchases/orders/${editOrderId}`);
+        if (ord) {
+          setExistingInvoiceNumber(ord.orderNumber);
+          setExistingStatus(ord.status);
+          const initialSupId = ord.supplierPartyId || (ord.supplier?.id ?? '');
+          setSupplierPartyId(initialSupId);
+          const sup = validSuppliers.find(p => p.id === initialSupId) || ord.supplier || null;
+          setSelectedParty(sup);
+
+          if (ord.orderDate) {
+            const parsedDate = new Date(ord.orderDate).toISOString().split('T')[0];
+            setInvoiceDate(parsedDate);
+          }
+          if (ord.expectedDeliveryDate) {
+            setExpectedDeliveryDate(new Date(ord.expectedDeliveryDate).toISOString().split('T')[0]);
+          }
+          setSupplierInvoiceNumber(ord.supplierReference || '');
+          setGstMode(ord.gstMode || 'INTRA_STATE');
+          setNotes(ord.notes || '');
+
+          if (initialSupId) {
+            try {
+              const ledgerRes = await apiRequest<any>(`/api/parties/${initialSupId}/ledger`);
+              if (ledgerRes && ledgerRes.currentBalance !== undefined) {
+                const balNum = parseFloat(ledgerRes.currentBalance);
+                setPartyBalance({
+                  balance: Math.abs(balNum),
+                  type: balNum >= 0 ? 'Cr' : 'Dr',
+                });
+              }
+            } catch {
+              // ignore
+            }
+          }
+
+          if (ord.lines && ord.lines.length > 0) {
+            const loadedLines: VoucherLineItem[] = ord.lines.map((l: any, i: number) => ({
+              id: `po-edit-row-${i}-${l.id || i}`,
+              uniqueItemId: l.uniqueItemId,
+              uniqueItemName: l.uniqueItem?.name || 'Item',
+              uniqueItemCode: l.uniqueItem?.code || '',
+              categoryCode: l.category?.code || l.uniqueItem?.categoryCode || 'SV',
+              maintainBatches: l.uniqueItem?.maintainBatches !== false,
+              quantity: parseFloat(l.quantity) || 1,
+              rate: parseFloat(l.rate) || 0,
+              discountType: l.discountType || 'NONE',
+              discountValue: parseFloat(l.discountValue) || 0,
+              gstRate: parseFloat(l.gstRate) || 12,
+              batches: (l.batches || []).map((b: any) => ({
+                batchId: b.batchId || b.batch?.id,
+                sph: b.batch?.sph !== undefined ? parseFloat(b.batch.sph) : parseFloat(b.sph || 0),
+                cyl: b.batch?.cyl !== undefined ? parseFloat(b.batch.cyl) : parseFloat(b.cyl || 0),
+                axis: b.batch?.axis !== undefined ? parseFloat(b.batch.axis) : parseFloat(b.axis || 0),
+                add: b.batch?.add !== undefined ? parseFloat(b.batch.add) : parseFloat(b.add || 0),
+                side: b.batch?.side || b.side || 'NONE',
+                quantity: parseFloat(b.quantity) || 1,
+                rate: parseFloat(b.rate !== undefined ? b.rate : (l.rate || 0)),
+              })),
+            }));
+            setLines(ensureTrailingBlankRow(loadedLines, 'p-row'));
+          } else {
+            setLines([createEmptyVoucherLine('p-row')]);
+          }
+        }
+      } else if (!isOrder && fromPurchaseOrderId) {
+        // Prefill from Purchase Order for Conversion to Actual Invoice
+        const po = await apiRequest<any>(`/api/purchases/orders/${fromPurchaseOrderId}`);
+        if (po) {
+          setLinkedPurchaseOrderId(fromPurchaseOrderId);
+          const initialSupId = po.supplierPartyId || (po.supplier?.id ?? '');
+          setSupplierPartyId(initialSupId);
+          const sup = validSuppliers.find(p => p.id === initialSupId) || po.supplier || null;
+          setSelectedParty(sup);
+          setSupplierInvoiceNumber(po.supplierReference || '');
+          setGstMode(po.gstMode || 'INTRA_STATE');
+          setNotes(po.notes ? `Ref: PO #${po.orderNumber}. ${po.notes}` : `Ref: PO #${po.orderNumber}`);
+
+          if (initialSupId) {
+            try {
+              const ledgerRes = await apiRequest<any>(`/api/parties/${initialSupId}/ledger`);
+              if (ledgerRes && ledgerRes.currentBalance !== undefined) {
+                const balNum = parseFloat(ledgerRes.currentBalance);
+                setPartyBalance({
+                  balance: Math.abs(balNum),
+                  type: balNum >= 0 ? 'Cr' : 'Dr',
+                });
+              }
+            } catch {
+              // ignore
+            }
+          }
+
+          if (po.lines && po.lines.length > 0) {
+            const loadedLines: VoucherLineItem[] = po.lines.map((l: any, i: number) => ({
+              id: `po-conv-row-${i}-${l.id || i}`,
+              uniqueItemId: l.uniqueItemId,
+              uniqueItemName: l.uniqueItem?.name || 'Item',
+              uniqueItemCode: l.uniqueItem?.code || '',
+              categoryCode: l.category?.code || l.uniqueItem?.categoryCode || 'SV',
+              maintainBatches: l.uniqueItem?.maintainBatches !== false,
+              quantity: parseFloat(l.quantity) || 1,
+              rate: parseFloat(l.rate) || 0,
+              discountType: l.discountType || 'NONE',
+              discountValue: parseFloat(l.discountValue) || 0,
+              gstRate: parseFloat(l.gstRate) || 12,
+              batches: (l.batches || []).map((b: any) => ({
+                batchId: b.batchId || b.batch?.id,
+                sph: b.batch?.sph !== undefined ? parseFloat(b.batch.sph) : parseFloat(b.sph || 0),
+                cyl: b.batch?.cyl !== undefined ? parseFloat(b.batch.cyl) : parseFloat(b.cyl || 0),
+                axis: b.batch?.axis !== undefined ? parseFloat(b.batch.axis) : parseFloat(b.axis || 0),
+                add: b.batch?.add !== undefined ? parseFloat(b.batch.add) : parseFloat(b.add || 0),
+                side: b.batch?.side || b.side || 'NONE',
+                quantity: parseFloat(b.quantity) || 1,
+                rate: parseFloat(b.rate !== undefined ? b.rate : (l.rate || 0)),
+              })),
+            }));
+            setLines(ensureTrailingBlankRow(loadedLines, 'p-row'));
+          } else {
+            setLines([createEmptyVoucherLine('p-row')]);
+          }
+        }
+      } else if (editInvoiceId) {
         const inv = await apiRequest<any>(`/api/purchases/invoices/${editInvoiceId}`).catch(() =>
           apiRequest<any>(`/api/purchases/${editInvoiceId}`)
         );
@@ -229,7 +365,7 @@ export const CreatePurchaseInvoicePage: React.FC<Props> = ({
 
   useEffect(() => {
     loadData();
-  }, [editInvoiceId, currentBusiness?.id]);
+  }, [editInvoiceId, editOrderId, fromPurchaseOrderId, isOrder, currentBusiness?.id]);
 
   // Handle supplier change & auto-detect GST mode + ledger balance
   const handlePartyChange = async (partyId: string) => {
@@ -313,6 +449,7 @@ export const CreatePurchaseInvoicePage: React.FC<Props> = ({
               uniqueItemCode: item.code,
               categoryCode:
                 (item as any).categoryCode || (item as any).category?.code || 'SV',
+              unit: (item as any).unit || 'PRS',
               maintainBatches: itemMaintainBatches,
               rate: defaultRate,
               gstRate:
@@ -637,18 +774,67 @@ export const CreatePurchaseInvoicePage: React.FC<Props> = ({
     setError(null);
 
     try {
+      if (isOrder) {
+        const orderPayload = {
+          supplierPartyId,
+          orderDate: new Date(invoiceDate),
+          expectedDeliveryDate: expectedDeliveryDate ? new Date(expectedDeliveryDate) : undefined,
+          gstMode,
+          supplierReference: supplierInvoiceNumber.trim() || undefined,
+          notes: notes.trim() || undefined,
+          lines: nonBlankLines.map(l => ({
+            uniqueItemId: l.uniqueItemId,
+            quantity: l.quantity,
+            rate: l.rate,
+            discountType: l.discountType === 'FIXED' ? 'FIXED' : 'PERCENTAGE',
+            discountValue: l.discountValue,
+            gstRate: gstMode === 'EXEMPT' ? 0 : l.gstRate,
+            batches: l.batches.map(b => ({
+              batchId: b.batchId,
+              sph: b.sph,
+              cyl: b.cyl,
+              axis: b.axis,
+              add: b.add,
+              side: b.side,
+              quantity: b.quantity,
+              rate: b.rate !== undefined ? b.rate : l.rate,
+            })),
+          })),
+        };
+
+        let resultOrder: any = null;
+        if (editOrderId) {
+          resultOrder = await apiRequest<any>(`/api/purchases/orders/${editOrderId}`, {
+            method: 'PUT',
+            body: JSON.stringify(orderPayload),
+          });
+        } else {
+          resultOrder = await apiRequest<any>('/api/purchases/orders', {
+            method: 'POST',
+            body: JSON.stringify(orderPayload),
+          });
+        }
+
+        setCreatedInvoice(resultOrder);
+        setShowPrintModal(true);
+
+        if (onSuccess && resultOrder?.id) {
+          onSuccess(resultOrder.id);
+        }
+        return;
+      }
+
       const payload = {
         supplierPartyId,
+        purchaseOrderId: linkedPurchaseOrderId || undefined,
         invoiceDate: new Date(invoiceDate),
         supplierInvoiceNumber: supplierInvoiceNumber.trim() || undefined,
         supplierInvoiceDate: supplierInvoiceDate
           ? new Date(supplierInvoiceDate)
           : undefined,
         gstMode,
-        notes: notes.trim()
-          ? `${notes.trim()} | Payment: ${paymentMode} | Terms: ${paymentTerms}`
-          : `Payment: ${paymentMode} | Terms: ${paymentTerms}`,
-        status: andPost ? 'POSTED' : 'DRAFT',
+        notes: notes.trim() || undefined,
+        status: 'POSTED',
         lines: nonBlankLines.map(l => ({
           uniqueItemId: l.uniqueItemId,
           quantity: l.quantity,
@@ -683,7 +869,7 @@ export const CreatePurchaseInvoicePage: React.FC<Props> = ({
         resultId = updated.id;
         finalInvoice = updated;
 
-        if (andPost && updated.status !== 'POSTED') {
+        if (updated.status !== 'POSTED') {
           finalInvoice = await apiRequest(`/api/purchases/invoices/${editInvoiceId}/post`, {
             method: 'POST',
           });
@@ -699,7 +885,7 @@ export const CreatePurchaseInvoicePage: React.FC<Props> = ({
         resultId = created.id;
         finalInvoice = created;
 
-        if (andPost) {
+        if (created.status !== 'POSTED') {
           finalInvoice = await apiRequest(`/api/purchases/invoices/${created.id}/post`, {
             method: 'POST',
           });
@@ -737,8 +923,8 @@ export const CreatePurchaseInvoicePage: React.FC<Props> = ({
     >
       {/* 1. Tally-style Voucher Header */}
       <VoucherHeader
-        voucherType="PURCHASE"
-        isEditing={!!editInvoiceId}
+        voucherType={isOrder ? 'PURCHASE_ORDER' : 'PURCHASE'}
+        isEditing={isOrder ? !!editOrderId : !!editInvoiceId}
         voucherNumber={existingInvoiceNumber || 'AUTO'}
         voucherDate={invoiceDate}
         onVoucherDateChange={val => {
@@ -755,13 +941,7 @@ export const CreatePurchaseInvoicePage: React.FC<Props> = ({
         onReferenceNumberChange={setSupplierInvoiceNumber}
         supplierInvoiceDate={supplierInvoiceDate}
         onSupplierInvoiceDateChange={setSupplierInvoiceDate}
-        barcodeInput={barcodeInput}
-        onBarcodeInput={setBarcodeInput}
-        onBarcodeSubmit={handleBarcodeLookup}
-        barcodeLoading={barcodeLoading}
-        barcodeMsg={barcodeMsg}
         submitting={submitting}
-        onSaveDraft={() => handleSaveInvoice(false)}
         onSavePost={() => handleSaveInvoice(true)}
         onBack={onBack}
       />
@@ -824,15 +1004,7 @@ export const CreatePurchaseInvoicePage: React.FC<Props> = ({
         gstMode={gstMode}
         narration={notes}
         onNarrationChange={setNotes}
-        paymentMode={paymentMode}
-        onPaymentModeChange={setPaymentMode}
-        paymentTerms={paymentTerms}
-        onPaymentTermsChange={terms => {
-          setPaymentTerms(terms);
-          updateDueDate(invoiceDate, terms);
-        }}
-        dueDate={dueDate}
-        onDueDateChange={setDueDate}
+        previousBalance={partyBalance}
         errorMessage={error}
       />
 
@@ -852,6 +1024,7 @@ export const CreatePurchaseInvoicePage: React.FC<Props> = ({
           itemCode={activeBatchLine.uniqueItemCode}
           uniqueItemId={activeBatchLine.uniqueItemId}
           categoryCode={activeBatchLine.categoryCode}
+          unit={activeBatchLine.unit}
           initialBatches={activeBatchLine.batches}
           availableBatches={[]}
           lineQuantity={activeBatchLine.quantity}
@@ -868,15 +1041,15 @@ export const CreatePurchaseInvoicePage: React.FC<Props> = ({
           <div className="bg-white rounded-xl max-w-xl w-full p-5 shadow-2xl border border-slate-300 space-y-4">
             <div className="flex items-start justify-between border-b border-slate-200 pb-3">
               <div className="flex items-center gap-3">
-                <div className="p-2 bg-indigo-50 text-indigo-600 rounded-lg">
+                <div className={`p-2 rounded-lg ${isOrder ? 'bg-blue-50 text-blue-600' : 'bg-indigo-50 text-indigo-600'}`}>
                   <CheckCircle2 className="w-5 h-5" />
                 </div>
                 <div>
                   <h3 className="text-base font-bold text-slate-900">
-                    Purchase Voucher Saved Successfully!
+                    {isOrder ? 'Purchase Order Saved Successfully!' : 'Purchase Invoice Saved & Posted Successfully!'}
                   </h3>
                   <p className="text-xs text-slate-500 font-mono">
-                    Voucher #{createdInvoice.invoiceNumber || existingInvoiceNumber} • Status: {createdInvoice.status}
+                    {isOrder ? 'Order' : 'Invoice'} #{createdInvoice.orderNumber || createdInvoice.invoiceNumber || existingInvoiceNumber} • Status: {createdInvoice.status}
                   </p>
                 </div>
               </div>
@@ -896,31 +1069,31 @@ export const CreatePurchaseInvoicePage: React.FC<Props> = ({
                 </span>
               </div>
               <div className="flex justify-between">
-                <span className="text-slate-500">Invoice Date:</span>
+                <span className="text-slate-500">{isOrder ? 'Order Date:' : 'Invoice Date:'}</span>
                 <span className="font-mono">
-                  {new Date(createdInvoice.invoiceDate || invoiceDate).toLocaleDateString()}
+                  {new Date(createdInvoice.orderDate || createdInvoice.invoiceDate || invoiceDate).toLocaleDateString()}
                 </span>
               </div>
               {supplierInvoiceNumber && (
                 <div className="flex justify-between">
-                  <span className="text-slate-500">Supplier Bill #:</span>
+                  <span className="text-slate-500">{isOrder ? 'Supplier Ref #:' : 'Supplier Bill #:'}</span>
                   <span className="font-mono font-semibold text-slate-800">
                     {supplierInvoiceNumber}
                   </span>
                 </div>
               )}
               <div className="flex justify-between">
-                <span className="text-slate-500">Invoice Total:</span>
+                <span className="text-slate-500">{isOrder ? 'Order Total:' : 'Invoice Total:'}</span>
                 <span className="font-mono font-bold text-indigo-700 text-sm">
                   ₹{parseFloat(createdInvoice.grandTotal || grandTotal).toFixed(2)}
                 </span>
               </div>
               <div className="flex justify-between">
-                <span className="text-slate-500">Stock &amp; Ledger:</span>
-                <span className="text-indigo-600 font-semibold">
-                  {createdInvoice.status === 'POSTED'
-                    ? '✓ Stock Added to Inventory & Supplier Ledger Credited'
-                    : 'Draft Saved (Stock Inwards Pending)'}
+                <span className="text-slate-500">Status &amp; Inventory:</span>
+                <span className={`font-semibold ${isOrder ? 'text-blue-600' : 'text-emerald-600'}`}>
+                  {isOrder
+                    ? '✓ Purchase Order Created (Open / Inward on Invoice)'
+                    : '✓ Stock Inwarded to Inventory & Supplier Ledger Credited'}
                 </span>
               </div>
             </div>
@@ -932,7 +1105,7 @@ export const CreatePurchaseInvoicePage: React.FC<Props> = ({
                 className="flex items-center gap-2 px-3.5 py-1.5 text-xs font-semibold text-slate-700 bg-slate-100 hover:bg-slate-200 rounded border border-slate-300 transition-colors"
               >
                 <Printer className="w-4 h-4 text-slate-600" />
-                Print Voucher
+                Print {isOrder ? 'Order' : 'Invoice'}
               </button>
 
               <div className="flex items-center gap-2">
@@ -941,16 +1114,18 @@ export const CreatePurchaseInvoicePage: React.FC<Props> = ({
                   onClick={handleResetForm}
                   className="px-3.5 py-1.5 text-xs font-semibold text-indigo-700 bg-indigo-50 hover:bg-indigo-100 rounded border border-indigo-200 transition-colors"
                 >
-                  Create Another Voucher
+                  {isOrder ? 'Create Another Order' : 'Create Another Invoice'}
                 </button>
                 <button
                   id="btn-go-to-purchase-invoices-register"
                   onClick={() =>
-                    onNavigate ? onNavigate('/purchase/invoices') : onBack()
+                    onNavigate
+                      ? onNavigate(isOrder ? '/purchase/orders' : '/purchase/invoices')
+                      : onBack()
                   }
                   className="px-4 py-1.5 text-xs font-bold text-white bg-indigo-600 hover:bg-indigo-700 rounded transition-colors shadow-xs"
                 >
-                  View Invoices Register
+                  {isOrder ? 'View Purchase Orders' : 'View Invoices Register'}
                 </button>
               </div>
             </div>

@@ -1,5 +1,5 @@
 import React from 'react';
-import { CreditCard, Calendar, AlertCircle } from 'lucide-react';
+import { AlertCircle } from 'lucide-react';
 import { VoucherTotals } from './VoucherTypes';
 
 interface VoucherFooterProps {
@@ -9,7 +9,9 @@ interface VoucherFooterProps {
   // Narration
   narration: string;
   onNarrationChange: (val: string) => void;
-  // Payment terms
+  // Previous balance
+  previousBalance?: { balance: number; type: 'Dr' | 'Cr' } | number | null;
+  // Legacy / optional props retained for compatibility
   paymentMode?: string;
   onPaymentModeChange?: (val: string) => void;
   paymentTerms?: string;
@@ -26,15 +28,34 @@ export const VoucherFooter: React.FC<VoucherFooterProps> = ({
   gstMode,
   narration,
   onNarrationChange,
-  paymentMode = 'CREDIT',
-  onPaymentModeChange,
-  paymentTerms = 'NET 30',
-  onPaymentTermsChange,
-  dueDate = '',
-  onDueDateChange,
+  previousBalance,
   errorMessage,
 }) => {
   const isSales = voucherType === 'SALES';
+
+  // Normalize previous balance
+  const prevBalNum =
+    typeof previousBalance === 'number'
+      ? previousBalance
+      : (previousBalance?.balance ?? totals.previousBalance ?? 0);
+
+  const prevBalType =
+    typeof previousBalance === 'object' && previousBalance?.type
+      ? previousBalance.type
+      : isSales
+      ? (prevBalNum < 0 ? 'Cr' : 'Dr')
+      : (prevBalNum < 0 ? 'Dr' : 'Cr');
+
+  // For sales: Dr is positive receivable from customer, Cr is advance
+  // For purchases: Cr is positive payable to supplier, Dr is advance
+  let signedPrevBal = 0;
+  if (isSales) {
+    signedPrevBal = prevBalType === 'Cr' ? -Math.abs(prevBalNum) : Math.abs(prevBalNum);
+  } else {
+    signedPrevBal = prevBalType === 'Dr' ? -Math.abs(prevBalNum) : Math.abs(prevBalNum);
+  }
+
+  const finalTotal = Math.round((totals.grandTotal + signedPrevBal) * 100) / 100;
 
   return (
     <div
@@ -49,7 +70,7 @@ export const VoucherFooter: React.FC<VoucherFooterProps> = ({
       )}
 
       <div className="grid grid-cols-1 lg:grid-cols-12 gap-3 items-start">
-        {/* Left: Narration & Payment Mode / Terms (col 7) */}
+        {/* Left: Narration & Summary (col 7) */}
         <div className="lg:col-span-7 space-y-2">
           {/* Narration */}
           <div className="flex items-start gap-2">
@@ -69,56 +90,12 @@ export const VoucherFooter: React.FC<VoucherFooterProps> = ({
             />
           </div>
 
-          {/* Payment Mode, Terms & Due Date */}
-          <div className="flex flex-wrap items-center gap-4 pl-18 text-[11px]">
-            {onPaymentModeChange && (
-              <div className="flex items-center gap-1.5">
-                <span className="text-slate-500 font-semibold">Payment:</span>
-                <select
-                  value={paymentMode}
-                  onChange={e => onPaymentModeChange(e.target.value)}
-                  className="py-0.5 px-1.5 text-xs bg-slate-50 border border-slate-300 rounded focus:ring-1 focus:ring-blue-500 font-medium"
-                >
-                  <option value="CREDIT">Credit (Ledger)</option>
-                  <option value="CASH">Cash</option>
-                  <option value="BANK">Bank Transfer / NEFT</option>
-                  <option value="UPI">UPI / QR</option>
-                  <option value="CARD">Card / POS</option>
-                </select>
-              </div>
-            )}
-
-            {onPaymentTermsChange && (
-              <div className="flex items-center gap-1.5">
-                <span className="text-slate-500 font-semibold">Terms:</span>
-                <select
-                  value={paymentTerms}
-                  onChange={e => onPaymentTermsChange(e.target.value)}
-                  className="py-0.5 px-1.5 text-xs bg-slate-50 border border-slate-300 rounded focus:ring-1 focus:ring-blue-500 font-medium"
-                >
-                  <option value="DUE_ON_RECEIPT">Due on Receipt</option>
-                  <option value="NET 7">Net 7 Days</option>
-                  <option value="NET 15">Net 15 Days</option>
-                  <option value="NET 30">Net 30 Days</option>
-                  <option value="NET 60">Net 60 Days</option>
-                </select>
-              </div>
-            )}
-
-            {onDueDateChange && dueDate && (
-              <div className="flex items-center gap-1.5">
-                <span className="text-slate-500 font-semibold">Due:</span>
-                <input
-                  type="date"
-                  value={dueDate}
-                  onChange={e => onDueDateChange(e.target.value)}
-                  className="py-0.5 px-1 text-xs border border-slate-300 rounded bg-slate-50 font-mono"
-                />
-              </div>
-            )}
-
-            <div className="text-slate-400">
-              Items: <span className="font-bold text-slate-800 font-mono">{totals.totalItems}</span> | Qty:{' '}
+          <div className="flex items-center gap-4 pl-18 text-[11px] text-slate-500">
+            <div>
+              Total Items: <span className="font-bold text-slate-800 font-mono">{totals.totalItems}</span>
+            </div>
+            <div>
+              Total Quantity:{' '}
               <span className="font-bold text-slate-800 font-mono">{totals.totalQuantity}</span>
             </div>
           </div>
@@ -175,11 +152,35 @@ export const VoucherFooter: React.FC<VoucherFooterProps> = ({
             </div>
           )}
 
-          {/* Grand Total Bar */}
+          {/* Under GST: Bill Amount and Previous Balance */}
+          <div className="border-t border-slate-200 pt-1 space-y-1">
+            <div className="flex justify-between text-slate-700 text-xs">
+              <span>Bill Amount:</span>
+              <span className="font-semibold">
+                ₹{totals.grandTotal.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+              </span>
+            </div>
+
+            <div className="flex justify-between text-slate-700 text-xs">
+              <span>Previous Balance:</span>
+              <span className={prevBalNum !== 0 ? 'font-semibold text-amber-800' : 'text-slate-500'}>
+                {prevBalNum !== 0 ? (
+                  <>
+                    {signedPrevBal >= 0 ? '+ ' : '- '}₹{Math.abs(prevBalNum).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                    <span className="text-[10px] ml-1 text-slate-500 font-sans font-normal">({prevBalType})</span>
+                  </>
+                ) : (
+                  '₹0.00'
+                )}
+              </span>
+            </div>
+          </div>
+
+          {/* Grand Total Bar - added with previous balance */}
           <div className="flex justify-between items-baseline font-bold text-slate-900 border-t-2 border-slate-800 pt-1 text-sm">
             <span className="tracking-wide">TOTAL:</span>
             <span className="text-base font-extrabold text-blue-900">
-              ₹{totals.grandTotal.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+              ₹{finalTotal.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
             </span>
           </div>
         </div>
@@ -190,9 +191,6 @@ export const VoucherFooter: React.FC<VoucherFooterProps> = ({
         <div className="flex items-center gap-4">
           <span>
             <kbd className="px-1.5 py-0.5 bg-slate-200 text-slate-800 rounded font-bold">F2</kbd> Date
-          </span>
-          <span>
-            <kbd className="px-1.5 py-0.5 bg-slate-200 text-slate-800 rounded font-bold">F3</kbd> Scan Barcode
           </span>
           <span>
             <kbd className="px-1.5 py-0.5 bg-slate-200 text-slate-800 rounded font-bold">Enter</kbd> Next Cell

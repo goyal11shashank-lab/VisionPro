@@ -75,15 +75,10 @@ export function validateOpticalPower(
 
   // Category Specific Rule: Single Vision (SV)
   if (cat === 'SV') {
-    // If CYL = 0: AXIS = 0 (do not require user to enter axis when CYL is 0)
-    if (cylNum === 0) {
-      axisNum = 0;
-    } else {
-      // If CYL != 0: AXIS is supported (0 to 180 degrees)
-      if (axisNum < 0 || axisNum > 180) {
-        throw new Error('AXIS must be between 0 and 180 degrees.');
-      }
+    if (axisRaw !== undefined && axisRaw !== null && axisRaw !== '' && Number(axisRaw) !== 0) {
+      throw new Error('Single Vision (SV) lenses do not have AXIS.');
     }
+    axisNum = 0;
     if (addRaw !== undefined && addRaw !== null && addRaw !== '' && Number(addRaw) !== 0) {
       throw new Error('Single Vision (SV) lenses do not have ADD power.');
     }
@@ -227,7 +222,7 @@ export async function findOrCreateOpticalBatch(input: OpticalPowerInput) {
   }
 
   // Direct Stock Item Category drives batch parameters
-  const categoryCode = uItem.opticalCategory || uItem.categoryCode || 'SV';
+  const categoryCode = uItem.categoryCode || uItem.opticalCategory || 'SV';
   let categoryId = input.categoryId || uItem.categoryId;
 
   // Preserve legacy categoryId foreign key on opticalBatches if present

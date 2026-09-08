@@ -290,6 +290,9 @@ export class SalesReturnService {
         if (returnQty <= 0) {
           throw new Error(`Line ${i + 1}: Return quantity must be greater than 0`);
         }
+        if (Math.abs(Math.round(returnQty * 2) - returnQty * 2) > 0.0001) {
+          throw new Error(`Line ${i + 1}: Return quantity must be a positive value in steps of 0.5 (e.g. 0.5, 1.0, 1.5, 2.0)`);
+        }
 
         const origLineQty = parseFloat(origLine.quantity);
         const alreadyReturned = cumulativeLineReturned.get(reqLine.salesInvoiceLineId) || 0;
@@ -312,6 +315,9 @@ export class SalesReturnService {
           const bQty = round2(b.quantity);
           if (bQty <= 0) {
             throw new Error(`Line ${i + 1}: Batch return quantity must be greater than 0`);
+          }
+          if (Math.abs(Math.round(bQty * 2) - bQty * 2) > 0.0001) {
+            throw new Error(`Line ${i + 1}: Batch return quantity must be a positive value in steps of 0.5 (e.g. 0.5, 1.0, 1.5, 2.0)`);
           }
           sumBatchQty = round2(sumBatchQty + bQty);
 
@@ -1002,7 +1008,7 @@ export class SalesReturnService {
             const stockRow = stockRes.rows[0];
             const curPhys = parseFloat(stockRow.physical_stock);
             const curResv = parseFloat(stockRow.reserved_stock);
-            const newPhys = round2(Math.max(0, curPhys - qty));
+            const newPhys = round2(curPhys - qty);
             const newAvail = round2(newPhys - curResv);
 
             await client.query(
