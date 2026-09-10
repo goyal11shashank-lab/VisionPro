@@ -1710,6 +1710,24 @@ router.get(['/unique-items', '/stock-items', '/'], requireAnyPermission(['master
         opticalCategory: uniqueItems.opticalCategory,
         unit: uniqueItems.unit,
         batchesCount: sql<number>`(SELECT COUNT(*)::int FROM "optical_batches" WHERE "optical_batches"."unique_item_id" = ${uniqueItems.id})`,
+        stock: sql<number>`COALESCE((
+          SELECT SUM(os.physical_stock)::numeric
+          FROM "optical_batches" ob
+          JOIN "optical_stocks" os ON ob.id = os.batch_id
+          WHERE ob.unique_item_id = ${uniqueItems.id}
+        ), 0)`,
+        reserved: sql<number>`COALESCE((
+          SELECT SUM(os.reserved_stock)::numeric
+          FROM "optical_batches" ob
+          JOIN "optical_stocks" os ON ob.id = os.batch_id
+          WHERE ob.unique_item_id = ${uniqueItems.id}
+        ), 0)`,
+        available: sql<number>`COALESCE((
+          SELECT SUM(os.available_stock)::numeric
+          FROM "optical_batches" ob
+          JOIN "optical_stocks" os ON ob.id = os.batch_id
+          WHERE ob.unique_item_id = ${uniqueItems.id}
+        ), 0)`,
         purchaseRate: uniqueItems.purchaseRate,
         lastPurchasePrice: uniqueItems.lastPurchasePrice,
         mrp: uniqueItems.mrp,

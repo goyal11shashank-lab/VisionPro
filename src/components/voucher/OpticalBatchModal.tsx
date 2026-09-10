@@ -599,18 +599,18 @@ export const OpticalBatchModal: React.FC<OpticalBatchModalProps> = ({
             </div>
             <div>
               <div className="flex items-center gap-2">
-                <h3 className="text-sm font-bold text-white tracking-wide">
+                <h3 className="text-sm font-black text-white tracking-wider uppercase">
                   {allocatedIds.length > 0 ? 'Edit Batch Allocations' : 'Batch Allocations'}
                 </h3>
-                <span className="px-1.5 py-0.5 rounded text-[10px] font-mono font-bold bg-blue-700/60 text-blue-200 border border-blue-500/30 uppercase">
-                  {mode.toUpperCase()} • Category: {normCategory}
+                <span className="px-2 py-0.5 rounded text-[10px] font-mono font-black bg-blue-600 text-white border border-blue-400 uppercase tracking-wide">
+                  {mode.toUpperCase()} • CATEGORY: {normCategory}
                 </span>
                 {itemCode && (
-                  <span className="text-xs text-slate-400 font-mono">[{itemCode}]</span>
+                  <span className="text-xs text-slate-300 font-mono font-bold">[{itemCode}]</span>
                 )}
               </div>
               <div className="flex items-center gap-2 mt-0.5">
-                <p className="text-xs font-semibold text-slate-200 truncate max-w-xs">
+                <p className="text-xs font-bold text-white truncate max-w-xs">
                   {itemName}
                 </p>
                 {allocatedIds.length > 0 && (
@@ -659,7 +659,7 @@ export const OpticalBatchModal: React.FC<OpticalBatchModalProps> = ({
         {/* Search / Entry Section (Primary Batch Entry) */}
         <div className="p-4 bg-slate-50 border-b border-slate-200 shrink-0 relative">
           <div className="flex items-center justify-between mb-1.5">
-            <label className="text-xs font-bold text-slate-700">
+            <label className="text-xs font-black text-slate-950 uppercase tracking-wide">
               Add Batch / Power:
             </label>
             {mode === 'purchase' && (
@@ -875,18 +875,18 @@ export const OpticalBatchModal: React.FC<OpticalBatchModalProps> = ({
               </div>
 
               <div>
-                <label className="block text-[10px] font-bold text-slate-600 mb-0.5">CYL</label>
+                <label className="block text-[10px] font-black text-slate-950 uppercase tracking-wider mb-0.5">CYL</label>
                 <input
                   type="number"
                   step="0.25"
                   value={newCyl}
                   onChange={e => setNewCyl(e.target.value)}
-                  className="w-full px-2 py-1 text-xs border border-slate-300 rounded font-mono text-center bg-white"
+                  className="w-full px-2 py-1 text-xs border border-slate-300 rounded font-mono text-center bg-white font-bold"
                 />
               </div>
 
               <div>
-                <label className="block text-[10px] font-bold text-slate-600 mb-0.5">AXIS</label>
+                <label className="block text-[10px] font-black text-slate-950 uppercase tracking-wider mb-0.5">AXIS</label>
                 <input
                   type="number"
                   min="0"
@@ -894,13 +894,13 @@ export const OpticalBatchModal: React.FC<OpticalBatchModalProps> = ({
                   value={newAxis}
                   onChange={e => setNewAxis(e.target.value)}
                   placeholder="0-180"
-                  className="w-full px-2 py-1 text-xs border border-slate-300 rounded font-mono text-center bg-white"
+                  className="w-full px-2 py-1 text-xs border border-slate-300 rounded font-mono text-center bg-white font-bold"
                 />
               </div>
 
               {isBifocalOrProg && (
                 <div>
-                  <label className="block text-[10px] font-bold text-slate-600 mb-0.5">+ADD</label>
+                  <label className="block text-[10px] font-black text-slate-950 uppercase tracking-wider mb-0.5">+ADD</label>
                   <input
                     type="number"
                     step="0.25"
@@ -908,18 +908,18 @@ export const OpticalBatchModal: React.FC<OpticalBatchModalProps> = ({
                     value={newAdd}
                     onChange={e => setNewAdd(e.target.value)}
                     placeholder="+1.00"
-                    className="w-full px-2 py-1 text-xs border border-slate-300 rounded font-mono text-center bg-white"
+                    className="w-full px-2 py-1 text-xs border border-slate-300 rounded font-mono text-center bg-white font-bold"
                   />
                 </div>
               )}
 
               {isBifocalOrProg && (
                 <div>
-                  <label className="block text-[10px] font-bold text-slate-600 mb-0.5">SIDE</label>
+                  <label className="block text-[10px] font-black text-slate-950 uppercase tracking-wider mb-0.5">SIDE</label>
                   <select
                     value={newSide}
                     onChange={e => setNewSide(e.target.value as any)}
-                    className="w-full px-1.5 py-1 text-xs border border-slate-300 rounded bg-white text-slate-800"
+                    className="w-full px-1.5 py-1 text-xs border border-slate-300 rounded bg-white text-slate-950 font-bold"
                   >
                     <option value="NONE">NONE</option>
                     <option value="R">R (Right)</option>
@@ -944,9 +944,9 @@ export const OpticalBatchModal: React.FC<OpticalBatchModalProps> = ({
 
         {/* Allocated Batches Table (Only allocated batches are displayed) */}
         <div className="flex-1 min-h-0 overflow-y-auto bg-white flex flex-col">
-          <div className="px-4 py-2 bg-slate-100 border-b border-slate-200 flex items-center justify-between text-xs font-bold text-slate-700">
+          <div className="px-4 py-2 bg-slate-200 border-b border-slate-300 flex items-center justify-between text-xs font-black text-slate-950 uppercase tracking-wider">
             <span>Allocated Batches:</span>
-            <span className="text-slate-500 font-normal">
+            <span className="text-slate-700 font-bold font-mono">
               {allocatedIds.length} {allocatedIds.length === 1 ? 'batch' : 'batches'} selected
             </span>
           </div>
@@ -954,19 +954,19 @@ export const OpticalBatchModal: React.FC<OpticalBatchModalProps> = ({
           {allocatedIds.length === 0 ? (
             <div className="py-12 px-4 text-center text-xs text-slate-400 font-sans my-auto">
               <Layers className="w-8 h-8 mx-auto text-slate-300 mb-2" />
-              <p className="font-semibold text-slate-600">No batches allocated yet</p>
-              <p className="text-[11px] text-slate-400 mt-1">
-                Type batch power in the search box above (e.g. <span className="font-mono font-bold text-slate-600">25 1</span>) and press Enter to add.
+              <p className="font-bold text-slate-700">No batches allocated yet</p>
+              <p className="text-[11px] text-slate-500 mt-1">
+                Type batch power in the search box above (e.g. <span className="font-mono font-bold text-slate-700">25 1</span>) and press Enter to add.
               </p>
             </div>
           ) : (
             <table className="w-full text-xs text-left border-collapse">
-              <thead className="bg-slate-50 text-slate-600 font-semibold border-b border-slate-200 sticky top-0 z-10 font-sans">
+              <thead className="bg-slate-200 text-slate-950 font-black border-b-2 border-slate-300 sticky top-0 z-10 font-sans uppercase tracking-wider text-[11px]">
                 <tr>
-                  <th className="py-2 px-3">Batch / Power</th>
-                  <th className="py-2 px-3 text-right">Available</th>
-                  <th className="py-2 px-3 text-right w-36">Qty ({unitDisplay})</th>
-                  <th className="py-2 px-2 text-center w-12">Remove</th>
+                  <th className="py-2.5 px-3 text-slate-950 font-black">Batch / Power</th>
+                  <th className="py-2.5 px-3 text-right text-slate-950 font-black">Available</th>
+                  <th className="py-2.5 px-3 text-right w-36 text-slate-950 font-black">Qty ({unitDisplay})</th>
+                  <th className="py-2.5 px-2 text-center w-12 text-slate-950 font-black">Remove</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-100 font-mono">

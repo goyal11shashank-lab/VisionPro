@@ -14,6 +14,8 @@ import { VoucherHeader } from '../../components/voucher/VoucherHeader';
 import { VoucherItemGrid } from '../../components/voucher/VoucherItemGrid';
 import { VoucherFooter } from '../../components/voucher/VoucherFooter';
 import { OpticalBatchModal } from '../../components/voucher/OpticalBatchModal';
+import { PrintPreviewModal } from '../../components/print/PrintPreviewModal';
+import { PrintableVoucher } from '../../components/print/PrintableVoucher';
 import {
   VoucherLineItem,
   ComputedVoucherLine,
@@ -104,6 +106,7 @@ export const CreatePurchaseInvoicePage: React.FC<Props> = ({
   const [error, setError] = useState<string | null>(null);
   const [createdInvoice, setCreatedInvoice] = useState<any | null>(null);
   const [showPrintModal, setShowPrintModal] = useState<boolean>(false);
+  const [isPrintPreviewOpen, setIsPrintPreviewOpen] = useState<boolean>(false);
 
   // Helper: Auto calculate Due Date based on payment terms
   const updateDueDate = (baseDate: string, terms: string) => {
@@ -1099,14 +1102,24 @@ export const CreatePurchaseInvoicePage: React.FC<Props> = ({
             </div>
 
             <div className="flex flex-wrap items-center justify-between gap-3 pt-2">
-              <button
-                id="btn-print-purchase-voucher"
-                onClick={() => window.print()}
-                className="flex items-center gap-2 px-3.5 py-1.5 text-xs font-semibold text-slate-700 bg-slate-100 hover:bg-slate-200 rounded border border-slate-300 transition-colors"
-              >
-                <Printer className="w-4 h-4 text-slate-600" />
-                Print {isOrder ? 'Order' : 'Invoice'}
-              </button>
+              <div className="flex items-center gap-2">
+                <button
+                  id="btn-preview-purchase-voucher"
+                  onClick={() => setIsPrintPreviewOpen(true)}
+                  className="flex items-center gap-2 px-3.5 py-1.5 text-xs font-semibold text-white bg-indigo-600 hover:bg-indigo-700 rounded transition-colors shadow-xs"
+                >
+                  <Printer className="w-4 h-4" />
+                  Print Preview
+                </button>
+                <button
+                  id="btn-print-purchase-voucher"
+                  onClick={() => setIsPrintPreviewOpen(true)}
+                  className="flex items-center gap-2 px-3.5 py-1.5 text-xs font-semibold text-slate-700 bg-slate-100 hover:bg-slate-200 rounded border border-slate-300 transition-colors"
+                >
+                  <Printer className="w-4 h-4 text-slate-600" />
+                  Print {isOrder ? 'Order' : 'Invoice'}
+                </button>
+              </div>
 
               <div className="flex items-center gap-2">
                 <button
@@ -1131,6 +1144,28 @@ export const CreatePurchaseInvoicePage: React.FC<Props> = ({
             </div>
           </div>
         </div>
+      )}
+
+      {/* REUSABLE A4 PRINT PREVIEW MODAL */}
+      {isPrintPreviewOpen && createdInvoice && (
+        <PrintPreviewModal
+          isOpen={isPrintPreviewOpen}
+          onClose={() => setIsPrintPreviewOpen(false)}
+          title={`${isOrder ? 'Purchase Order' : 'Purchase Invoice'} - ${createdInvoice.orderNumber || createdInvoice.invoiceNumber || existingInvoiceNumber || ''}`}
+          filename={`${isOrder ? 'PO' : 'PI'}_${createdInvoice.orderNumber || createdInvoice.invoiceNumber || 'VOUCHER'}`}
+          defaultOrientation="portrait"
+        >
+          {({ documentId }) => (
+            <PrintableVoucher
+              id={documentId}
+              business={currentBusiness}
+              voucher={createdInvoice}
+              documentType={isOrder ? 'PURCHASE_ORDER' : 'PURCHASE_INVOICE'}
+              customTitle={isOrder ? 'PURCHASE ORDER' : 'PURCHASE INVOICE'}
+              copyLabel="Original for Records"
+            />
+          )}
+        </PrintPreviewModal>
       )}
     </div>
   );

@@ -92,16 +92,25 @@ export interface StockItemLedgerData {
 }
 
 interface StockItemLedgerModalProps {
-  itemId: string | null;
+  itemId?: string | null;
+  uniqueItemId?: string | null;
   itemName?: string;
+  uniqueItemName?: string;
+  isOpen?: boolean;
   onClose: () => void;
 }
 
 export const StockItemLedgerModal: React.FC<StockItemLedgerModalProps> = ({
   itemId,
+  uniqueItemId,
   itemName,
+  uniqueItemName,
+  isOpen = true,
   onClose,
 }) => {
+  const targetItemId = itemId || uniqueItemId || null;
+  const targetItemName = itemName || uniqueItemName || '';
+
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [ledgerData, setLedgerData] = useState<StockItemLedgerData | null>(null);
@@ -116,10 +125,10 @@ export const StockItemLedgerModal: React.FC<StockItemLedgerModalProps> = ({
   const [selectedBatchId, setSelectedBatchId] = useState<string>('ALL');
 
   useEffect(() => {
-    if (itemId) {
+    if (targetItemId) {
       fetchLedger();
     }
-  }, [itemId]);
+  }, [targetItemId]);
 
   // Handle escape key
   useEffect(() => {
@@ -133,12 +142,12 @@ export const StockItemLedgerModal: React.FC<StockItemLedgerModalProps> = ({
   }, [onClose]);
 
   const fetchLedger = async () => {
-    if (!itemId) return;
+    if (!targetItemId) return;
     try {
       setLoading(true);
       setError(null);
       const res = await apiRequest<{ success: boolean; data: StockItemLedgerData }>(
-        `/api/stock-items/${itemId}/ledger`
+        `/api/stock-items/${targetItemId}/ledger`
       );
       setLedgerData(res.data);
     } catch (err: any) {
@@ -209,7 +218,7 @@ export const StockItemLedgerModal: React.FC<StockItemLedgerModalProps> = ({
         'Closing Qty',
         'Transactions',
       ];
-      const rows = ledgerData.monthlySummaries.map(m => [
+      const rows = (ledgerData?.monthlySummaries || []).map(m => [
         `"${m.monthLabel}"`,
         m.openingQty,
         m.purchaseQty + m.returnIn + m.openingStockEntry,
@@ -290,7 +299,7 @@ export const StockItemLedgerModal: React.FC<StockItemLedgerModalProps> = ({
                 </span>
               </div>
               <h2 className="text-lg md:text-xl font-bold text-white tracking-tight mt-0.5">
-                {ledgerData?.item.name || itemName || 'Stock Item Ledger'}
+                {ledgerData?.item.name || targetItemName || 'Stock Item Ledger'}
               </h2>
             </div>
           </div>
@@ -416,7 +425,7 @@ export const StockItemLedgerModal: React.FC<StockItemLedgerModalProps> = ({
                 className="px-2.5 py-1.5 text-xs bg-slate-50 border border-slate-200 rounded-lg text-slate-700 focus:outline-hidden focus:ring-1 focus:ring-indigo-500"
               >
                 <option value="ALL">All Months</option>
-                {ledgerData?.monthlySummaries.map(m => (
+                {(ledgerData?.monthlySummaries || []).map(m => (
                   <option key={m.month} value={m.month}>
                     {m.monthLabel}
                   </option>
@@ -514,7 +523,7 @@ export const StockItemLedgerModal: React.FC<StockItemLedgerModalProps> = ({
                       </tr>
                     </thead>
                     <tbody className="divide-y divide-slate-200">
-                      {ledgerData?.monthlySummaries.map((m) => {
+                      {(ledgerData?.monthlySummaries || []).map((m) => {
                         const totalInwardQty = m.purchaseQty + m.returnIn + m.openingStockEntry;
                         const totalOutwardQty = m.salesQty + m.returnOut;
                         const netFlow = totalInwardQty - totalOutwardQty + m.adjustment;

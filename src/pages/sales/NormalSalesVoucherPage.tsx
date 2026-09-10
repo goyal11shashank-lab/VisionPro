@@ -7,6 +7,7 @@ import {
   AlertTriangle,
 } from 'lucide-react';
 import { useAuth } from '../../context/AuthContext';
+import { useBusinessSettings } from '../../context/BusinessSettingsContext';
 import { apiRequest } from '../../api/client';
 import { VoucherHeader } from '../../components/voucher/VoucherHeader';
 import { VoucherItemGrid } from '../../components/voucher/VoucherItemGrid';
@@ -21,6 +22,8 @@ import {
   isVoucherLineEmpty,
   ensureTrailingBlankRow,
 } from '../../components/voucher/VoucherTypes';
+import { PrintPreviewModal } from '../../components/print/PrintPreviewModal';
+import { PrintableVoucher } from '../../components/print/PrintableVoucher';
 
 interface Props {
   onNavigate?: (path: string) => void;
@@ -31,11 +34,13 @@ interface Props {
 
 export const NormalSalesVoucherPage: React.FC<Props> = ({ onNavigate, onSuccess, editInvoiceId, onBack }) => {
   const { currentBusiness } = useAuth();
+  const { settings } = useBusinessSettings();
 
   // Master Data
   const [parties, setParties] = useState<any[]>([]);
   const [uniqueItemsList, setUniqueItemsList] = useState<any[]>([]);
   const [loadingInitial, setLoadingInitial] = useState<boolean>(true);
+  const [autoInvokePrint, setAutoInvokePrint] = useState<boolean>(false);
 
   // Voucher Header State
   const [selectedPartyId, setSelectedPartyId] = useState<string>('');
@@ -81,6 +86,7 @@ export const NormalSalesVoucherPage: React.FC<Props> = ({ onNavigate, onSuccess,
   const [formError, setFormError] = useState<string | null>(null);
   const [createdInvoice, setCreatedInvoice] = useState<any | null>(null);
   const [showPrintModal, setShowPrintModal] = useState<boolean>(false);
+  const [isPrintPreviewOpen, setIsPrintPreviewOpen] = useState<boolean>(false);
 
   // Load initial data (parties, items, number preview)
   const loadPrerequisites = async () => {
@@ -874,15 +880,98 @@ export const NormalSalesVoucherPage: React.FC<Props> = ({ onNavigate, onSuccess,
               </div>
             </div>
 
+            {/* Items Sold Table */}
+            {(() => {
+              const displayLines = (createdInvoice.lines && createdInvoice.lines.length > 0)
+                ? createdInvoice.lines
+                : computedLines.filter(l => l.uniqueItemId && l.quantity > 0);
+
+              if (displayLines.length === 0) return null;
+
+              return (
+                <div className="border border-slate-200 rounded-md overflow-hidden text-xs">
+                  <div className="bg-slate-100 px-3 py-1.5 font-bold text-[11px] text-slate-700 uppercase tracking-wider flex justify-between">
+                    <span>Items Sold ({displayLines.length})</span>
+                    <span>Amount</span>
+                  </div>
+                  <div className="divide-y divide-slate-100 max-h-48 overflow-y-auto bg-white">
+                    {displayLines.map((l: any, idx: number) => {
+                      const itemName = l.uniqueItemName || l.uniqueItem?.name || 'Optical Item';
+                      const itemCode = l.uniqueItemCode || l.uniqueItem?.code;
+                      const qty = parseFloat(String(l.quantity || 1));
+                      const rate = parseFloat(String(l.rate || 0));
+                      const total = parseFloat(String(l.lineTotal || (qty * rate)));
+                      const batches = l.batches || [];
+
+                      return (
+                        <div key={l.id || idx} className="p-2.5 hover:bg-slate-50 flex items-start justify-between gap-2">
+                          <div className="min-w-0">
+                            <div className="font-semibold text-slate-900 flex items-center gap-1.5 flex-wrap">
+                              <span>{itemName}</span>
+                              {itemCode && (
+                                <span className="text-[10px] font-mono px-1 py-0.2 bg-slate-100 text-slate-600 rounded">
+                                  {itemCode}
+                                </span>
+                              )}
+                            </div>
+                            {batches.length > 0 && (
+                              <div className="text-[10px] text-slate-500 font-mono mt-0.5 space-y-0.5">
+                                {batches.map((b: any, bIdx: number) => {
+                                  const sph = b.sph ?? b.batch?.sph ?? '0.00';
+                                  const cyl = b.cyl ?? b.batch?.cyl ?? '0.00';
+                                  const axis = b.axis ?? b.batch?.axis;
+                                  const barcode = b.barcode ?? b.batch?.barcode;
+                                  return (
+                                    <div key={bIdx}>
+                                      SPH {sph}, CYL {cyl}{axis ? `, AXIS ${axis}` : ''}{barcode ? ` | ${barcode}` : ''}
+                                    </div>
+                                  );
+                                })}
+                              </div>
+                            )}
+                            <div className="text-[11px] text-slate-500 mt-0.5">
+                              {qty} {l.unit || 'PRS'} × ₹{rate.toFixed(2)}
+                            </div>
+                          </div>
+                          <div className="font-mono font-bold text-slate-900 text-right whitespace-nowrap">
+                            ₹{total.toFixed(2)}
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
+              );
+            })()}
+
             <div className="flex flex-wrap items-center justify-between gap-3 pt-2">
-              <button
-                id="btn-print-tax-invoice"
-                onClick={() => window.print()}
-                className="flex items-center gap-2 px-3.5 py-1.5 text-xs font-semibold text-slate-700 bg-slate-100 hover:bg-slate-200 rounded border border-slate-300 transition-colors"
-              >
-                <Printer className="w-4 h-4 text-slate-600" />
-                Print Voucher
-              </button>
+              <div className="flex items-center gap-2">
+                <button
+                  id="btn-preview-tax-invoice"
+                  onClick={() => {
+                    setAutoInvokePrint(false);
+                    setIsPrintPreviewOpen(true);
+                  }}
+                  className="flex items-center gap-2 px-3.5 py-1.5 text-xs font-semibold text-white bg-blue-600 hover:bg-blue-700 rounded transition-colors shadow-xs"
+                  title="Open Print Preview"
+                >
+                  <Printer className="w-4 h-4" />
+                  Print Preview
+                </button>
+                <button
+                  id="btn-print-tax-invoice"
+                  onClick={() => {
+                    const previewBeforePrint = settings?.print?.previewBeforePrint ?? true;
+                    setAutoInvokePrint(!previewBeforePrint);
+                    setIsPrintPreviewOpen(true);
+                  }}
+                  className="flex items-center gap-2 px-3.5 py-1.5 text-xs font-semibold text-slate-700 bg-slate-100 hover:bg-slate-200 rounded border border-slate-300 transition-colors"
+                  title="Print Invoice (System Print Dialog)"
+                >
+                  <Printer className="w-4 h-4 text-slate-600" />
+                  Print
+                </button>
+              </div>
 
               <div className="flex items-center gap-2">
                 {editInvoiceId ? (
@@ -935,6 +1024,29 @@ export const NormalSalesVoucherPage: React.FC<Props> = ({ onNavigate, onSuccess,
             </div>
           </div>
         </div>
+      )}
+
+      {/* REUSABLE A4 PRINT PREVIEW MODAL */}
+      {isPrintPreviewOpen && createdInvoice && (
+        <PrintPreviewModal
+          isOpen={isPrintPreviewOpen}
+          onClose={() => setIsPrintPreviewOpen(false)}
+          title={`Tax Invoice - ${createdInvoice.invoiceNumber || ''}`}
+          filename={`Invoice_${createdInvoice.invoiceNumber || 'INV'}`}
+          defaultOrientation="portrait"
+          autoInvokePrint={autoInvokePrint}
+        >
+          {({ documentId }) => (
+            <PrintableVoucher
+              id={documentId}
+              business={currentBusiness}
+              voucher={createdInvoice}
+              documentType="SALES_INVOICE"
+              customTitle={settings?.print?.invoiceTitle || "TAX INVOICE"}
+              copyLabel="Original for Recipient"
+            />
+          )}
+        </PrintPreviewModal>
       )}
     </div>
   );

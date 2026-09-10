@@ -141,21 +141,21 @@ export const VoucherItemGrid: React.FC<VoucherItemGridProps> = ({
       {/* Table header */}
       <div className="overflow-x-auto overflow-y-auto flex-1 custom-scrollbar">
         <table className="w-full border-collapse text-xs select-none">
-          <thead className="bg-slate-100 text-slate-700 font-semibold border-b border-slate-300 sticky top-0 z-20 font-sans">
-            <tr className="divide-x divide-slate-300">
-              <th className="py-2 px-1 w-10 text-center text-slate-500 font-mono">#</th>
-              <th className="py-2 px-3 text-left min-w-[240px]">
+          <thead className="bg-slate-200 text-slate-950 font-extrabold border-b-2 border-slate-400 sticky top-0 z-20 font-sans tracking-wide uppercase text-[11px] shadow-xs">
+            <tr className="divide-x divide-slate-400">
+              <th className="py-2.5 px-1.5 w-10 text-center text-slate-950 font-black font-mono">#</th>
+              <th className="py-2.5 px-3 text-left min-w-[240px] text-slate-950 font-extrabold">
                 Name of Item / Description
               </th>
-              <th className="py-2 px-2 text-left w-[240px]">
+              <th className="py-2.5 px-2 text-left w-[240px] text-slate-950 font-extrabold">
                 Batch / Optical Power Allocations
               </th>
-              <th className="py-2 px-2 text-right w-24">Quantity</th>
-              <th className="py-2 px-2 text-right w-28">Rate (₹)</th>
-              <th className="py-2 px-2 text-right w-20">Disc %</th>
-              <th className="py-2 px-2 text-right w-20">GST %</th>
-              <th className="py-2 px-3 text-right w-32">Amount (₹)</th>
-              <th className="py-2 px-1 w-10 text-center text-slate-400"></th>
+              <th className="py-2.5 px-2 text-right w-24 text-slate-950 font-extrabold">Quantity</th>
+              <th className="py-2.5 px-2 text-right w-28 text-slate-950 font-extrabold">Rate (₹)</th>
+              <th className="py-2.5 px-2 text-right w-20 text-slate-950 font-extrabold">Disc %</th>
+              <th className="py-2.5 px-2 text-right w-20 text-slate-950 font-extrabold">GST %</th>
+              <th className="py-2.5 px-3 text-right w-32 text-slate-950 font-extrabold">Amount (₹)</th>
+              <th className="py-2.5 px-1 w-10 text-center text-slate-600"></th>
             </tr>
           </thead>
 
@@ -584,9 +584,9 @@ export const VoucherItemGrid: React.FC<VoucherItemGridProps> = ({
           )}
         </div>
 
-        <div className="text-[11px] text-slate-500 font-sans flex items-center gap-3">
+        <div className="text-[11px] text-slate-700 font-sans flex items-center gap-3">
           <span>
-            Total Lines: <strong className="text-slate-800 font-mono">{lines.length}</strong>
+            Total Lines: <strong className="text-slate-950 font-black font-mono text-xs">{lines.length}</strong>
           </span>
         </div>
       </div>

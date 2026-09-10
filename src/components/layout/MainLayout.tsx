@@ -17,6 +17,11 @@ export const MainLayout: React.FC<MainLayoutProps> = ({
 }) => {
   const [isMobileSidebarOpen, setIsMobileSidebarOpen] = useState<boolean>(false);
 
+  // Dedicated print routes render standalone without standard web chrome
+  if (currentPath.endsWith('/print')) {
+    return <>{children}</>;
+  }
+
   const isVoucherPage =
     currentPath.includes('/voucher') ||
     currentPath === '/sales/new' ||

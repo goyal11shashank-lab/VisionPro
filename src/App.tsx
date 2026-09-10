@@ -1,5 +1,6 @@
 import React, { useState } from 'react';
 import { AuthProvider, useAuth } from './context/AuthContext.js';
+import { SettingsProvider } from './context/SettingsContext.js';
 import { MainLayout } from './components/layout/MainLayout.js';
 import { LoginPage } from './pages/LoginPage.js';
 import { DashboardPage } from './pages/DashboardPage.js';
@@ -24,6 +25,7 @@ import { CustomerLedgerPage } from './pages/parties/CustomerLedgerPage.js';
 import { SalesOrdersPage } from './pages/sales/SalesOrdersPage.js';
 import { SalesInvoicesPage } from './pages/sales/SalesInvoicesPage.js';
 import { NormalSalesVoucherPage } from './pages/sales/NormalSalesVoucherPage.js';
+import { SalesInvoicePrintPage } from './pages/sales/SalesInvoicePrintPage.js';
 import { SalesReturnsPage } from './pages/sales/SalesReturnsPage.js';
 import { PurchaseReturnsPage } from './pages/purchases/PurchaseReturnsPage.js';
 import { CustomerReceiptsPage } from './pages/accounts/CustomerReceiptsPage.js';
@@ -67,8 +69,11 @@ const AppContent: React.FC = () => {
         return 'System Users & Access';
       case '/admin/roles':
         return 'Roles & Permissions Matrix';
+      case '/settings':
+      case '/admin/settings':
+        return 'Application Settings Center';
       case '/admin/business-settings':
-        return 'Business Legal Profile';
+        return 'Business Settings & Profile';
       case '/admin/gst-settings':
         return 'GST Compliance & Rates';
       case '/admin/barcode-settings':
@@ -175,6 +180,9 @@ const AppContent: React.FC = () => {
         return <UsersPage />;
       case '/admin/roles':
         return <RolesPage />;
+      case '/settings':
+      case '/admin/settings':
+        return <BusinessSettingsPage initialTab="general" />;
       case '/admin/business-settings':
         return <BusinessSettingsPage initialTab="general" />;
       case '/admin/gst-settings':
@@ -213,6 +221,24 @@ const AppContent: React.FC = () => {
       case '/sales/new':
         return <NormalSalesVoucherPage onNavigate={setCurrentPath} />;
       default:
+        if (currentPath.startsWith('/sales/invoices/') && currentPath.endsWith('/print')) {
+          const invId = currentPath.replace('/sales/invoices/', '').replace('/print', '');
+          return (
+            <SalesInvoicePrintPage
+              invoiceId={invId}
+              onBack={() => setCurrentPath('/sales/invoices')}
+            />
+          );
+        }
+        if (currentPath.startsWith('/sales/voucher/') && currentPath.endsWith('/print')) {
+          const invId = currentPath.replace('/sales/voucher/', '').replace('/print', '');
+          return (
+            <SalesInvoicePrintPage
+              invoiceId={invId}
+              onBack={() => setCurrentPath('/sales/invoices')}
+            />
+          );
+        }
         if (currentPath.startsWith('/sales/voucher/edit/')) {
           const editId = currentPath.replace('/sales/voucher/edit/', '');
           return (
@@ -356,7 +382,9 @@ const AppContent: React.FC = () => {
 export default function App() {
   return (
     <AuthProvider>
-      <AppContent />
+      <SettingsProvider>
+        <AppContent />
+      </SettingsProvider>
     </AuthProvider>
   );
 }

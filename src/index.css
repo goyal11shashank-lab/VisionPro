@@ -81,3 +81,140 @@ input[type="number"] {
   -moz-appearance: textfield;
   appearance: textfield;
 }
+
+/* =========================================================================
+   COMPREHENSIVE PRINT SYSTEM STYLING (@media print)
+   ========================================================================= */
+@media print {
+  /* Page configuration */
+  @page {
+    size: A4 portrait;
+    margin: 8mm;
+  }
+
+  body.print-landscape {
+    @page {
+      size: A4 landscape;
+      margin: 8mm;
+    }
+  }
+
+  /* Universal Print Isolation: Hide all page content by default */
+  body * {
+    visibility: hidden;
+  }
+
+  /* Make ONLY the printable invoice document and its contents visible */
+  .print-document-container,
+  .print-document-container * {
+    visibility: visible !important;
+  }
+
+  /* Position printable document at the top-left of physical page */
+  .print-document-container {
+    position: absolute !important;
+    left: 0 !important;
+    top: 0 !important;
+    width: 100% !important;
+    max-width: 100% !important;
+    margin: 0 !important;
+    padding: 0 !important;
+    border: none !important;
+    box-shadow: none !important;
+    background: #ffffff !important;
+    color: #0f172a !important;
+    transform: none !important;
+  }
+
+  .print-content-wrapper {
+    transform: none !important;
+    margin: 0 !important;
+    padding: 0 !important;
+    width: 100% !important;
+    max-width: 100% !important;
+  }
+
+  /* Completely collapse web chrome elements so they consume 0 space */
+  nav,
+  aside,
+  header:not(.print-header),
+  .no-print,
+  .print-toolbar,
+  .modal-backdrop,
+  button,
+  input,
+  select,
+  textarea {
+    display: none !important;
+  }
+
+  /* Reset body and container backgrounds */
+  html, body, #root, #root > div, .h-screen, main {
+    margin: 0 !important;
+    padding: 0 !important;
+    background: #ffffff !important;
+    color: #0f172a !important;
+    font-size: 10pt !important;
+    height: auto !important;
+    min-height: auto !important;
+    overflow: visible !important;
+    position: static !important;
+    -webkit-print-color-adjust: exact !important;
+    print-color-adjust: exact !important;
+  }
+
+  /* Unconstrain modal wrappers during print */
+  .print-preview-dialog {
+    position: static !important;
+    inset: auto !important;
+    width: 100% !important;
+    height: auto !important;
+    overflow: visible !important;
+    background: transparent !important;
+    backdrop-filter: none !important;
+    box-shadow: none !important;
+    padding: 0 !important;
+    margin: 0 !important;
+  }
+
+  .print-preview-dialog > div {
+    overflow: visible !important;
+    background: transparent !important;
+    padding: 0 !important;
+  }
+
+  /* Tables & Page Breaks */
+  table {
+    page-break-inside: auto;
+    width: 100% !important;
+  }
+
+  thead {
+    display: table-header-group !important;
+  }
+
+  tfoot {
+    display: table-footer-group !important;
+  }
+
+  tr {
+    page-break-inside: avoid !important;
+    break-inside: avoid !important;
+  }
+
+  .avoid-break {
+    page-break-inside: avoid !important;
+    break-inside: avoid !important;
+  }
+
+  .force-page-break {
+    page-break-after: always !important;
+    break-after: page !important;
+  }
+}
+
+@page {
+  size: A4 portrait;
+  margin: 8mm;
+}
+

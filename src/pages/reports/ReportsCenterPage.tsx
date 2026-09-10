@@ -23,10 +23,14 @@ import {
   Barcode,
   Eye,
   FileSpreadsheet,
+  Printer,
 } from 'lucide-react';
 import { useAuth } from '../../context/AuthContext.js';
 import { apiRequest, getAuthHeaders } from '../../api/client.js';
 import { StockItemLedgerModal } from '../../components/inventory/StockItemLedgerModal.js';
+import { PrintPreviewModal } from '../../components/print/PrintPreviewModal.js';
+import { PrintableReport, ReportColumn } from '../../components/print/PrintableReport.js';
+import { exportToCsv } from '../../utils/csvExporter.js';
 
 type ReportTab =
   | 'inventory'
@@ -43,6 +47,7 @@ export const ReportsCenterPage: React.FC<{ initialTab?: ReportTab }> = ({ initia
   const [activeTab, setActiveTab] = useState<ReportTab>(initialTab);
   const [loading, setLoading] = useState(false);
   const [exporting, setExporting] = useState(false);
+  const [isPrintPreviewOpen, setIsPrintPreviewOpen] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   // Common Filter State
@@ -251,6 +256,221 @@ export const ReportsCenterPage: React.FC<{ initialTab?: ReportTab }> = ({ initia
     }
   };
 
+  const getReportPrintConfig = (): {
+    title: string;
+    subtitle?: string;
+    filtersSummary?: string;
+    columns: ReportColumn[];
+    data: any[];
+    totalsRow?: Record<string, any>;
+    orientation: 'portrait' | 'landscape';
+  } => {
+    const filtersSummary = `Date: ${startDate} to ${endDate}${searchQuery ? ` | Search: "${searchQuery}"` : ''}`;
+
+    switch (activeTab) {
+      case 'inventory': {
+        const rows = Array.isArray(reportData?.data) ? reportData.data : [];
+        const totalStock = rows.reduce((acc: number, r: any) => acc + (Number(r.physical_stock ?? r.physicalStock) || 0), 0);
+        return {
+          title: 'Inventory Stock Valuation Register',
+          subtitle: `Status: ${inventoryStatus}`,
+          filtersSummary,
+          orientation: 'landscape',
+          columns: [
+            { header: 'Barcode', key: 'barcode', width: '13%' },
+            { header: 'Product Name / SKU', key: 'unique_item_name', width: '22%' },
+            { header: 'Category', key: 'category_name', width: '12%' },
+            { header: 'Brand', key: 'brand_name', width: '12%' },
+            { header: 'SPH', key: 'sph', align: 'center', width: '7%' },
+            { header: 'CYL', key: 'cyl', align: 'center', width: '7%' },
+            { header: 'AXIS', key: 'axis', align: 'center', width: '7%' },
+            { header: 'Physical', key: 'physical_stock', align: 'right', width: '10%' },
+            { header: 'MRP (₹)', key: 'mrp', align: 'right', width: '10%', format: (val: any) => val ? `₹${Number(val).toFixed(2)}` : '-' },
+          ],
+          data: rows,
+          totalsRow: {
+            unique_item_name: 'Total Physical Stock',
+            physical_stock: totalStock,
+          },
+        };
+      }
+      case 'stock-ledger': {
+        const rows = Array.isArray(reportData?.data) ? reportData.data : [];
+        return {
+          title: 'Stock Movement & Transaction Ledger',
+          filtersSummary,
+          orientation: 'landscape',
+          columns: [
+            { header: 'Date & Time', key: 'created_at', width: '15%', format: (v: any) => v ? new Date(v).toLocaleDateString('en-IN') : '-' },
+            { header: 'Barcode', key: 'barcode', width: '13%' },
+            { header: 'Product Name', key: 'unique_item_name', width: '24%' },
+            { header: 'Type', key: 'transaction_type', width: '12%' },
+            { header: 'Doc #', key: 'document_number', width: '12%' },
+            { header: 'In', key: 'quantity_in', align: 'right', width: '8%' },
+            { header: 'Out', key: 'quantity_out', align: 'right', width: '8%' },
+            { header: 'Balance', key: 'balance_after', align: 'right', width: '8%' },
+          ],
+          data: rows,
+        };
+      }
+      case 'sales': {
+        const rows = Array.isArray(reportData?.data) ? reportData.data : [];
+        const totTaxable = rows.reduce((acc: number, r: any) => acc + (Number(r.taxable_amount) || 0), 0);
+        const totGrand = rows.reduce((acc: number, r: any) => acc + (Number(r.grand_total) || 0), 0);
+        const totPaid = rows.reduce((acc: number, r: any) => acc + (Number(r.paid_amount) || 0), 0);
+        const totBal = rows.reduce((acc: number, r: any) => acc + (Number(r.outstanding_balance) || 0), 0);
+        return {
+          title: `Sales Register (${salesSubTab})`,
+          filtersSummary,
+          orientation: 'landscape',
+          columns: [
+            { header: 'Invoice #', key: 'invoice_number', width: '14%' },
+            { header: 'Date', key: 'invoice_date', width: '11%', format: (v: any) => v ? new Date(v).toLocaleDateString('en-IN') : '-' },
+            { header: 'Customer Name', key: 'customer_name', width: '23%' },
+            { header: 'Taxable (₹)', key: 'taxable_amount', align: 'right', width: '12%', format: (v: any) => `₹${Number(v || 0).toLocaleString('en-IN', { minimumFractionDigits: 2 })}` },
+            { header: 'Grand Total (₹)', key: 'grand_total', align: 'right', width: '14%', format: (v: any) => `₹${Number(v || 0).toLocaleString('en-IN', { minimumFractionDigits: 2 })}` },
+            { header: 'Paid (₹)', key: 'paid_amount', align: 'right', width: '12%', format: (v: any) => `₹${Number(v || 0).toLocaleString('en-IN', { minimumFractionDigits: 2 })}` },
+            { header: 'Balance (₹)', key: 'outstanding_balance', align: 'right', width: '14%', format: (v: any) => `₹${Number(v || 0).toLocaleString('en-IN', { minimumFractionDigits: 2 })}` },
+          ],
+          data: rows,
+          totalsRow: {
+            customer_name: 'Total',
+            taxable_amount: `₹${totTaxable.toLocaleString('en-IN', { minimumFractionDigits: 2 })}`,
+            grand_total: `₹${totGrand.toLocaleString('en-IN', { minimumFractionDigits: 2 })}`,
+            paid_amount: `₹${totPaid.toLocaleString('en-IN', { minimumFractionDigits: 2 })}`,
+            outstanding_balance: `₹${totBal.toLocaleString('en-IN', { minimumFractionDigits: 2 })}`,
+          },
+        };
+      }
+      case 'purchases': {
+        const rows = Array.isArray(reportData?.data) ? reportData.data : [];
+        const totTaxable = rows.reduce((acc: number, r: any) => acc + (Number(r.taxable_amount) || 0), 0);
+        const totGrand = rows.reduce((acc: number, r: any) => acc + (Number(r.grand_total) || 0), 0);
+        const totPaid = rows.reduce((acc: number, r: any) => acc + (Number(r.paid_amount) || 0), 0);
+        const totBal = rows.reduce((acc: number, r: any) => acc + (Number(r.outstanding_balance) || 0), 0);
+        return {
+          title: `Purchase Inwards Register (${purchaseSubTab})`,
+          filtersSummary,
+          orientation: 'landscape',
+          columns: [
+            { header: 'Bill / Inv #', key: 'invoice_number', width: '14%' },
+            { header: 'Date', key: 'invoice_date', width: '11%', format: (v: any) => v ? new Date(v).toLocaleDateString('en-IN') : '-' },
+            { header: 'Supplier Name', key: 'supplier_name', width: '23%' },
+            { header: 'Taxable (₹)', key: 'taxable_amount', align: 'right', width: '12%', format: (v: any) => `₹${Number(v || 0).toLocaleString('en-IN', { minimumFractionDigits: 2 })}` },
+            { header: 'Grand Total (₹)', key: 'grand_total', align: 'right', width: '14%', format: (v: any) => `₹${Number(v || 0).toLocaleString('en-IN', { minimumFractionDigits: 2 })}` },
+            { header: 'Paid (₹)', key: 'paid_amount', align: 'right', width: '12%', format: (v: any) => `₹${Number(v || 0).toLocaleString('en-IN', { minimumFractionDigits: 2 })}` },
+            { header: 'Balance (₹)', key: 'outstanding_balance', align: 'right', width: '14%', format: (v: any) => `₹${Number(v || 0).toLocaleString('en-IN', { minimumFractionDigits: 2 })}` },
+          ],
+          data: rows,
+          totalsRow: {
+            supplier_name: 'Total',
+            taxable_amount: `₹${totTaxable.toLocaleString('en-IN', { minimumFractionDigits: 2 })}`,
+            grand_total: `₹${totGrand.toLocaleString('en-IN', { minimumFractionDigits: 2 })}`,
+            paid_amount: `₹${totPaid.toLocaleString('en-IN', { minimumFractionDigits: 2 })}`,
+            outstanding_balance: `₹${totBal.toLocaleString('en-IN', { minimumFractionDigits: 2 })}`,
+          },
+        };
+      }
+      case 'outstanding': {
+        const rows = Array.isArray(reportData?.parties) ? reportData.parties : Array.isArray(reportData?.data) ? reportData.data : [];
+        const totOut = rows.reduce((acc: number, r: any) => acc + (Number(r.outstanding_balance) || 0), 0);
+        const totOver = rows.reduce((acc: number, r: any) => acc + (Number(r.overdue_balance) || 0), 0);
+        return {
+          title: `Outstanding Aging - ${outstandingType === 'CUSTOMER' ? 'Sundry Debtors' : 'Sundry Creditors'}`,
+          filtersSummary,
+          orientation: 'portrait',
+          columns: [
+            { header: 'Party Code', key: 'party_code', width: '15%' },
+            { header: 'Party Name', key: 'name', width: '30%' },
+            { header: 'Mobile', key: 'mobile', width: '15%' },
+            { header: 'Credit Limit (₹)', key: 'credit_limit', align: 'right', width: '15%', format: (v: any) => `₹${Number(v || 0).toLocaleString('en-IN')}` },
+            { header: 'Outstanding (₹)', key: 'outstanding_balance', align: 'right', width: '15%', format: (v: any) => `₹${Number(v || 0).toLocaleString('en-IN')}` },
+            { header: 'Overdue (₹)', key: 'overdue_balance', align: 'right', width: '15%', format: (v: any) => `₹${Number(v || 0).toLocaleString('en-IN')}` },
+          ],
+          data: rows,
+          totalsRow: {
+            name: 'Total Outstanding',
+            outstanding_balance: `₹${totOut.toLocaleString('en-IN')}`,
+            overdue_balance: `₹${totOver.toLocaleString('en-IN')}`,
+          },
+        };
+      }
+      case 'party-statement': {
+        const partyName = reportData?.party?.name || 'Party';
+        const rows = Array.isArray(reportData?.rows) ? reportData.rows : [];
+        const totDebit = rows.reduce((acc: number, r: any) => acc + (Number(r.debit) || 0), 0);
+        const totCredit = rows.reduce((acc: number, r: any) => acc + (Number(r.credit) || 0), 0);
+        return {
+          title: `Account Statement / Ledger - ${partyName}`,
+          subtitle: `Opening: ₹${Number(reportData?.openingBalance || 0).toLocaleString()} | Closing: ₹${Number(reportData?.closingBalance || 0).toLocaleString()}`,
+          filtersSummary,
+          orientation: 'portrait',
+          columns: [
+            { header: 'Date', key: 'created_at', width: '14%', format: (v: any) => v ? new Date(v).toLocaleDateString('en-IN') : '-' },
+            { header: 'Type', key: 'transaction_type', width: '15%' },
+            { header: 'Document #', key: 'document_number', width: '15%' },
+            { header: 'Debit (₹)', key: 'debit', align: 'right', width: '16%', format: (v: any) => Number(v) > 0 ? `₹${Number(v).toLocaleString('en-IN')}` : '-' },
+            { header: 'Credit (₹)', key: 'credit', align: 'right', width: '16%', format: (v: any) => Number(v) > 0 ? `₹${Number(v).toLocaleString('en-IN')}` : '-' },
+            { header: 'Balance (₹)', key: 'balance', align: 'right', width: '16%', format: (v: any) => `₹${Number(v || 0).toLocaleString('en-IN')}` },
+          ],
+          data: rows,
+          totalsRow: {
+            transaction_type: 'Total',
+            debit: `₹${totDebit.toLocaleString('en-IN')}`,
+            credit: `₹${totCredit.toLocaleString('en-IN')}`,
+            balance: `₹${Number(reportData?.closingBalance || 0).toLocaleString('en-IN')}`,
+          },
+        };
+      }
+      case 'payments': {
+        const rows = Array.isArray(reportData?.data) ? reportData.data : [];
+        const totAmt = rows.reduce((acc: number, r: any) => acc + (Number(r.amount) || 0), 0);
+        return {
+          title: `Payment & Collection Register (${paymentType})`,
+          filtersSummary,
+          orientation: 'portrait',
+          columns: [
+            { header: 'Payment #', key: 'payment_number', width: '16%' },
+            { header: 'Date', key: 'payment_date', width: '14%', format: (v: any) => v ? new Date(v).toLocaleDateString('en-IN') : '-' },
+            { header: 'Party Name', key: 'party_name', width: '26%' },
+            { header: 'Mode', key: 'payment_mode', width: '14%' },
+            { header: 'Amount (₹)', key: 'amount', align: 'right', width: '16%', format: (v: any) => `₹${Number(v || 0).toLocaleString('en-IN', { minimumFractionDigits: 2 })}` },
+            { header: 'Status', key: 'status', align: 'center', width: '14%' },
+          ],
+          data: rows,
+          totalsRow: {
+            party_name: 'Total Amount',
+            amount: `₹${totAmt.toLocaleString('en-IN', { minimumFractionDigits: 2 })}`,
+          },
+        };
+      }
+      default: {
+        return {
+          title: 'Business Report',
+          filtersSummary,
+          orientation: 'portrait',
+          columns: [{ header: 'Record', key: 'id' }],
+          data: Array.isArray(reportData?.data) ? reportData.data : [],
+        };
+      }
+    }
+  };
+
+  const handleExportCsv = () => {
+    const config = getReportPrintConfig();
+    exportToCsv({
+      filename: `${activeTab}_report_${new Date().toISOString().split('T')[0]}`,
+      reportTitle: config.title,
+      businessName: currentBusiness?.name,
+      filtersSummary: config.filtersSummary,
+      columns: config.columns.map(c => ({
+        header: c.header,
+        key: c.key,
+      })),
+      data: config.data,
+    });
+  };
+
   // Check whether report data has records
   const hasReportRecords = () => {
     if (!reportData) return false;
@@ -283,22 +503,45 @@ export const ReportsCenterPage: React.FC<{ initialTab?: ReportTab }> = ({ initia
           </p>
         </div>
 
-        <div className="flex items-center gap-2">
+        <div className="flex flex-wrap items-center gap-2">
           <button
             onClick={fetchReport}
             disabled={loading}
             className="px-3.5 py-2 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs font-semibold border border-slate-200 transition-colors flex items-center gap-1.5"
+            title="Refresh current report dataset"
           >
             <RefreshCw className={`w-3.5 h-3.5 ${loading ? 'animate-spin' : ''}`} />
             <span>Refresh</span>
           </button>
           <button
-            onClick={handleExportExcel}
-            disabled={exporting || loading}
-            className="px-4 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-semibold shadow-sm transition-all flex items-center gap-2"
+            id="btn-print-preview-report"
+            onClick={() => setIsPrintPreviewOpen(true)}
+            disabled={loading || !hasReportRecords()}
+            className="px-3.5 py-2 rounded-xl bg-blue-50 hover:bg-blue-100 text-blue-700 text-xs font-semibold border border-blue-200 transition-colors flex items-center gap-1.5 disabled:opacity-50"
+            title="Open printable formatted preview with direct PDF and printer output"
+          >
+            <Printer className="w-3.5 h-3.5" />
+            <span>Print Preview</span>
+          </button>
+          <button
+            id="btn-export-report-csv"
+            onClick={handleExportCsv}
+            disabled={loading || !hasReportRecords()}
+            className="px-3.5 py-2 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs font-semibold border border-slate-300 transition-colors flex items-center gap-1.5 disabled:opacity-50"
+            title="Export filtered records to standard CSV"
           >
             <Download className="w-3.5 h-3.5" />
-            <span>{exporting ? 'Generating XLSX...' : 'Export Excel (.XLSX)'}</span>
+            <span>CSV</span>
+          </button>
+          <button
+            id="btn-export-report-excel"
+            onClick={handleExportExcel}
+            disabled={exporting || loading || !hasReportRecords()}
+            className="px-4 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-semibold shadow-xs transition-all flex items-center gap-2 disabled:opacity-50"
+            title="Export to formatted Microsoft Excel XLSX workbook"
+          >
+            <FileSpreadsheet className="w-3.5 h-3.5" />
+            <span>{exporting ? 'Generating XLSX...' : 'Export Excel'}</span>
           </button>
         </div>
       </div>
@@ -492,7 +735,7 @@ export const ReportsCenterPage: React.FC<{ initialTab?: ReportTab }> = ({ initia
                 onChange={e => setSelectedPartyId(e.target.value)}
                 className="px-3 py-1.5 rounded-xl border border-slate-200 bg-slate-50 text-xs font-semibold text-slate-700 min-w-[200px]"
               >
-                {partiesList.map(p => (
+                {(partiesList || []).map(p => (
                   <option key={p.id} value={p.id}>
                     {p.name} ({p.partyType})
                   </option>
@@ -526,7 +769,7 @@ export const ReportsCenterPage: React.FC<{ initialTab?: ReportTab }> = ({ initia
       </div>
 
       {/* Summary KPI Cards if provided by report */}
-      {reportData?.summary && (
+      {reportData?.summary && typeof reportData.summary === 'object' && (
         <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
           {Object.entries(reportData.summary).map(([key, val]: any) => {
             if (typeof val === 'object' && val !== null) return null;
@@ -588,7 +831,7 @@ export const ReportsCenterPage: React.FC<{ initialTab?: ReportTab }> = ({ initia
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-slate-100">
-                  {reportData.data.map((row: any) => (
+                  {(reportData?.data || []).map((row: any) => (
                     <tr key={row.batch_id} className="hover:bg-slate-50/70 transition-colors">
                       <td className="py-2.5 px-4 font-mono font-bold text-slate-900">{row.barcode}</td>
                       <td className="py-2.5 px-4">
@@ -675,7 +918,7 @@ export const ReportsCenterPage: React.FC<{ initialTab?: ReportTab }> = ({ initia
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-slate-100">
-                  {reportData.data.map((row: any) => (
+                  {(reportData?.data || []).map((row: any) => (
                     <tr key={row.id} className="hover:bg-slate-50/70 transition-colors">
                       <td className="py-2.5 px-4 font-mono text-slate-600">{new Date(row.created_at).toLocaleString()}</td>
                       <td className="py-2.5 px-4 font-mono font-bold text-slate-900">{row.barcode}</td>
@@ -734,7 +977,7 @@ export const ReportsCenterPage: React.FC<{ initialTab?: ReportTab }> = ({ initia
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-slate-100">
-                  {reportData.data.map((row: any) => (
+                  {(reportData?.data || []).map((row: any) => (
                     <tr key={row.id} className="hover:bg-slate-50/70 transition-colors">
                       <td className="py-2.5 px-4 font-mono font-bold text-blue-600">{row.invoice_number}</td>
                       <td className="py-2.5 px-4 text-slate-600">{new Date(row.invoice_date).toLocaleDateString()}</td>
@@ -778,7 +1021,7 @@ export const ReportsCenterPage: React.FC<{ initialTab?: ReportTab }> = ({ initia
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-slate-100">
-                  {reportData.data.map((row: any) => (
+                  {(reportData?.data || []).map((row: any) => (
                     <tr key={row.id} className="hover:bg-slate-50/70 transition-colors">
                       <td className="py-2.5 px-4 font-mono font-bold text-indigo-600">{row.invoice_number}</td>
                       <td className="py-2.5 px-4 text-slate-600">{new Date(row.invoice_date).toLocaleDateString()}</td>
@@ -883,7 +1126,7 @@ export const ReportsCenterPage: React.FC<{ initialTab?: ReportTab }> = ({ initia
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-slate-100">
-                    {reportData.rows.map((r: any) => (
+                    {(reportData?.rows || []).map((r: any) => (
                       <tr key={r.id} className="hover:bg-slate-50/70 transition-colors">
                         <td className="py-2.5 px-4 font-mono text-slate-600">{new Date(r.created_at).toLocaleString()}</td>
                         <td className="py-2.5 px-4 font-semibold text-slate-800">{r.transaction_type}</td>
@@ -920,7 +1163,7 @@ export const ReportsCenterPage: React.FC<{ initialTab?: ReportTab }> = ({ initia
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-slate-100">
-                  {reportData.data.map((row: any) => (
+                  {(reportData?.data || []).map((row: any) => (
                     <tr key={row.id} className="hover:bg-slate-50/70 transition-colors">
                       <td className="py-2.5 px-4 font-mono font-bold text-slate-900">{row.payment_number}</td>
                       <td className="py-2.5 px-4 text-slate-600">{new Date(row.payment_date).toLocaleDateString()}</td>
@@ -962,7 +1205,7 @@ export const ReportsCenterPage: React.FC<{ initialTab?: ReportTab }> = ({ initia
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-slate-100">
-                  {reportData.data.map((row: any, idx: number) => (
+                  {(reportData?.data || []).map((row: any, idx: number) => (
                     <tr key={idx} className="hover:bg-slate-50/70 transition-colors">
                       <td className="py-2.5 px-4 font-bold text-slate-900">{row.unique_item_name}</td>
                       <td className="py-2.5 px-4 font-mono text-slate-600">{row.sku}</td>
@@ -1012,6 +1255,34 @@ export const ReportsCenterPage: React.FC<{ initialTab?: ReportTab }> = ({ initia
           itemName={ledgerItemName}
           onClose={() => setLedgerItemId(null)}
         />
+      )}
+
+      {/* Printable Report Preview Modal */}
+      {isPrintPreviewOpen && (
+        <PrintPreviewModal
+          isOpen={isPrintPreviewOpen}
+          onClose={() => setIsPrintPreviewOpen(false)}
+          title={getReportPrintConfig().title}
+          filename={`${activeTab}_report_${new Date().toISOString().slice(0, 10)}`}
+          defaultOrientation={getReportPrintConfig().orientation}
+        >
+          {({ documentId }) => {
+            const config = getReportPrintConfig();
+            return (
+              <PrintableReport
+                id={documentId}
+                business={currentBusiness}
+                reportTitle={config.title}
+                subtitle={config.subtitle}
+                filtersSummary={config.filtersSummary}
+                columns={config.columns}
+                data={config.data}
+                totals={config.totalsRow}
+                orientation={config.orientation}
+              />
+            );
+          }}
+        </PrintPreviewModal>
       )}
     </div>
   );

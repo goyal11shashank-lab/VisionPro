@@ -19,6 +19,9 @@ import {
 } from 'lucide-react';
 import { PurchaseInvoice, PurchaseInvoiceLine } from '../../types/index.js';
 import { apiRequest } from '../../api/client.js';
+import { useAuth } from '../../context/AuthContext.js';
+import { PrintPreviewModal } from '../print/PrintPreviewModal.js';
+import { PrintableVoucher } from '../print/PrintableVoucher.js';
 
 interface PurchaseInvoiceDetailModalProps {
   invoice: PurchaseInvoice;
@@ -33,10 +36,12 @@ export const PurchaseInvoiceDetailModal: React.FC<PurchaseInvoiceDetailModalProp
   onRefresh,
   onEdit,
 }) => {
+  const { currentBusiness } = useAuth();
   const [actionLoading, setActionLoading] = useState<boolean>(false);
   const [actionError, setActionError] = useState<string | null>(null);
   const [cancelModalOpen, setCancelModalOpen] = useState<boolean>(false);
   const [cancelReason, setCancelReason] = useState<string>('');
+  const [isPrintPreviewOpen, setIsPrintPreviewOpen] = useState<boolean>(false);
 
   const handlePost = async () => {
     if (!confirm(`Are you sure you want to POST purchase invoice ${invoice.invoiceNumber}? This will immediately increase physical stock, create purchase lots, and credit the supplier ledger.`)) {
@@ -165,9 +170,18 @@ export const PurchaseInvoiceDetailModal: React.FC<PurchaseInvoiceDetailModalProp
               </button>
             )}
             <button
-              onClick={() => window.print()}
+              id="btn-print-preview-purchase-invoice"
+              onClick={() => setIsPrintPreviewOpen(true)}
+              className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-purple-600 hover:bg-purple-700 text-white text-xs font-semibold transition-colors shadow-xs"
+              title="Print Preview / Export PDF"
+            >
+              <Printer className="w-3.5 h-3.5" />
+              <span>Print Preview</span>
+            </button>
+            <button
+              onClick={() => setIsPrintPreviewOpen(true)}
               className="p-2 rounded-xl border border-slate-200 text-slate-600 hover:bg-slate-100 transition-colors"
-              title="Print Invoice"
+              title="Quick Print"
             >
               <Printer className="w-4 h-4" />
             </button>
@@ -450,6 +464,28 @@ export const PurchaseInvoiceDetailModal: React.FC<PurchaseInvoiceDetailModalProp
             </div>
           </div>
         </div>
+      )}
+
+      {/* REUSABLE PRINT PREVIEW MODAL */}
+      {isPrintPreviewOpen && (
+        <PrintPreviewModal
+          isOpen={isPrintPreviewOpen}
+          onClose={() => setIsPrintPreviewOpen(false)}
+          title={`Purchase Invoice - ${invoice.invoiceNumber || ''}`}
+          filename={`PurchaseInvoice_${invoice.invoiceNumber || 'PI'}`}
+          defaultOrientation="portrait"
+        >
+          {({ documentId }) => (
+            <PrintableVoucher
+              id={documentId}
+              business={currentBusiness}
+              voucher={invoice}
+              documentType="PURCHASE_INVOICE"
+              customTitle="PURCHASE INVOICE / INWARD"
+              copyLabel="Office Copy"
+            />
+          )}
+        </PrintPreviewModal>
       )}
     </div>
   );

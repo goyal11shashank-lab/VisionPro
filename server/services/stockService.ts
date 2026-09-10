@@ -68,8 +68,8 @@ export function roundToHalf(val: number): number {
 
 export function isValidOpticalQuantity(qty: number): boolean {
   if (isNaN(qty) || qty <= 0) return false;
-  const doubled = qty * 2;
-  return Math.abs(Math.round(doubled) - doubled) < 0.0001;
+  const scaled = qty * 100;
+  return Math.abs(Math.round(scaled) - scaled) < 0.0001;
 }
 
 export class StockService {
@@ -179,7 +179,7 @@ export class StockService {
     const quantity = round2(input.quantity);
 
     if (!isValidOpticalQuantity(quantity)) {
-      throw new Error('Opening stock quantity must be a positive value in steps of 0.5 (e.g. 0.5, 1.0, 1.5, 2.0).');
+      throw new Error('Opening stock quantity must be a positive number.');
     }
 
     const client = await pool.connect();
@@ -280,7 +280,7 @@ export class StockService {
     const quantity = round2(input.quantity);
 
     if (!isValidOpticalQuantity(quantity)) {
-      throw new Error('Adjustment quantity must be a positive value in steps of 0.5 (e.g. 0.5, 1.0, 1.5, 2.0).');
+      throw new Error('Adjustment quantity must be a positive number.');
     }
 
     if (!reason || reason.trim() === '') {
@@ -396,7 +396,7 @@ export class StockService {
     const quantity = round2(input.quantity);
 
     if (!isValidOpticalQuantity(quantity)) {
-      throw new Error('Reservation quantity must be a positive value in steps of 0.5 (e.g. 0.5, 1.0, 1.5, 2.0).');
+      throw new Error('Reservation quantity must be a positive number.');
     }
 
     const client = await pool.connect();

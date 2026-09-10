@@ -24,6 +24,7 @@ import {
 } from 'lucide-react';
 import { useAuth } from '../../context/AuthContext.js';
 import { getStoredToken } from '../../api/client.js';
+import { printDocument } from '../../utils/printService.js';
 
 interface PaymentAllocation {
   id?: string;
@@ -120,6 +121,24 @@ export const CustomerReceiptsPage: React.FC = () => {
   // Allocation Modal State (for existing posted vouchers with unallocated amount)
   const [showAllocateModal, setShowAllocateModal] = useState(false);
   const [allocateVoucher, setAllocateVoucher] = useState<PaymentVoucher | null>(null);
+  const [isPrintingSlip, setIsPrintingSlip] = useState(false);
+
+  const handlePrintSlip = async () => {
+    if (!viewVoucher) return;
+    setIsPrintingSlip(true);
+    try {
+      await printDocument({
+        elementOrId: 'receipt-voucher-slip-content',
+        title: `Receipt Voucher - ${viewVoucher.paymentNumber}`,
+        filename: `Receipt_${viewVoucher.paymentNumber}`,
+        orientation: 'portrait',
+      });
+    } catch (err) {
+      console.error('Print slip failed:', err);
+    } finally {
+      setIsPrintingSlip(false);
+    }
+  };
 
   // Fetch Payment Vouchers
   const fetchVouchers = async () => {
@@ -1071,7 +1090,7 @@ export const CustomerReceiptsPage: React.FC = () => {
               </button>
             </div>
 
-            <div className="p-6 space-y-6">
+            <div id="receipt-voucher-slip-content" className="p-6 space-y-6">
               {/* Slip Header Box */}
               <div className="p-4 rounded-xl bg-slate-50 border border-slate-200 grid grid-cols-2 sm:grid-cols-4 gap-4 text-xs">
                 <div>
@@ -1171,11 +1190,12 @@ export const CustomerReceiptsPage: React.FC = () => {
               <div className="flex items-center justify-between pt-4 border-t border-slate-100">
                 <button
                   type="button"
-                  onClick={() => window.print()}
-                  className="flex items-center gap-1.5 px-3 py-2 text-xs font-semibold text-slate-600 hover:text-slate-800 hover:bg-slate-100 rounded-xl transition-colors"
+                  onClick={handlePrintSlip}
+                  disabled={isPrintingSlip}
+                  className="flex items-center gap-1.5 px-3 py-2 text-xs font-semibold text-slate-600 hover:text-slate-800 hover:bg-slate-100 rounded-xl transition-colors disabled:opacity-50"
                 >
-                  <Printer className="w-4 h-4" />
-                  Print Receipt Slip
+                  <Printer className={`w-4 h-4 ${isPrintingSlip ? 'animate-pulse text-emerald-600' : ''}`} />
+                  {isPrintingSlip ? 'Preparing Receipt...' : 'Print Receipt Slip'}
                 </button>
 
                 <div className="flex items-center gap-2">

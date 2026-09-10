@@ -65,7 +65,7 @@ router.get('/settings', authenticateToken, async (req: Request, res: Response): 
 
 /**
  * PUT /api/businesses/settings
- * Update operational settings (e.g. low stock threshold) for the current business.
+ * Update operational settings for the current business.
  */
 router.put(
   '/settings',
@@ -74,14 +74,43 @@ router.put(
   async (req: Request, res: Response): Promise<void> => {
     try {
       const { BusinessSettingsService } = await import('../services/businessSettingsService.js');
-      const { lowStockThreshold, config } = req.body;
-      const updated = await BusinessSettingsService.updateSettings(req.user!.currentBusinessId, {
-        lowStockThreshold: lowStockThreshold !== undefined ? Number(lowStockThreshold) : undefined,
-        config,
-      });
-      res.json({ success: true, settings: updated });
+      const { lowStockThreshold, config, settings } = req.body;
+      const updated = await BusinessSettingsService.updateSettings(
+        req.user!.currentBusinessId,
+        {
+          lowStockThreshold: lowStockThreshold !== undefined ? Number(lowStockThreshold) : undefined,
+          config,
+          settings,
+        },
+        req.user!.id,
+        req
+      );
+      res.json({ success: true, settings: updated.settings, lowStockThreshold: updated.lowStockThreshold });
     } catch (err: any) {
       res.status(500).json({ error: err.message || 'Failed to update business settings' });
+    }
+  }
+);
+
+/**
+ * POST /api/businesses/settings/restore-defaults
+ * Restore recommended defaults for the current business.
+ */
+router.post(
+  '/settings/restore-defaults',
+  authenticateToken,
+  requirePermission('admin:manage_settings'),
+  async (req: Request, res: Response): Promise<void> => {
+    try {
+      const { BusinessSettingsService } = await import('../services/businessSettingsService.js');
+      const restored = await BusinessSettingsService.restoreDefaults(
+        req.user!.currentBusinessId,
+        req.user!.id,
+        req
+      );
+      res.json({ success: true, settings: restored.settings, lowStockThreshold: restored.lowStockThreshold });
+    } catch (err: any) {
+      res.status(500).json({ error: err.message || 'Failed to restore default settings' });
     }
   }
 );

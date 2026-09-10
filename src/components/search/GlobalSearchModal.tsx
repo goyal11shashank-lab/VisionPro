@@ -234,13 +234,13 @@ export const GlobalSearchModal: React.FC<GlobalSearchModalProps> = ({
           ) : (
             <>
               {/* 1. Barcodes / Batches */}
-              {(activeFilter === 'ALL' || activeFilter === 'BARCODE') && results.barcodes.length > 0 && (
+              {(activeFilter === 'ALL' || activeFilter === 'BARCODE') && (results?.barcodes || []).length > 0 && (
                 <div className="pt-2 first:pt-0 space-y-1.5">
                   <div className="text-[11px] font-bold uppercase tracking-wider text-slate-400 px-2 flex items-center gap-1.5">
                     <Barcode className="w-3.5 h-3.5 text-blue-600" />
-                    Optical Batches & Barcodes ({results.barcodes.length})
+                    Optical Batches & Barcodes ({(results?.barcodes || []).length})
                   </div>
-                  {results.barcodes.map(b => (
+                  {(results?.barcodes || []).map(b => (
                     <div
                       key={b.id}
                       onClick={() => handleSelect('/master/batches')}
@@ -277,13 +277,13 @@ export const GlobalSearchModal: React.FC<GlobalSearchModalProps> = ({
               )}
 
               {/* 2. Documents (Sales & Purchase Invoices / Orders) */}
-              {(activeFilter === 'ALL' || activeFilter === 'DOCUMENT') && results.documents.length > 0 && (
+              {(activeFilter === 'ALL' || activeFilter === 'DOCUMENT') && (results?.documents || []).length > 0 && (
                 <div className="pt-2 first:pt-0 space-y-1.5">
                   <div className="text-[11px] font-bold uppercase tracking-wider text-slate-400 px-2 flex items-center gap-1.5">
                     <FileText className="w-3.5 h-3.5 text-indigo-600" />
-                    Invoices & Documents ({results.documents.length})
+                    Invoices & Documents ({(results?.documents || []).length})
                   </div>
-                  {results.documents.map(d => {
+                  {(results?.documents || []).map(d => {
                     const navPath =
                       d.type === 'SALES_INVOICE'
                         ? '/sales/invoices'
@@ -338,13 +338,13 @@ export const GlobalSearchModal: React.FC<GlobalSearchModalProps> = ({
               )}
 
               {/* 3. Parties */}
-              {(activeFilter === 'ALL' || activeFilter === 'PARTY') && results.parties.length > 0 && (
+              {(activeFilter === 'ALL' || activeFilter === 'PARTY') && (results?.parties || []).length > 0 && (
                 <div className="pt-2 first:pt-0 space-y-1.5">
                   <div className="text-[11px] font-bold uppercase tracking-wider text-slate-400 px-2 flex items-center gap-1.5">
                     <Users className="w-3.5 h-3.5 text-emerald-600" />
-                    Customers & Suppliers ({results.parties.length})
+                    Customers & Suppliers ({(results?.parties || []).length})
                   </div>
-                  {results.parties.map(p => (
+                  {(results?.parties || []).map(p => (
                     <div
                       key={p.id}
                       onClick={() => handleSelect(p.party_type === 'SUPPLIER' ? '/parties/suppliers' : '/parties/customers')}
@@ -378,13 +378,13 @@ export const GlobalSearchModal: React.FC<GlobalSearchModalProps> = ({
               )}
 
               {/* 4. Products */}
-              {(activeFilter === 'ALL' || activeFilter === 'PRODUCT') && results.products.length > 0 && (
+              {(activeFilter === 'ALL' || activeFilter === 'PRODUCT') && (results?.products || []).length > 0 && (
                 <div className="pt-2 first:pt-0 space-y-1.5">
                   <div className="text-[11px] font-bold uppercase tracking-wider text-slate-400 px-2 flex items-center gap-1.5">
                     <Package className="w-3.5 h-3.5 text-amber-600" />
-                    Catalog Products ({results.products.length})
+                    Catalog Products ({(results?.products || []).length})
                   </div>
-                  {results.products.map(pr => (
+                  {(results?.products || []).map(pr => (
                     <div
                       key={pr.id}
                       onClick={() => handleSelect('/master/unique-items')}

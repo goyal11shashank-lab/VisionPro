@@ -23,10 +23,17 @@ import {
   HelpCircle,
   ArrowLeftRight,
   Pencil,
+  RefreshCw,
+  Download,
 } from 'lucide-react';
 import { useAuth } from '../../context/AuthContext.js';
+import { useBusinessSettings } from '../../context/BusinessSettingsContext.js';
 import { getAuthHeaders, getStoredToken, apiRequest } from '../../api/client.js';
 import { NormalSalesVoucherPage } from './NormalSalesVoucherPage.js';
+import { PrintPreviewModal } from '../../components/print/PrintPreviewModal.js';
+import { PrintableVoucher } from '../../components/print/PrintableVoucher.js';
+import { exportToExcel, ExcelColumn } from '../../utils/excelExporter.js';
+import { exportToCsv } from '../../utils/csvExporter.js';
 
 interface SalesInvoiceLineBatch {
   id?: string;
@@ -98,6 +105,7 @@ export const SalesInvoicesPage: React.FC<{
   onNavigate,
 }) => {
   const { currentBusiness, hasPermission } = useAuth();
+  const { settings } = useBusinessSettings();
 
   const [invoices, setInvoices] = useState<SalesInvoice[]>([]);
   const [loading, setLoading] = useState(true);
@@ -105,8 +113,10 @@ export const SalesInvoicesPage: React.FC<{
   const [statusFilter, setStatusFilter] = useState<string>('ALL');
   const [selectedInvoice, setSelectedInvoice] = useState<SalesInvoice | null>(null);
   const [isDetailOpen, setIsDetailOpen] = useState(false);
+  const [isDetailLoading, setIsDetailLoading] = useState(false);
   const [isDirectCreateOpen, setIsDirectCreateOpen] = useState(false);
   const [isConvertModalOpen, setIsConvertModalOpen] = useState(false);
+  const [autoInvokePrint, setAutoInvokePrint] = useState<boolean>(false);
 
   // Form State
   const [parties, setParties] = useState<any[]>([]);
@@ -161,6 +171,112 @@ export const SalesInvoicesPage: React.FC<{
 
   const handleEditInvoice = (invoiceId: string) => {
     setEditingInvoiceId(invoiceId);
+  };
+
+  const handleViewInvoice = async (inv: SalesInvoice) => {
+    setSelectedInvoice(inv);
+    setIsDetailOpen(true);
+    setIsDetailLoading(true);
+    try {
+      const res = await fetch(`/api/sales/invoices/${inv.id}`, {
+        headers: {
+          Authorization: `Bearer ${getStoredToken()}`,
+          'X-Business-Id': currentBusiness?.id || '',
+        },
+      });
+      if (res.ok) {
+        const fullInv = await res.json();
+        if (fullInv && fullInv.id === inv.id) {
+          setSelectedInvoice(fullInv);
+        }
+      }
+    } catch (err) {
+      console.error('Failed to load full invoice details:', err);
+    } finally {
+      setIsDetailLoading(false);
+    }
+  };
+
+  // Print Preview Modal State
+  const [printPreviewInvoice, setPrintPreviewInvoice] = useState<any | null>(null);
+  const [isPrintPreviewOpen, setIsPrintPreviewOpen] = useState<boolean>(false);
+
+  const handleOpenPrintPreview = async (inv: any, autoPrint = false) => {
+    setAutoInvokePrint(autoPrint);
+    if (!inv.lines || inv.lines.length === 0) {
+      try {
+        const res = await fetch(`/api/sales/invoices/${inv.id}`, {
+          headers: {
+            Authorization: `Bearer ${getStoredToken()}`,
+            'X-Business-Id': currentBusiness?.id || '',
+          },
+        });
+        if (res.ok) {
+          const full = await res.json();
+          setPrintPreviewInvoice(full || inv);
+        } else {
+          setPrintPreviewInvoice(inv);
+        }
+      } catch {
+        setPrintPreviewInvoice(inv);
+      }
+    } else {
+      setPrintPreviewInvoice(inv);
+    }
+    setIsPrintPreviewOpen(true);
+  };
+
+  const handleExportInvoicesExcel = () => {
+    const columns: ExcelColumn[] = [
+      { header: 'Invoice #', key: 'invoiceNumber', width: 16 },
+      { header: 'Date', key: 'invoiceDate', width: 14 },
+      { header: 'Customer Name', key: 'partyName', width: 28 },
+      { header: 'GSTIN', key: 'partyGstin', width: 18 },
+      { header: 'State', key: 'partyState', width: 16 },
+      { header: 'Source Order', key: 'salesOrderNumber', width: 16 },
+      { header: 'Status', key: 'status', width: 14 },
+      { header: 'Taxable Amount (₹)', key: 'taxableAmount', type: 'currency', width: 18 },
+      { header: 'CGST (₹)', key: 'cgstAmount', type: 'currency', width: 14 },
+      { header: 'SGST (₹)', key: 'sgstAmount', type: 'currency', width: 14 },
+      { header: 'IGST (₹)', key: 'igstAmount', type: 'currency', width: 14 },
+      { header: 'Round Off (₹)', key: 'roundOff', type: 'currency', width: 14 },
+      { header: 'Grand Total (₹)', key: 'grandTotal', type: 'currency', width: 18 },
+    ];
+
+    exportToExcel({
+      filename: `sales_invoices_${new Date().toISOString().split('T')[0]}`,
+      sheetName: 'Sales Invoices',
+      reportTitle: 'Sales Invoices Register',
+      businessName: currentBusiness?.name,
+      filtersSummary: `Status: ${statusFilter}${search ? `, Search: "${search}"` : ''} | Total: ${invoices.length} invoices`,
+      columns,
+      data: invoices,
+    });
+  };
+
+  const handleExportInvoicesCsv = () => {
+    const columns: ExcelColumn[] = [
+      { header: 'Invoice #', key: 'invoiceNumber' },
+      { header: 'Date', key: 'invoiceDate' },
+      { header: 'Customer Name', key: 'partyName' },
+      { header: 'GSTIN', key: 'partyGstin' },
+      { header: 'State', key: 'partyState' },
+      { header: 'Status', key: 'status' },
+      { header: 'Taxable Amount', key: 'taxableAmount' },
+      { header: 'CGST', key: 'cgstAmount' },
+      { header: 'SGST', key: 'sgstAmount' },
+      { header: 'IGST', key: 'igstAmount' },
+      { header: 'Grand Total', key: 'grandTotal' },
+    ];
+
+    exportToCsv({
+      filename: `sales_invoices_${new Date().toISOString().split('T')[0]}`,
+      reportTitle: 'Sales Invoices Register',
+      businessName: currentBusiness?.name,
+      filtersSummary: `Status: ${statusFilter}${search ? `, Search: "${search}"` : ''}`,
+      columns,
+      data: invoices,
+    });
   };
 
   useEffect(() => {
@@ -875,6 +991,29 @@ export const SalesInvoicesPage: React.FC<{
             <option value="POSTED">Posted (Finalized)</option>
             <option value="CANCELLED">Cancelled</option>
           </select>
+
+          <div className="flex items-center gap-1.5 border-l border-slate-200 pl-2">
+            <button
+              id="btn-export-sales-invoices-excel"
+              onClick={handleExportInvoicesExcel}
+              disabled={invoices.length === 0}
+              className="flex items-center gap-1.5 px-3 py-2 text-xs font-semibold text-emerald-700 bg-emerald-50 hover:bg-emerald-100 rounded-lg border border-emerald-200 transition disabled:opacity-50"
+              title="Export filtered sales invoices to Excel (.xlsx)"
+            >
+              <FileSpreadsheet className="w-3.5 h-3.5" />
+              <span>Excel</span>
+            </button>
+            <button
+              id="btn-export-sales-invoices-csv"
+              onClick={handleExportInvoicesCsv}
+              disabled={invoices.length === 0}
+              className="flex items-center gap-1.5 px-3 py-2 text-xs font-semibold text-slate-700 bg-slate-100 hover:bg-slate-200 rounded-lg border border-slate-300 transition disabled:opacity-50"
+              title="Export filtered sales invoices to CSV"
+            >
+              <Download className="w-3.5 h-3.5" />
+              <span>CSV</span>
+            </button>
+          </div>
         </div>
       </div>
 
@@ -940,14 +1079,22 @@ export const SalesInvoicesPage: React.FC<{
                       <div className="flex items-center justify-center gap-1">
                         <button
                           id={`btn-view-invoice-${inv.id}`}
-                          onClick={() => {
-                            setSelectedInvoice(inv);
-                            setIsDetailOpen(true);
-                          }}
+                          onClick={() => handleViewInvoice(inv)}
                           className="p-1.5 text-slate-600 hover:text-emerald-600 hover:bg-emerald-50 rounded transition"
                           title="View Tax Invoice"
                         >
                           <Eye className="w-4 h-4" />
+                        </button>
+                        <button
+                          id={`btn-print-preview-invoice-${inv.id}`}
+                          onClick={() => {
+                            const previewBeforePrint = settings?.print?.previewBeforePrint ?? true;
+                            handleOpenPrintPreview(inv, !previewBeforePrint);
+                          }}
+                          className="p-1.5 text-slate-500 hover:text-slate-900 hover:bg-slate-100 rounded transition"
+                          title="Print Tax Invoice"
+                        >
+                          <Printer className="w-4 h-4" />
                         </button>
                         {inv.status !== 'CANCELLED' && (
                           <button
@@ -980,17 +1127,17 @@ export const SalesInvoicesPage: React.FC<{
       {/* CREATE DIRECT INVOICE MODAL */}
       {isDirectCreateOpen && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/50 backdrop-blur-sm p-4 overflow-y-auto">
-          <div className="bg-white rounded-2xl shadow-xl w-full max-w-5xl my-8 overflow-hidden border border-slate-200">
-            <div className="px-6 py-4 bg-slate-50 border-b border-slate-200 flex items-center justify-between">
+          <div className="bg-white rounded-2xl shadow-xl w-full max-w-5xl my-8 overflow-hidden border border-slate-300">
+            <div className="px-6 py-4 bg-slate-100 border-b border-slate-300 flex items-center justify-between">
               <div>
-                <h3 className="text-lg font-bold text-slate-900">Direct Sales Tax Invoice</h3>
-                <p className="text-xs text-slate-500">
-                  Target Number: <span className="font-mono text-emerald-700 font-bold">{previewInvoiceNumber || 'Auto-generated'}</span>
+                <h3 className="text-lg font-black text-slate-950">Direct Sales Tax Invoice</h3>
+                <p className="text-xs text-slate-600 font-bold">
+                  Target Number: <span className="font-mono text-emerald-800 font-black">{previewInvoiceNumber || 'Auto-generated'}</span>
                 </p>
               </div>
               <button
                 onClick={() => setIsDirectCreateOpen(false)}
-                className="text-slate-400 hover:text-slate-600 text-lg font-bold p-1"
+                className="text-slate-500 hover:text-slate-800 text-lg font-bold p-1"
               >
                 ✕
               </button>
@@ -1007,14 +1154,14 @@ export const SalesInvoicesPage: React.FC<{
               {/* Invoice Header Fields */}
               <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
                 <div>
-                  <label className="block text-xs font-semibold text-slate-600 uppercase mb-1">
+                  <label className="block text-xs font-black text-slate-950 uppercase tracking-wide mb-1">
                     Customer Party *
                   </label>
                   <select
                     id="select-direct-invoice-party"
                     value={selectedPartyId}
                     onChange={e => handlePartyChange(e.target.value)}
-                    className="w-full px-3 py-2 text-sm rounded-lg border border-slate-300 focus:ring-2 focus:ring-emerald-500 focus:outline-none"
+                    className="w-full px-3 py-2 text-sm rounded-lg border border-slate-300 font-medium text-slate-900 focus:ring-2 focus:ring-emerald-500 focus:outline-none"
                   >
                     <option value="">Select Customer...</option>
                     {parties.map(p => (
@@ -1026,7 +1173,7 @@ export const SalesInvoicesPage: React.FC<{
                 </div>
 
                 <div>
-                  <label className="block text-xs font-semibold text-slate-600 uppercase mb-1">
+                  <label className="block text-xs font-black text-slate-950 uppercase tracking-wide mb-1">
                     Invoice Date *
                   </label>
                   <input
@@ -1034,18 +1181,18 @@ export const SalesInvoicesPage: React.FC<{
                     type="date"
                     value={invoiceDate}
                     onChange={e => setInvoiceDate(e.target.value)}
-                    className="w-full px-3 py-2 text-sm rounded-lg border border-slate-300 focus:ring-2 focus:ring-emerald-500 focus:outline-none"
+                    className="w-full px-3 py-2 text-sm rounded-lg border border-slate-300 font-medium text-slate-900 focus:ring-2 focus:ring-emerald-500 focus:outline-none"
                   />
                 </div>
 
                 <div>
-                  <label className="block text-xs font-semibold text-slate-600 uppercase mb-1">
+                  <label className="block text-xs font-black text-slate-950 uppercase tracking-wide mb-1">
                     Payment Terms
                   </label>
                   <select
                     value={paymentTerms}
                     onChange={e => setPaymentTerms(e.target.value)}
-                    className="w-full px-3 py-2 text-sm rounded-lg border border-slate-300 focus:ring-2 focus:ring-emerald-500 focus:outline-none"
+                    className="w-full px-3 py-2 text-sm rounded-lg border border-slate-300 font-medium text-slate-900 focus:ring-2 focus:ring-emerald-500 focus:outline-none"
                   >
                     <option value="NET 30">NET 30 Days</option>
                     <option value="NET 15">NET 15 Days</option>
@@ -1060,12 +1207,12 @@ export const SalesInvoicesPage: React.FC<{
                 <div className="p-3 bg-emerald-50/70 border border-emerald-200 rounded-xl flex items-center justify-between text-xs">
                   <div className="flex items-center gap-4">
                     <div>
-                      <span className="text-slate-500">Current Outstanding:</span>{' '}
-                      <span className="font-mono font-bold text-slate-800">₹{partyCreditInfo.currentBalance?.toFixed(2)}</span>
+                      <span className="text-slate-600 font-bold">Current Outstanding:</span>{' '}
+                      <span className="font-mono font-black text-slate-900">₹{partyCreditInfo.currentBalance?.toFixed(2)}</span>
                     </div>
                     <div>
-                      <span className="text-slate-500">Credit Limit:</span>{' '}
-                      <span className="font-mono font-bold text-slate-800">
+                      <span className="text-slate-600 font-bold">Credit Limit:</span>{' '}
+                      <span className="font-mono font-black text-slate-900">
                         {partyCreditInfo.creditLimit > 0 ? `₹${partyCreditInfo.creditLimit?.toFixed(2)}` : 'Unlimited'}
                       </span>
                     </div>
@@ -1085,7 +1232,7 @@ export const SalesInvoicesPage: React.FC<{
               {/* Line Items Table */}
               <div className="space-y-3">
                 <div className="flex items-center justify-between">
-                  <h4 className="text-sm font-bold text-slate-800 uppercase tracking-wider">
+                  <h4 className="text-xs font-black text-slate-950 uppercase tracking-wider">
                     Invoice Lines ({formLines.length})
                   </h4>
                   <button
@@ -1103,16 +1250,16 @@ export const SalesInvoicesPage: React.FC<{
                     No items in invoice. Click &quot;Add Item Line&quot; or scan lens barcodes.
                   </div>
                 ) : (
-                  <div className="border border-slate-200 rounded-xl overflow-hidden">
+                  <div className="border border-slate-300 rounded-xl overflow-hidden">
                     <table className="w-full text-left text-xs">
-                      <thead className="bg-slate-50 border-b border-slate-200 text-slate-600 font-semibold">
+                      <thead className="bg-slate-200 border-b-2 border-slate-300 text-slate-950 font-black uppercase tracking-wider text-[11px]">
                         <tr>
-                          <th className="py-2.5 px-3 w-1/3">Item & Optical Power</th>
-                          <th className="py-2.5 px-3 w-20 text-center">Qty</th>
-                          <th className="py-2.5 px-3 w-24 text-right">Rate (₹)</th>
-                          <th className="py-2.5 px-3 w-24">Disc (%)</th>
-                          <th className="py-2.5 px-3 w-20">GST %</th>
-                          <th className="py-2.5 px-3 text-right">Total (₹)</th>
+                          <th className="py-2.5 px-3 w-1/3 text-slate-950 font-black">Item & Optical Power</th>
+                          <th className="py-2.5 px-3 w-20 text-center text-slate-950 font-black">Qty</th>
+                          <th className="py-2.5 px-3 w-24 text-right text-slate-950 font-black">Rate (₹)</th>
+                          <th className="py-2.5 px-3 w-24 text-slate-950 font-black">Disc (%)</th>
+                          <th className="py-2.5 px-3 w-20 text-slate-950 font-black">GST %</th>
+                          <th className="py-2.5 px-3 text-right text-slate-950 font-black">Total (₹)</th>
                           <th className="py-2.5 px-3 w-10 text-center"></th>
                         </tr>
                       </thead>
@@ -1506,11 +1653,31 @@ export const SalesInvoicesPage: React.FC<{
                   </button>
                 )}
                 <button
-                  onClick={() => window.print()}
-                  className="flex items-center gap-1.5 px-3 py-1.5 bg-slate-800 hover:bg-slate-700 text-xs font-semibold rounded-lg transition"
+                  id="btn-print-preview-modal-action"
+                  onClick={() => {
+                    setAutoInvokePrint(false);
+                    setPrintPreviewInvoice(selectedInvoice);
+                    setIsPrintPreviewOpen(true);
+                  }}
+                  className="flex items-center gap-1.5 px-3 py-1.5 bg-blue-600 hover:bg-blue-500 text-xs font-semibold rounded-lg transition text-white shadow-xs"
+                  title="Open Print Preview"
                 >
                   <Printer className="w-3.5 h-3.5" />
-                  Print / PDF
+                  Print Preview
+                </button>
+                <button
+                  id="btn-direct-print-modal-action"
+                  onClick={() => {
+                    const previewBeforePrint = settings?.print?.previewBeforePrint ?? true;
+                    setAutoInvokePrint(!previewBeforePrint);
+                    setPrintPreviewInvoice(selectedInvoice);
+                    setIsPrintPreviewOpen(true);
+                  }}
+                  className="flex items-center gap-1.5 px-3 py-1.5 bg-slate-800 hover:bg-slate-700 text-xs font-semibold rounded-lg transition text-slate-200"
+                  title="Print Invoice"
+                >
+                  <Printer className="w-3.5 h-3.5" />
+                  Print
                 </button>
                 <button
                   onClick={() => setIsDetailOpen(false)}
@@ -1573,30 +1740,95 @@ export const SalesInvoicesPage: React.FC<{
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-slate-100 font-mono">
-                    {selectedInvoice.lines.map((l, idx) => (
-                      <tr key={idx}>
-                        <td className="py-3 px-3 font-sans">
-                          <div className="font-bold text-slate-900">{l.uniqueItemName}</div>
-                          {l.batches && l.batches.length > 0 && (
-                            <div className="text-[11px] text-slate-500 mt-0.5">
-                              Power: SPH {l.batches[0].sph || '0.00'}, CYL {l.batches[0].cyl || '0.00'}
-                              {l.batches[0].axis ? `, AXIS ${l.batches[0].axis}` : ''}
-                              {l.batches[0].add ? `, ADD ${l.batches[0].add}` : ''}
-                              {l.batches[0].barcode ? ` | Barcode: ${l.batches[0].barcode}` : ''}
-                            </div>
-                          )}
-                        </td>
-                        <td className="py-3 px-3 text-center">{l.quantity}</td>
-                        <td className="py-3 px-3 text-right">₹{parseFloat(String(l.rate)).toFixed(2)}</td>
-                        <td className="py-3 px-3 text-right">₹{parseFloat(String(l.taxableAmount || '0')).toFixed(2)}</td>
-                        <td className="py-3 px-3 text-right">
-                          ₹{(parseFloat(String(l.cgstAmount || 0)) + parseFloat(String(l.sgstAmount || 0)) + parseFloat(String(l.igstAmount || 0))).toFixed(2)}
-                        </td>
-                        <td className="py-3 px-3 text-right font-bold text-slate-900">
-                          ₹{parseFloat(String(l.lineTotal || '0')).toFixed(2)}
+                    {isDetailLoading && (!selectedInvoice.lines || selectedInvoice.lines.length === 0) ? (
+                      <tr>
+                        <td colSpan={6} className="py-8 text-center text-slate-500 font-sans">
+                          <div className="flex items-center justify-center gap-2">
+                            <RefreshCw className="w-4 h-4 animate-spin text-emerald-600" />
+                            <span>Loading items sold &amp; batch allocations...</span>
+                          </div>
                         </td>
                       </tr>
-                    ))}
+                    ) : (!selectedInvoice.lines || selectedInvoice.lines.length === 0) ? (
+                      <tr>
+                        <td colSpan={6} className="py-8 text-center text-slate-400 font-sans italic">
+                          No items sold recorded on this invoice.
+                        </td>
+                      </tr>
+                    ) : (
+                      (selectedInvoice.lines || []).map((l, idx) => {
+                        const itemName = l.uniqueItemName || (l as any).uniqueItem?.name || 'Optical Item';
+                        const itemCode = l.uniqueItemCode || (l as any).uniqueItem?.code;
+                        const batches = l.batches || [];
+                        const qty = parseFloat(String(l.quantity || 1));
+                        const rate = parseFloat(String(l.rate || 0));
+                        const taxable = parseFloat(String(l.taxableAmount || (qty * rate)));
+                        const totalTax = (parseFloat(String(l.cgstAmount || 0)) + parseFloat(String(l.sgstAmount || 0)) + parseFloat(String(l.igstAmount || 0)));
+                        const lineTot = parseFloat(String(l.lineTotal || (taxable + totalTax)));
+
+                        return (
+                          <tr key={l.id || idx}>
+                            <td className="py-3 px-3 font-sans">
+                              <div className="font-bold text-slate-900 flex items-center gap-1.5 flex-wrap">
+                                <span>{itemName}</span>
+                                {itemCode && (
+                                  <span className="text-[10px] font-mono font-medium px-1.5 py-0.5 bg-slate-100 text-slate-600 rounded">
+                                    {itemCode}
+                                  </span>
+                                )}
+                              </div>
+                              {batches.length > 0 ? (
+                                <div className="space-y-1 mt-1 font-mono text-[11px]">
+                                  {batches.map((b: any, bIdx: number) => {
+                                    const sph = b.sph ?? b.batch?.sph ?? '0.00';
+                                    const cyl = b.cyl ?? b.batch?.cyl ?? '0.00';
+                                    const axis = b.axis ?? b.batch?.axis;
+                                    const add = b.add ?? b.batch?.add;
+                                    const barcode = b.barcode ?? b.batch?.barcode;
+                                    const side = b.side ?? b.batch?.side;
+                                    return (
+                                      <div key={bIdx} className="flex flex-wrap items-center gap-x-2 bg-slate-50 p-1 rounded border border-slate-200/60 text-slate-700">
+                                        <span className="font-semibold text-slate-900">
+                                          Power: SPH {sph}, CYL {cyl}{axis ? `, AXIS ${axis}` : ''}{add ? `, ADD ${add}` : ''}
+                                        </span>
+                                        {side && side !== 'NONE' && (
+                                          <span className="px-1.5 py-0.2 bg-blue-100 text-blue-800 text-[10px] rounded font-bold uppercase">
+                                            {side}
+                                          </span>
+                                        )}
+                                        {barcode && (
+                                          <span className="text-slate-500 font-mono text-[10px]">
+                                            | Barcode: <span className="font-bold text-slate-800">{barcode}</span>
+                                          </span>
+                                        )}
+                                        {batches.length > 1 && (
+                                          <span className="text-slate-500 font-sans">
+                                            ({b.quantity || 1} {l.unit || 'PRS'})
+                                          </span>
+                                        )}
+                                      </div>
+                                    );
+                                  })}
+                                </div>
+                              ) : (
+                                <div className="text-[11px] text-slate-400 mt-0.5 font-sans">
+                                  Standard Stock Item
+                                </div>
+                              )}
+                            </td>
+                            <td className="py-3 px-3 text-center font-bold text-slate-800">{qty}</td>
+                            <td className="py-3 px-3 text-right">₹{rate.toFixed(2)}</td>
+                            <td className="py-3 px-3 text-right">₹{taxable.toFixed(2)}</td>
+                            <td className="py-3 px-3 text-right">
+                              ₹{totalTax.toFixed(2)}
+                            </td>
+                            <td className="py-3 px-3 text-right font-bold text-slate-900">
+                              ₹{lineTot.toFixed(2)}
+                            </td>
+                          </tr>
+                        );
+                      })
+                    )}
                   </tbody>
                 </table>
               </div>
@@ -1848,6 +2080,32 @@ export const SalesInvoicesPage: React.FC<{
             </div>
           </div>
         </div>
+      )}
+
+      {/* REUSABLE A4 PRINT PREVIEW MODAL */}
+      {isPrintPreviewOpen && printPreviewInvoice && (
+        <PrintPreviewModal
+          isOpen={isPrintPreviewOpen}
+          onClose={() => {
+            setIsPrintPreviewOpen(false);
+            setPrintPreviewInvoice(null);
+          }}
+          title={`Tax Invoice - ${printPreviewInvoice.invoiceNumber || ''}`}
+          filename={`Invoice_${printPreviewInvoice.invoiceNumber || 'INV'}`}
+          defaultOrientation="portrait"
+          autoInvokePrint={autoInvokePrint}
+        >
+          {({ documentId }) => (
+            <PrintableVoucher
+              id={documentId}
+              business={currentBusiness}
+              voucher={printPreviewInvoice}
+              documentType="SALES_INVOICE"
+              customTitle={settings?.print?.invoiceTitle || "TAX INVOICE"}
+              copyLabel="Original for Recipient"
+            />
+          )}
+        </PrintPreviewModal>
       )}
     </div>
   );

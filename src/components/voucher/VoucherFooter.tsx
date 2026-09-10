@@ -74,7 +74,7 @@ export const VoucherFooter: React.FC<VoucherFooterProps> = ({
         <div className="lg:col-span-7 space-y-2">
           {/* Narration */}
           <div className="flex items-start gap-2">
-            <span className="text-slate-600 font-bold shrink-0 pt-1 text-right w-16">
+            <span className="text-slate-950 font-extrabold shrink-0 pt-1 text-right w-20 text-xs uppercase tracking-tight">
               Narration:
             </span>
             <textarea
@@ -86,66 +86,67 @@ export const VoucherFooter: React.FC<VoucherFooterProps> = ({
                   ? 'Enter voucher remarks / terms (e.g. Optical lenses supplied against Rx)...'
                   : 'Enter supplier invoice remarks / delivery note ref...'
               }
-              className="flex-1 min-w-0 p-1.5 text-xs font-sans border border-slate-300 rounded bg-slate-50 focus:bg-white focus:ring-1 focus:ring-blue-500 placeholder:text-slate-400 custom-scrollbar resize-none"
+              className="flex-1 min-w-0 p-1.5 text-xs font-bold text-slate-900 font-sans border border-slate-400 rounded bg-white focus:bg-white focus:ring-1 focus:ring-blue-600 placeholder:text-slate-400 placeholder:font-normal custom-scrollbar resize-none shadow-2xs"
             />
           </div>
 
-          <div className="flex items-center gap-4 pl-18 text-[11px] text-slate-500">
+          <div className="flex items-center gap-6 pl-22 text-xs text-slate-700">
             <div>
-              Total Items: <span className="font-bold text-slate-800 font-mono">{totals.totalItems}</span>
+              <span className="font-extrabold text-slate-900 uppercase text-[11px] tracking-tight">Total Items:</span>{' '}
+              <span className="font-black text-slate-950 font-mono text-xs ml-1">{totals.totalItems}</span>
             </div>
             <div>
-              Total Quantity:{' '}
-              <span className="font-bold text-slate-800 font-mono">{totals.totalQuantity}</span>
+              <span className="font-extrabold text-slate-900 uppercase text-[11px] tracking-tight">Total Quantity:</span>{' '}
+              <span className="font-black text-slate-950 font-mono text-xs ml-1">{totals.totalQuantity}</span>
             </div>
           </div>
         </div>
 
         {/* Right: Dense Accounting Breakdown (col 5) */}
-        <div className="lg:col-span-5 bg-slate-50 border border-slate-300 rounded p-2 space-y-1 font-mono text-xs">
-          <div className="flex justify-between text-slate-600">
-            <span>Subtotal (Gross):</span>
-            <span>₹{totals.subtotal.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
+        <div className="lg:col-span-5 bg-slate-100/90 border-2 border-slate-300 rounded-md p-2.5 space-y-1.5 font-mono text-xs shadow-2xs">
+          <div className="flex justify-between text-slate-900 font-bold">
+            <span className="uppercase text-[11px] tracking-tight">Subtotal (Gross):</span>
+            <span className="font-black">₹{totals.subtotal.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
           </div>
 
           {totals.discountTotal > 0 && (
-            <div className="flex justify-between text-emerald-700">
-              <span>Less Discount:</span>
-              <span>- ₹{totals.discountTotal.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
+            <div className="flex justify-between text-emerald-800 font-bold">
+              <span className="uppercase text-[11px] tracking-tight">Less Discount:</span>
+              <span className="font-black">- ₹{totals.discountTotal.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
             </div>
           )}
 
-          <div className="flex justify-between font-semibold text-slate-800 border-t border-slate-200 pt-0.5">
-            <span>Taxable Amount:</span>
+          <div className="flex justify-between font-black text-slate-950 border-t border-slate-300 pt-1">
+            <span className="uppercase text-[11px] tracking-tight">Taxable Amount:</span>
             <span>₹{totals.taxableAmount.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
           </div>
 
           {gstMode === 'INTRA_STATE' ? (
             <>
-              <div className="flex justify-between text-slate-600 text-[11px]">
-                <span>CGST:</span>
+              <div className="flex justify-between text-slate-800 font-bold text-[11px]">
+                <span className="uppercase tracking-tight">CGST:</span>
                 <span>+ ₹{totals.cgstAmount.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
               </div>
-              <div className="flex justify-between text-slate-600 text-[11px]">
-                <span>SGST:</span>
+              <div className="flex justify-between text-slate-800 font-bold text-[11px]">
+                <span className="uppercase tracking-tight">SGST:</span>
                 <span>+ ₹{totals.sgstAmount.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
               </div>
             </>
           ) : gstMode === 'INTER_STATE' ? (
-            <div className="flex justify-between text-slate-600 text-[11px]">
-              <span>IGST:</span>
+            <div className="flex justify-between text-slate-800 font-bold text-[11px]">
+              <span className="uppercase tracking-tight">IGST:</span>
               <span>+ ₹{totals.igstAmount.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
             </div>
           ) : (
-            <div className="flex justify-between text-slate-400 text-[11px]">
-              <span>GST:</span>
+            <div className="flex justify-between text-slate-600 font-bold text-[11px]">
+              <span className="uppercase tracking-tight">GST:</span>
               <span>EXEMPT</span>
             </div>
           )}
 
           {totals.roundOff !== 0 && (
-            <div className="flex justify-between text-slate-500 text-[11px]">
-              <span>Round Off:</span>
+            <div className="flex justify-between text-slate-700 font-bold text-[11px]">
+              <span className="uppercase tracking-tight">Round Off:</span>
               <span>
                 {totals.roundOff > 0 ? `+ ₹${totals.roundOff.toFixed(2)}` : `- ₹${Math.abs(totals.roundOff).toFixed(2)}`}
               </span>
@@ -153,21 +154,21 @@ export const VoucherFooter: React.FC<VoucherFooterProps> = ({
           )}
 
           {/* Under GST: Bill Amount and Previous Balance */}
-          <div className="border-t border-slate-200 pt-1 space-y-1">
-            <div className="flex justify-between text-slate-700 text-xs">
-              <span>Bill Amount:</span>
-              <span className="font-semibold">
+          <div className="border-t border-slate-300 pt-1 space-y-1">
+            <div className="flex justify-between text-slate-950 text-xs font-bold">
+              <span className="uppercase text-[11px] tracking-tight">Bill Amount:</span>
+              <span className="font-black text-slate-950">
                 ₹{totals.grandTotal.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
               </span>
             </div>
 
-            <div className="flex justify-between text-slate-700 text-xs">
-              <span>Previous Balance:</span>
-              <span className={prevBalNum !== 0 ? 'font-semibold text-amber-800' : 'text-slate-500'}>
+            <div className="flex justify-between text-slate-950 text-xs font-bold">
+              <span className="uppercase text-[11px] tracking-tight">Previous Balance:</span>
+              <span className={prevBalNum !== 0 ? 'font-black text-amber-900' : 'text-slate-600'}>
                 {prevBalNum !== 0 ? (
                   <>
                     {signedPrevBal >= 0 ? '+ ' : '- '}₹{Math.abs(prevBalNum).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
-                    <span className="text-[10px] ml-1 text-slate-500 font-sans font-normal">({prevBalType})</span>
+                    <span className="text-[10px] ml-1 text-slate-600 font-sans font-bold">({prevBalType})</span>
                   </>
                 ) : (
                   '₹0.00'
@@ -177,9 +178,9 @@ export const VoucherFooter: React.FC<VoucherFooterProps> = ({
           </div>
 
           {/* Grand Total Bar - added with previous balance */}
-          <div className="flex justify-between items-baseline font-bold text-slate-900 border-t-2 border-slate-800 pt-1 text-sm">
-            <span className="tracking-wide">TOTAL:</span>
-            <span className="text-base font-extrabold text-blue-900">
+          <div className="flex justify-between items-baseline font-black text-slate-950 border-t-2 border-slate-900 pt-1.5 text-sm">
+            <span className="tracking-wider uppercase">TOTAL:</span>
+            <span className="text-base font-black text-blue-950">
               ₹{finalTotal.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
             </span>
           </div>

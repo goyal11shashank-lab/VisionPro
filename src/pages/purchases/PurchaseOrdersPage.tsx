@@ -18,17 +18,25 @@ import {
   Loader2,
   ArrowRight,
   ShoppingCart,
+  Printer,
+  Download,
 } from 'lucide-react';
 import { apiRequest } from '../../api/client.js';
+import { useAuth } from '../../context/AuthContext.js';
 import { PurchaseOrder } from '../../types/index.js';
 import { PurchaseOrderDetailModal } from '../../components/purchases/PurchaseOrderDetailModal.js';
 import { CreatePurchaseInvoicePage } from './CreatePurchaseInvoicePage.js';
+import { PrintPreviewModal } from '../../components/print/PrintPreviewModal.js';
+import { PrintableVoucher } from '../../components/print/PrintableVoucher.js';
+import { exportToExcel, ExcelColumn } from '../../utils/excelExporter.js';
+import { exportToCsv } from '../../utils/csvExporter.js';
 
 interface PurchaseOrdersPageProps {
   onNavigate?: (path: string) => void;
 }
 
 export const PurchaseOrdersPage: React.FC<PurchaseOrdersPageProps> = ({ onNavigate }) => {
+  const { currentBusiness } = useAuth();
   const [orders, setOrders] = useState<PurchaseOrder[]>([]);
   const [loading, setLoading] = useState<boolean>(true);
   const [error, setError] = useState<string | null>(null);
@@ -46,6 +54,69 @@ export const PurchaseOrdersPage: React.FC<PurchaseOrdersPageProps> = ({ onNaviga
   const [confirmCancelOrder, setConfirmCancelOrder] = useState<{ id: string; orderNumber: string } | null>(null);
   const [cancelReasonInput, setCancelReasonInput] = useState<string>('');
   const [cancellingOrderId, setCancellingOrderId] = useState<string | null>(null);
+
+  // Print Preview
+  const [printPreviewOrder, setPrintPreviewOrder] = useState<any | null>(null);
+  const [isPrintPreviewOpen, setIsPrintPreviewOpen] = useState<boolean>(false);
+
+  const handleRowPrintPreview = async (ordId: string) => {
+    try {
+      const full = await apiRequest<{ order: PurchaseOrder }>(`/api/purchases/orders/${ordId}`);
+      setPrintPreviewOrder(full.order);
+    } catch {
+      const fallback = orders.find(o => o.id === ordId);
+      if (fallback) setPrintPreviewOrder(fallback);
+    }
+    setIsPrintPreviewOpen(true);
+  };
+
+  const handleExportExcel = () => {
+    const columns: ExcelColumn[] = [
+      { header: 'Order #', key: 'orderNumber', width: 16 },
+      { header: 'Date', key: 'orderDate', width: 14 },
+      { header: 'Vendor Name', key: 'supplier.name', width: 28 },
+      { header: 'Status', key: 'status', width: 16 },
+      { header: 'Taxable (₹)', key: 'taxableAmount', type: 'currency', width: 16 },
+      { header: 'CGST (₹)', key: 'cgstAmount', type: 'currency', width: 14 },
+      { header: 'SGST (₹)', key: 'sgstAmount', type: 'currency', width: 14 },
+      { header: 'IGST (₹)', key: 'igstAmount', type: 'currency', width: 14 },
+      { header: 'Round Off (₹)', key: 'roundOff', type: 'currency', width: 12 },
+      { header: 'Grand Total (₹)', key: 'grandTotal', type: 'currency', width: 18 },
+    ];
+
+    exportToExcel({
+      filename: `purchase_orders_${new Date().toISOString().split('T')[0]}`,
+      sheetName: 'Purchase Orders',
+      reportTitle: 'Purchase Orders Register',
+      businessName: currentBusiness?.name,
+      filtersSummary: `Status: ${statusFilter}${search ? `, Search: "${search}"` : ''} | Total: ${orders.length} orders`,
+      columns,
+      data: orders,
+    });
+  };
+
+  const handleExportCsv = () => {
+    const columns: ExcelColumn[] = [
+      { header: 'Order #', key: 'orderNumber' },
+      { header: 'Date', key: 'orderDate' },
+      { header: 'Vendor Name', key: 'supplier.name' },
+      { header: 'Status', key: 'status' },
+      { header: 'Taxable Amount', key: 'taxableAmount' },
+      { header: 'CGST', key: 'cgstAmount' },
+      { header: 'SGST', key: 'sgstAmount' },
+      { header: 'IGST', key: 'igstAmount' },
+      { header: 'Grand Total', key: 'grandTotal' },
+    ];
+
+    exportToCsv({
+      filename: `purchase_orders_${new Date().toISOString().split('T')[0]}`,
+      reportTitle: 'Purchase Orders Register',
+      businessName: currentBusiness?.name,
+      filtersSummary: `Status: ${statusFilter}${search ? `, Search: "${search}"` : ''}`,
+      columns,
+      data: orders,
+    });
+  };
 
   const fetchOrders = async () => {
     setLoading(true);
@@ -290,6 +361,29 @@ export const PurchaseOrdersPage: React.FC<PurchaseOrdersPageProps> = ({ onNaviga
             <option value="CONVERTED">Fully Converted</option>
             <option value="CANCELLED">Cancelled</option>
           </select>
+
+          <div className="flex items-center gap-1.5 pl-2 border-l border-slate-200">
+            <button
+              id="btn-export-po-excel"
+              onClick={handleExportExcel}
+              disabled={orders.length === 0}
+              className="flex items-center gap-1 px-2.5 py-1.5 text-xs font-semibold text-emerald-700 bg-emerald-50 hover:bg-emerald-100 rounded border border-emerald-200 transition disabled:opacity-50"
+              title="Export filtered purchase orders to Excel (.xlsx)"
+            >
+              <FileSpreadsheet className="w-3.5 h-3.5" />
+              <span>Excel</span>
+            </button>
+            <button
+              id="btn-export-po-csv"
+              onClick={handleExportCsv}
+              disabled={orders.length === 0}
+              className="flex items-center gap-1 px-2.5 py-1.5 text-xs font-semibold text-slate-700 bg-slate-100 hover:bg-slate-200 rounded border border-slate-300 transition disabled:opacity-50"
+              title="Export filtered purchase orders to CSV"
+            >
+              <Download className="w-3.5 h-3.5" />
+              <span>CSV</span>
+            </button>
+          </div>
         </div>
       </div>
 
@@ -393,6 +487,13 @@ export const PurchaseOrdersPage: React.FC<PurchaseOrdersPageProps> = ({ onNaviga
                           >
                             <Eye className="w-4 h-4" />
                           </button>
+                          <button
+                            onClick={() => handleRowPrintPreview(order.id)}
+                            className="p-1 text-slate-500 hover:text-blue-600 hover:bg-blue-50 rounded"
+                            title="Print Preview / Export PDF"
+                          >
+                            <Printer className="w-4 h-4" />
+                          </button>
 
                           {isOpen && (
                             <>
@@ -483,6 +584,30 @@ export const PurchaseOrdersPage: React.FC<PurchaseOrdersPageProps> = ({ onNaviga
             </div>
           </div>
         </div>
+      )}
+      {/* REUSABLE PRINT PREVIEW MODAL */}
+      {isPrintPreviewOpen && printPreviewOrder && (
+        <PrintPreviewModal
+          isOpen={isPrintPreviewOpen}
+          onClose={() => {
+            setIsPrintPreviewOpen(false);
+            setPrintPreviewOrder(null);
+          }}
+          title={`Purchase Order - ${printPreviewOrder.orderNumber || ''}`}
+          filename={`PurchaseOrder_${printPreviewOrder.orderNumber || 'PO'}`}
+          defaultOrientation="portrait"
+        >
+          {({ documentId }) => (
+            <PrintableVoucher
+              id={documentId}
+              business={currentBusiness}
+              voucher={printPreviewOrder}
+              documentType="PURCHASE_ORDER"
+              customTitle="PURCHASE ORDER"
+              copyLabel="Vendor Copy"
+            />
+          )}
+        </PrintPreviewModal>
       )}
     </div>
   );

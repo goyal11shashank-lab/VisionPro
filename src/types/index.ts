@@ -202,6 +202,9 @@ export interface UniqueItem {
   opticalCategory?: 'SV' | 'KT' | 'PROG' | 'OTHER' | string;
   unit?: 'PRS' | 'PCS' | string;
   batchesCount?: number;
+  stock?: number;
+  reserved?: number;
+  available?: number;
   purchaseRate: string | number;
   lastPurchasePrice: string | number;
   mrp: string | number;

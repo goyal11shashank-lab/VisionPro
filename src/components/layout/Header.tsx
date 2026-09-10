@@ -110,10 +110,10 @@ export const Header: React.FC<HeaderProps> = ({
                 />
                 <div className="absolute right-0 mt-1.5 w-64 rounded-xl bg-white shadow-xl border border-slate-200 py-1.5 z-50 text-xs">
                   <div className="px-3 py-2 border-b border-slate-100 text-slate-500 font-semibold uppercase tracking-wider text-[10px]">
-                    Authorized Businesses ({accessibleBusinesses.length})
+                    Authorized Businesses ({(accessibleBusinesses || []).length})
                   </div>
                   <div className="max-h-60 overflow-y-auto py-1">
-                    {accessibleBusinesses.map(biz => (
+                    {(accessibleBusinesses || []).map(biz => (
                       <button
                         key={biz.id}
                         id={`biz-option-${biz.id}`}

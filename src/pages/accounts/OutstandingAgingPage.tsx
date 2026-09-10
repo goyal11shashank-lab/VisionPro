@@ -21,6 +21,7 @@ import {
 } from 'lucide-react';
 import { useAuth } from '../../context/AuthContext.js';
 import { getStoredToken } from '../../api/client.js';
+import { printDocument } from '../../utils/printService.js';
 
 interface OutstandingCustomer {
   partyId: string;
@@ -99,6 +100,24 @@ export const OutstandingAgingPage: React.FC<{ onNavigate?: (path: string) => voi
   const [loadingStatement, setLoadingStatement] = useState(false);
   const [statementFromDate, setStatementFromDate] = useState('');
   const [statementToDate, setStatementToDate] = useState('');
+  const [isPrintingStatement, setIsPrintingStatement] = useState(false);
+
+  const handlePrintStatement = async () => {
+    if (!statementData) return;
+    setIsPrintingStatement(true);
+    try {
+      await printDocument({
+        elementOrId: 'party-statement-printable-content',
+        title: `Account Statement - ${statementData.party?.name || 'Party'}`,
+        filename: `Statement_${statementData.party?.name || 'Party'}`,
+        orientation: 'landscape',
+      });
+    } catch (err) {
+      console.error('Print statement failed:', err);
+    } finally {
+      setIsPrintingStatement(false);
+    }
+  };
 
   // Fetch Outstandings
   const fetchOutstandings = async () => {
@@ -503,15 +522,15 @@ export const OutstandingAgingPage: React.FC<{ onNavigate?: (path: string) => voi
               </button>
             </div>
 
-            <div className="p-6 space-y-5">
+            <div id="party-statement-printable-content" className="p-6 space-y-5">
               {/* Date Filters & Header Details */}
               <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4 p-4 rounded-xl bg-slate-50 border border-slate-200">
                 <div className="text-xs space-y-0.5">
-                  <div className="font-bold text-slate-900 text-sm">{statementData?.party.name}</div>
+                  <div className="font-bold text-slate-900 text-sm">{statementData?.party?.name || 'Party Statement'}</div>
                   <div className="text-slate-500">
-                    {statementData?.party.city || 'India'} {statementData?.party.phone && `• ${statementData?.party.phone}`}
+                    {statementData?.party?.city || 'India'} {statementData?.party?.phone && `• ${statementData?.party?.phone}`}
                   </div>
-                  {statementData?.party.gstin && (
+                  {statementData?.party?.gstin && (
                     <div className="text-slate-400 font-mono">GSTIN: {statementData.party.gstin}</div>
                   )}
                 </div>
@@ -582,14 +601,14 @@ export const OutstandingAgingPage: React.FC<{ onNavigate?: (path: string) => voi
                           Fetching statement ledger...
                         </td>
                       </tr>
-                    ) : !statementData || statementData.entries.length === 0 ? (
+                    ) : !statementData || !Array.isArray(statementData.entries) || statementData.entries.length === 0 ? (
                       <tr>
                         <td colSpan={6} className="px-4 py-8 text-center text-slate-400">
                           No ledger transactions found in selected date range.
                         </td>
                       </tr>
                     ) : (
-                      statementData.entries.map(e => (
+                      (statementData.entries || []).map(e => (
                         <tr key={e.id} className="hover:bg-slate-50">
                           <td className="px-3 py-2 text-slate-700">
                             {new Date(e.transactionDate).toLocaleDateString('en-IN', {
@@ -627,11 +646,12 @@ export const OutstandingAgingPage: React.FC<{ onNavigate?: (path: string) => voi
               <div className="flex items-center justify-between pt-4 border-t border-slate-100">
                 <button
                   type="button"
-                  onClick={() => window.print()}
-                  className="flex items-center gap-1.5 px-3.5 py-2 text-xs font-semibold text-slate-600 hover:text-slate-800 hover:bg-slate-100 rounded-xl transition-colors"
+                  onClick={handlePrintStatement}
+                  disabled={isPrintingStatement}
+                  className="flex items-center gap-1.5 px-3.5 py-2 text-xs font-semibold text-slate-600 hover:text-slate-800 hover:bg-slate-100 rounded-xl transition-colors disabled:opacity-50"
                 >
-                  <Printer className="w-4 h-4" />
-                  Print Statement
+                  <Printer className={`w-4 h-4 ${isPrintingStatement ? 'animate-pulse text-indigo-600' : ''}`} />
+                  {isPrintingStatement ? 'Preparing Statement...' : 'Print Statement'}
                 </button>
 
                 <button

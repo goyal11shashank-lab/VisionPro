@@ -64,9 +64,9 @@ export const DashboardPage: React.FC<Props> = ({ onNavigate }) => {
   const todaysSupplierPayments = data?.todaysSupplierPayments || {};
   const outstandingSummary = data?.outstandingSummary || {};
   const alerts = data?.alerts || {};
-  const stockByCategory = data?.stockByCategory || [];
-  const topSelling = data?.topSellingProducts || [];
-  const recentTransactions = data?.recentTransactions || [];
+  const stockByCategory = Array.isArray(data?.stockByCategory) ? data.stockByCategory : [];
+  const topSelling = Array.isArray(data?.topSellingProducts) ? data.topSellingProducts : [];
+  const recentTransactions = Array.isArray(data?.recentTransactions) ? data.recentTransactions : [];
 
   return (
     <div className="space-y-6">

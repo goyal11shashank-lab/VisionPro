@@ -113,12 +113,12 @@ export const VoucherHeader: React.FC<VoucherHeaderProps> = ({
 
           <div className="flex items-center gap-2">
             <span
-              className={`px-2 py-0.5 rounded text-xs font-bold font-mono uppercase tracking-wider ${
+              className={`px-2.5 py-1 rounded text-xs font-black font-mono uppercase tracking-wider shadow-xs ${
                 isOrder
-                  ? 'bg-blue-600 text-white'
+                  ? 'bg-blue-700 text-white'
                   : isSales
-                  ? 'bg-emerald-600 text-white'
-                  : 'bg-indigo-600 text-white'
+                  ? 'bg-emerald-700 text-white'
+                  : 'bg-indigo-700 text-white'
               }`}
             >
               {isOrder
@@ -129,7 +129,7 @@ export const VoucherHeader: React.FC<VoucherHeaderProps> = ({
                 ? 'Sales Invoice'
                 : 'Purchase Invoice'}
             </span>
-            <span className="text-[11px] text-slate-500 font-mono">
+            <span className="text-[11px] text-slate-800 font-bold font-mono">
               {isOrder
                 ? isEditing
                   ? 'Order Alteration (Open / Editable)'
@@ -144,28 +144,28 @@ export const VoucherHeader: React.FC<VoucherHeaderProps> = ({
         {/* Voucher Number & Date */}
         <div className="flex items-center gap-4 text-xs font-mono">
           <div className="flex items-center gap-1.5">
-            <span className="text-slate-500 font-semibold font-sans">{isOrder ? 'Order No:' : 'Voucher No:'}</span>
+            <span className="text-slate-950 font-bold font-sans tracking-tight text-xs uppercase">{isOrder ? 'Order No:' : 'Voucher No:'}</span>
             {onVoucherNumberChange ? (
               <input
                 type="text"
                 value={voucherNumber ?? ''}
                 onChange={e => onVoucherNumberChange(e.target.value)}
-                className="w-28 px-1.5 py-0.5 text-xs font-bold text-slate-900 border border-slate-300 rounded bg-slate-50 focus:bg-white focus:ring-1 focus:ring-blue-500"
+                className="w-28 px-1.5 py-0.5 text-xs font-black text-slate-950 border border-slate-400 rounded bg-white focus:bg-white focus:ring-1 focus:ring-blue-600 shadow-2xs"
               />
             ) : (
-              <span className="font-bold text-slate-900 bg-slate-100 px-2 py-0.5 rounded border border-slate-200">
+              <span className="font-black text-slate-950 bg-slate-100 px-2 py-0.5 rounded border border-slate-300">
                 {voucherNumber || 'AUTO'}
               </span>
             )}
           </div>
 
           <div className="flex items-center gap-1.5">
-            <span className="text-slate-500 font-semibold font-sans">Date:</span>
+            <span className="text-slate-950 font-bold font-sans tracking-tight text-xs uppercase">Date:</span>
             <input
               type="date"
               value={voucherDate ?? ''}
               onChange={e => onVoucherDateChange(e.target.value)}
-              className="px-1.5 py-0.5 text-xs font-medium text-slate-900 border border-slate-300 rounded bg-slate-50 focus:bg-white focus:ring-1 focus:ring-blue-500 font-mono"
+              className="px-1.5 py-0.5 text-xs font-bold text-slate-950 border border-slate-400 rounded bg-white focus:bg-white focus:ring-1 focus:ring-blue-600 font-mono shadow-2xs"
             />
           </div>
 
@@ -222,8 +222,8 @@ export const VoucherHeader: React.FC<VoucherHeaderProps> = ({
       <div className="grid grid-cols-1 md:grid-cols-12 gap-3 pt-2 items-center text-xs">
         {/* Party A/c Name */}
         <div className={`${isSales ? 'md:col-span-8' : 'md:col-span-6'} flex items-center gap-2`}>
-          <span className="w-24 text-slate-600 font-semibold shrink-0 text-right">
-            Party A/c name:
+          <span className="w-28 text-slate-950 font-extrabold shrink-0 text-right text-xs uppercase tracking-tight">
+            Party A/c Name:
           </span>
           <div className="flex-1 min-w-0">
             <SearchableMasterSelect
@@ -233,7 +233,7 @@ export const VoucherHeader: React.FC<VoucherHeaderProps> = ({
               value={selectedPartyId}
               onSelect={opt => onPartyChange(opt ? opt.id : '')}
               className="w-full"
-              inputClassName="py-1 text-xs font-semibold bg-white border-slate-300 rounded focus:ring-1 focus:ring-blue-500"
+              inputClassName="py-1 text-xs font-bold text-slate-950 bg-white border-slate-400 rounded focus:ring-1 focus:ring-blue-600 shadow-2xs"
             />
           </div>
           {partyBalance && (
@@ -241,7 +241,7 @@ export const VoucherHeader: React.FC<VoucherHeaderProps> = ({
               className={`px-2 py-0.5 rounded text-[11px] font-mono shrink-0 border ${
                 partyBalance.isOverLimit
                   ? 'bg-red-50 text-red-700 border-red-200 font-bold'
-                  : 'bg-slate-100 text-slate-700 border-slate-200 font-semibold'
+                  : 'bg-slate-100 text-slate-900 border-slate-300 font-bold'
               }`}
             >
               Bal: ₹{partyBalance.balance.toLocaleString('en-IN', { minimumFractionDigits: 2 })} {partyBalance.type}
@@ -251,7 +251,7 @@ export const VoucherHeader: React.FC<VoucherHeaderProps> = ({
 
         {/* Reference / Supplier Invoice No */}
         <div className={`${isSales ? 'md:col-span-4' : 'md:col-span-3'} flex items-center gap-1.5`}>
-          <span className="text-slate-600 font-semibold shrink-0">
+          <span className="text-slate-950 font-extrabold shrink-0 text-xs uppercase tracking-tight">
             {isSales ? 'Ref No:' : 'Supp Inv:'}
           </span>
           <input
@@ -259,21 +259,21 @@ export const VoucherHeader: React.FC<VoucherHeaderProps> = ({
             value={referenceNumber ?? ''}
             onChange={e => onReferenceNumberChange && onReferenceNumberChange(e.target.value)}
             placeholder={isSales ? 'Order / Ref #' : 'Inv #'}
-            className="flex-1 min-w-0 py-1 px-1.5 text-xs border border-slate-300 rounded bg-slate-50 focus:bg-white focus:ring-1 focus:ring-blue-500 font-mono"
+            className="flex-1 min-w-0 py-1 px-1.5 text-xs font-bold text-slate-950 border border-slate-400 rounded bg-white focus:bg-white focus:ring-1 focus:ring-blue-600 font-mono shadow-2xs"
           />
         </div>
 
         {/* Supplier Invoice Date for Purchase */}
         {!isSales && (
           <div className="md:col-span-3 flex items-center gap-1.5">
-            <span className="text-slate-600 font-semibold shrink-0">
+            <span className="text-slate-950 font-extrabold shrink-0 text-xs uppercase tracking-tight">
               Supp Date:
             </span>
             <input
               type="date"
               value={supplierInvoiceDate ?? ''}
               onChange={e => onSupplierInvoiceDateChange && onSupplierInvoiceDateChange(e.target.value)}
-              className="flex-1 min-w-0 py-1 px-1.5 text-xs border border-slate-300 rounded bg-slate-50 focus:bg-white focus:ring-1 focus:ring-blue-500 font-mono"
+              className="flex-1 min-w-0 py-1 px-1.5 text-xs font-bold text-slate-950 border border-slate-400 rounded bg-white focus:bg-white focus:ring-1 focus:ring-blue-600 font-mono shadow-2xs"
             />
           </div>
         )}

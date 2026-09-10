@@ -152,13 +152,13 @@ export const DatabaseStatusModal: React.FC<Props> = ({ isOpen, onClose }) => {
               </div>
 
               {/* Verified Relational Tables List */}
-              {health.database.tables && health.database.tables.length > 0 && (
+              {health?.database?.tables && health.database.tables.length > 0 && (
                 <div className="space-y-2">
                   <h4 className="text-xs font-semibold text-slate-700 uppercase tracking-wider">
                     Verified Schema Tables ({health.database.tables.length})
                   </h4>
                   <div className="flex flex-wrap gap-2">
-                    {health.database.tables.map(tbl => (
+                    {(health.database.tables || []).map(tbl => (
                       <span
                         key={tbl}
                         className="px-2.5 py-1 rounded-md text-xs font-mono bg-slate-100 text-slate-700 border border-slate-200"

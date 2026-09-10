@@ -23,6 +23,7 @@ import { rankSearchMatch, formatOpticalBatchName } from '../utils/searchNormaliz
 import { PoolClient } from 'pg';
 import { StockService } from './stockService.js';
 import { findOrCreateOpticalBatch } from './opticalMasterService.js';
+import { BusinessSettingsService } from './businessSettingsService.js';
 
 const UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 function isValidUUID(id: string): boolean {
@@ -91,52 +92,68 @@ export class SalesService {
    * Generates a sequential, business-scoped sales order number (e.g. SO-000001)
    */
   static async generateOrderNumber(businessId: string): Promise<string> {
+    const prefixConfig = await BusinessSettingsService.getVoucherPrefix(businessId, 'salesOrder').catch(() => ({
+      prefix: 'SO-',
+      startNumber: 1,
+      method: 'AUTOMATIC',
+    }));
+    const prefix = prefixConfig.prefix || 'SO-';
+    const startNumber = prefixConfig.startNumber || 1;
+
     const res = await pool.query(
       `SELECT order_number FROM sales_orders 
-       WHERE business_id = $1 AND order_number LIKE 'SO-%' 
+       WHERE business_id = $1 AND order_number LIKE $2
        ORDER BY created_at DESC 
        LIMIT 50`,
-      [businessId]
+      [businessId, `${prefix}%`]
     );
 
-    let maxNum = 0;
+    let maxNum = startNumber - 1;
     for (const row of res.rows) {
-      const numStr = (row.order_number || '').replace('SO-', '');
+      const numStr = (row.order_number || '').replace(prefix, '');
       const num = parseInt(numStr, 10);
       if (!isNaN(num) && num > maxNum) {
         maxNum = num;
       }
     }
 
-    const nextSeq = maxNum + 1;
+    const nextSeq = Math.max(maxNum + 1, startNumber);
     const padded = String(nextSeq).padStart(6, '0');
-    return `SO-${padded}`;
+    return `${prefix}${padded}`;
   }
 
   /**
    * Generates a sequential, business-scoped sales invoice number (e.g. INV-000001)
    */
   static async generateInvoiceNumber(businessId: string): Promise<string> {
+    const prefixConfig = await BusinessSettingsService.getVoucherPrefix(businessId, 'salesInvoice').catch(() => ({
+      prefix: 'INV-',
+      startNumber: 1,
+      method: 'AUTOMATIC',
+    }));
+    const prefix = prefixConfig.prefix || 'INV-';
+    const startNumber = prefixConfig.startNumber || 1;
+
     const res = await pool.query(
       `SELECT invoice_number FROM sales_invoices 
-       WHERE business_id = $1 AND invoice_number LIKE 'INV-%' 
+       WHERE business_id = $1 AND invoice_number LIKE $2
        ORDER BY created_at DESC 
        LIMIT 50`,
-      [businessId]
+      [businessId, `${prefix}%`]
     );
 
-    let maxNum = 0;
+    let maxNum = startNumber - 1;
     for (const row of res.rows) {
-      const numStr = (row.invoice_number || '').replace('INV-', '');
+      const numStr = (row.invoice_number || '').replace(prefix, '');
       const num = parseInt(numStr, 10);
       if (!isNaN(num) && num > maxNum) {
         maxNum = num;
       }
     }
 
-    const nextSeq = maxNum + 1;
+    const nextSeq = Math.max(maxNum + 1, startNumber);
     const padded = String(nextSeq).padStart(6, '0');
-    return `INV-${padded}`;
+    return `${prefix}${padded}`;
   }
 
   /**
@@ -365,13 +382,18 @@ export class SalesService {
     const newBalance = round2(currentBalance + additionalAmount);
     const creditLimit = party.creditLimit ? parseFloat(party.creditLimit) : 0;
 
-    if (creditLimit > 0 && newBalance > creditLimit) {
+    const behavior = await BusinessSettingsService.getCreditLimitBehavior(businessId).catch(() => 'WARNING');
+
+    if (behavior !== 'OFF' && creditLimit > 0 && newBalance > creditLimit) {
+      const isBlocking = behavior === 'BLOCK';
       return {
-        allowed: true, // Warning mode by default
+        allowed: !isBlocking,
         currentBalance,
         newBalance,
         creditLimit,
-        warning: `Customer credit limit exceeded! Current Balance: ₹${currentBalance.toFixed(2)}, After Sale: ₹${newBalance.toFixed(2)}, Limit: ₹${creditLimit.toFixed(2)}`,
+        warning: isBlocking
+          ? `Customer credit limit of ₹${creditLimit.toFixed(2)} exceeded! Current Balance: ₹${currentBalance.toFixed(2)}, After Sale: ₹${newBalance.toFixed(2)}. Sales blocking is active per business settings.`
+          : `Customer credit limit exceeded! Current Balance: ₹${currentBalance.toFixed(2)}, After Sale: ₹${newBalance.toFixed(2)}, Limit: ₹${creditLimit.toFixed(2)}`,
       };
     }
 
@@ -512,7 +534,8 @@ export class SalesService {
         if (line.batches && line.batches.length > 0) {
           let batchSum = 0;
           for (const b of line.batches) {
-            if (b.quantity <= 0 || Math.abs(Math.round(b.quantity * 2) - b.quantity * 2) > 0.0001) {
+            if (!b.quantity || b.quantity === 0) continue;
+            if (b.quantity < 0 || Math.abs(Math.round(b.quantity * 2) - b.quantity * 2) > 0.0001) {
               throw new Error('Batch allocation quantity must be a positive value in steps of 0.5 (e.g. 0.5, 1.0, 1.5, 2.0)');
             }
             batchSum += b.quantity;
@@ -624,55 +647,66 @@ export class SalesService {
       throw new Error('Sales order has no allocated batches to reserve');
     }
 
-    for (const row of linesRes.rows) {
-      const batchId = row.batch_id;
-      const qty = parseFloat(row.batch_qty);
+    const isResEnabled = await BusinessSettingsService.isOrderReservationEnabled(businessId).catch(() => true);
+    const allowBeyond = await BusinessSettingsService.isAllowOrderBeyondAvailable(businessId).catch(() => true);
 
-      // Lock optical_stocks row (auto-creates row with 0 stock if not exists)
-      const stock = await StockService.lockAndGetStock(client, businessId, batchId);
+    if (isResEnabled) {
+      for (const row of linesRes.rows) {
+        const batchId = row.batch_id;
+        const qty = parseFloat(row.batch_qty);
 
-      // Sales beyond available stock allowed per business rule: available stock can become negative
-      const newReserved = round2(stock.reservedStock + qty);
-      const newAvailable = round2(stock.physicalStock - newReserved);
+        // Lock optical_stocks row (auto-creates row with 0 stock if not exists)
+        const stock = await StockService.lockAndGetStock(client, businessId, batchId);
 
-      // Update optical_stocks
-      await client.query(
-        `UPDATE optical_stocks 
-         SET reserved_stock = $1, available_stock = $2, updated_at = NOW() 
-         WHERE id = $3`,
-        [newReserved.toFixed(2), newAvailable.toFixed(2), stock.stockId]
-      );
+        if (!allowBeyond && stock.availableStock < qty) {
+          throw new Error(
+            `Sales order reservation exceeds available stock for batch (Available: ${stock.availableStock.toFixed(2)}, Required: ${qty.toFixed(2)}). Negative stock reservation is disabled in Settings.`
+          );
+        }
 
-      // Insert stock_reservations
-      await client.query(
-        `INSERT INTO stock_reservations (
-          business_id, batch_id, quantity, status, reference_type, reference_id, notes, created_by
-        ) VALUES (
-          $1, $2, $3, 'ACTIVE', 'SALES_ORDER', $4, 'Sales Order Reservation', $5
-        )`,
-        [businessId, batchId, qty.toFixed(2), orderId, userId || null]
-      );
+        // Sales beyond available stock allowed per business rule: available stock can become negative
+        const newReserved = round2(stock.reservedStock + qty);
+        const newAvailable = round2(stock.physicalStock - newReserved);
 
-      // Insert stock_ledger for reservation hold
-      await client.query(
-        `INSERT INTO stock_ledger (
-          business_id, batch_id, transaction_type, reference_type, reference_id,
-          quantity_in, quantity_out, reserved_in, reserved_out,
-          balance, reason, created_by
-        ) VALUES (
-          $1, $2, 'RESERVATION_HOLD', 'SALES_ORDER', $3,
-          0.00, 0.00, $4, 0.00,
-          $5, 'Sales Order Reservation Hold', $6
-        )`,
-        [
-          businessId,
-          batchId,
-          orderId,
-          qty.toFixed(2),
-          stock.physicalStock.toFixed(2),
-          userId || null,
-        ]
-      );
+        // Update optical_stocks
+        await client.query(
+          `UPDATE optical_stocks 
+           SET reserved_stock = $1, available_stock = $2, updated_at = NOW() 
+           WHERE id = $3`,
+          [newReserved.toFixed(2), newAvailable.toFixed(2), stock.stockId]
+        );
+
+        // Insert stock_reservations
+        await client.query(
+          `INSERT INTO stock_reservations (
+            business_id, batch_id, quantity, status, reference_type, reference_id, notes, created_by
+          ) VALUES (
+            $1, $2, $3, 'ACTIVE', 'SALES_ORDER', $4, 'Sales Order Reservation', $5
+          )`,
+          [businessId, batchId, qty.toFixed(2), orderId, userId || null]
+        );
+
+        // Insert stock_ledger for reservation hold
+        await client.query(
+          `INSERT INTO stock_ledger (
+            business_id, batch_id, transaction_type, reference_type, reference_id,
+            quantity_in, quantity_out, reserved_in, reserved_out,
+            balance, reason, created_by
+          ) VALUES (
+            $1, $2, 'RESERVATION_HOLD', 'SALES_ORDER', $3,
+            0.00, 0.00, $4, 0.00,
+            $5, 'Sales Order Reservation Hold', $6
+          )`,
+          [
+            businessId,
+            batchId,
+            orderId,
+            qty.toFixed(2),
+            stock.physicalStock.toFixed(2),
+            userId || null,
+          ]
+        );
+      }
     }
 
     // Set order status to CONFIRMED
@@ -869,7 +903,8 @@ export class SalesService {
 
           if (line.batches && line.batches.length > 0) {
             for (const b of line.batches) {
-              if (b.quantity <= 0 || Math.abs(Math.round(b.quantity * 2) - b.quantity * 2) > 0.0001) {
+              if (!b.quantity || b.quantity === 0) continue;
+              if (b.quantity < 0 || Math.abs(Math.round(b.quantity * 2) - b.quantity * 2) > 0.0001) {
                 throw new Error('Batch allocation quantity must be a positive value in steps of 0.5 (e.g. 0.5, 1.0, 1.5, 2.0)');
               }
               await client.query(
@@ -1209,11 +1244,29 @@ export class SalesService {
     return {
       ...order.order,
       party: order.party,
-      lines: lines.map(l => ({
-        ...l.line,
-        uniqueItem: l.uniqueItem,
-        batches: batchMap.get(l.line.id) || [],
-      })),
+      lines: lines.map(l => {
+        const rawBatches = batchMap.get(l.line.id) || [];
+        return {
+          ...l.line,
+          uniqueItem: l.uniqueItem,
+          uniqueItemId: l.line.uniqueItemId,
+          uniqueItemName: l.uniqueItem?.name || l.uniqueItem?.code || 'Optical Item',
+          uniqueItemCode: l.uniqueItem?.code || '',
+          unit: l.uniqueItem?.unit || 'PRS',
+          batches: rawBatches.map(b => ({
+            ...b,
+            batchId: b.batchId || b.batch?.id,
+            sph: b.batch?.sph ?? b.sph ?? '0.00',
+            cyl: b.batch?.cyl ?? b.cyl ?? '0.00',
+            axis: b.batch?.axis ?? b.axis ?? '',
+            add: b.batch?.add ?? b.add ?? '',
+            side: b.batch?.side || b.side || 'NONE',
+            barcode: b.batch?.barcode || b.barcode || '',
+            powerDescription: b.batch?.powerDescription || '',
+            batch: b.batch,
+          })),
+        };
+      }),
     };
   }
 
@@ -1268,6 +1321,65 @@ export class SalesService {
       .limit(limit)
       .offset(offset);
 
+    // Batch load lines and optical batch details for all retrieved sales orders
+    const orderIds = orders.map(o => o.order.id);
+    const linesByOrder = new Map<string, any[]>();
+    if (orderIds.length > 0) {
+      const allLines = await db
+        .select({
+          line: salesOrderLines,
+          uniqueItem: uniqueItems,
+        })
+        .from(salesOrderLines)
+        .innerJoin(uniqueItems, eq(salesOrderLines.uniqueItemId, uniqueItems.id))
+        .where(inArray(salesOrderLines.salesOrderId, orderIds));
+
+      const lineIds = allLines.map(l => l.line.id);
+      let batches: any[] = [];
+      if (lineIds.length > 0) {
+        batches = await db
+          .select({
+            lineBatch: salesOrderLineBatches,
+            batch: opticalBatches,
+          })
+          .from(salesOrderLineBatches)
+          .innerJoin(opticalBatches, eq(salesOrderLineBatches.batchId, opticalBatches.id))
+          .where(inArray(salesOrderLineBatches.salesOrderLineId, lineIds));
+      }
+
+      const batchMap = new Map<string, any[]>();
+      for (const b of batches) {
+        const lid = b.lineBatch.salesOrderLineId;
+        if (!batchMap.has(lid)) batchMap.set(lid, []);
+        batchMap.get(lid)!.push({
+          ...b.lineBatch,
+          batchId: b.batchId || b.batch?.id,
+          sph: b.batch?.sph ?? '0.00',
+          cyl: b.batch?.cyl ?? '0.00',
+          axis: b.batch?.axis ?? '',
+          add: b.batch?.add ?? '',
+          side: b.batch?.side || 'NONE',
+          barcode: b.batch?.barcode || '',
+          powerDescription: b.batch?.powerDescription || '',
+          batch: b.batch,
+        });
+      }
+
+      for (const item of allLines) {
+        const ordId = item.line.salesOrderId;
+        if (!linesByOrder.has(ordId)) linesByOrder.set(ordId, []);
+        linesByOrder.get(ordId)!.push({
+          ...item.line,
+          uniqueItem: item.uniqueItem,
+          uniqueItemId: item.line.uniqueItemId,
+          uniqueItemName: item.uniqueItem?.name || item.uniqueItem?.code || 'Optical Item',
+          uniqueItemCode: item.uniqueItem?.code || '',
+          unit: item.uniqueItem?.unit || 'PRS',
+          batches: batchMap.get(item.line.id) || [],
+        });
+      }
+    }
+
     return {
       total: Number(totalCountRes?.count || 0),
       orders: orders.map(o => ({
@@ -1276,6 +1388,7 @@ export class SalesService {
         partyName: o.party?.name || o.party?.displayName || '',
         partyGstin: o.party?.gstin || '',
         partyState: o.party?.state || '',
+        lines: linesByOrder.get(o.order.id) || [],
       })),
     };
   }
@@ -1302,7 +1415,7 @@ export class SalesService {
 
     const invoiceDate = new Date(data.invoiceDate || new Date());
     const invoiceNumber = data.invoiceNumber || (await this.generateInvoiceNumber(businessId));
-    const targetStatus = 'POSTED';
+    const targetStatus = data.status || 'DRAFT';
 
     const computedLines = data.lines.map(line => {
       if (line.quantity <= 0) throw new Error('Line quantity must be greater than zero');
@@ -1368,7 +1481,7 @@ export class SalesService {
           totals.sgstAmount.toFixed(2),
           totals.roundOff.toFixed(2),
           totals.grandTotal.toFixed(2),
-          'POSTED',
+          targetStatus,
           data.notes || null,
           userId || null,
           userId || null,
@@ -1409,7 +1522,8 @@ export class SalesService {
         if (line.batches && line.batches.length > 0) {
           let batchSum = 0;
           for (const b of line.batches) {
-            if (b.quantity <= 0 || Math.abs(Math.round(b.quantity * 2) - b.quantity * 2) > 0.0001) {
+            if (!b.quantity || b.quantity === 0) continue;
+            if (b.quantity < 0 || Math.abs(Math.round(b.quantity * 2) - b.quantity * 2) > 0.0001) {
               throw new Error('Batch allocation quantity must be a positive value in steps of 0.5 (e.g. 0.5, 1.0, 1.5, 2.0)');
             }
             batchSum += b.quantity;
@@ -1602,6 +1716,13 @@ export class SalesService {
         lines: computedLines.map(l => l.taxRes),
         gstMode,
       });
+
+      if (targetStatus === 'POSTED') {
+        const creditCheck = await this.checkCreditLimit(businessId, data.partyId, totals.grandTotal);
+        if (!creditCheck.allowed) {
+          throw new Error(creditCheck.warning || 'Customer credit limit exceeded. Transaction blocked per Settings.');
+        }
+      }
 
       // Delete old line batches & lines
       await client.query(
@@ -1822,7 +1943,14 @@ export class SalesService {
       // Lock optical_stocks row (auto-creates row with 0 stock if not exists)
       const stock = await StockService.lockAndGetStock(client, businessId, batchId);
 
-      // Negative inventory allowed: physical and available stock can drop below zero
+      // Check if negative inventory is allowed per business settings
+      const allowNeg = await BusinessSettingsService.isNegativeStockAllowed(businessId).catch(() => true);
+      if (!allowNeg && (stock.availableStock < qty || stock.physicalStock < qty)) {
+        throw new Error(
+          `Insufficient stock for batch (Available: ${stock.availableStock.toFixed(2)}, Required: ${qty.toFixed(2)}). Negative stock transactions are disabled in Settings.`
+        );
+      }
+
       const newPhys = round2(stock.physicalStock - qty);
       const newAvail = round2(newPhys - stock.reservedStock);
 
@@ -2766,11 +2894,35 @@ export class SalesService {
         paymentMode: r.payment_mode,
         allocatedAmount: parseFloat(r.allocated_amount),
       })),
-      lines: lines.map(l => ({
-        ...l.line,
-        uniqueItem: l.uniqueItem,
-        batches: batchMap.get(l.line.id) || [],
-      })),
+      lines: lines.map(l => {
+        const rawBatches = batchMap.get(l.line.id) || [];
+        const enrichedBatches = rawBatches.map(b => ({
+          ...b,
+          batchId: b.batchId || b.batch?.id,
+          quantity: parseFloat(String(b.quantity || 1)),
+          sph: b.batch?.sph ?? b.sph ?? '0.00',
+          cyl: b.batch?.cyl ?? b.cyl ?? '0.00',
+          axis: b.batch?.axis ?? b.axis ?? '',
+          add: b.batch?.add ?? b.add ?? '',
+          side: b.batch?.side || b.side || 'NONE',
+          barcode: b.batch?.barcode || b.barcode || '',
+          powerDescription: b.batch?.powerDescription || '',
+          availableStock: parseFloat(String(b.batch?.availableStock ?? b.availableStock ?? 0)),
+          batch: b.batch,
+        }));
+
+        return {
+          ...l.line,
+          uniqueItem: l.uniqueItem,
+          uniqueItemId: l.line.uniqueItemId,
+          uniqueItemName: l.uniqueItem?.name || l.uniqueItem?.code || 'Optical Item',
+          uniqueItemCode: l.uniqueItem?.code || '',
+          sku: (l.uniqueItem as any)?.sku || l.uniqueItem?.code || '',
+          categoryCode: l.uniqueItem?.opticalCategory || '',
+          unit: l.uniqueItem?.unit || 'PRS',
+          batches: enrichedBatches,
+        };
+      }),
     };
   }
 
@@ -2827,6 +2979,67 @@ export class SalesService {
       .limit(limit)
       .offset(offset);
 
+    // Batch load lines and optical batch details for all retrieved invoices
+    const invoiceIds = invoices.map(i => i.invoice.id);
+    const linesByInvoice = new Map<string, any[]>();
+    if (invoiceIds.length > 0) {
+      const allLines = await db
+        .select({
+          line: salesInvoiceLines,
+          uniqueItem: uniqueItems,
+        })
+        .from(salesInvoiceLines)
+        .innerJoin(uniqueItems, eq(salesInvoiceLines.uniqueItemId, uniqueItems.id))
+        .where(inArray(salesInvoiceLines.salesInvoiceId, invoiceIds));
+
+      const lineIds = allLines.map(l => l.line.id);
+      let batches: any[] = [];
+      if (lineIds.length > 0) {
+        batches = await db
+          .select({
+            lineBatch: salesInvoiceLineBatches,
+            batch: opticalBatches,
+          })
+          .from(salesInvoiceLineBatches)
+          .innerJoin(opticalBatches, eq(salesInvoiceLineBatches.batchId, opticalBatches.id))
+          .where(inArray(salesInvoiceLineBatches.salesInvoiceLineId, lineIds));
+      }
+
+      const batchMap = new Map<string, any[]>();
+      for (const b of batches) {
+        const lid = b.lineBatch.salesInvoiceLineId;
+        if (!batchMap.has(lid)) batchMap.set(lid, []);
+        batchMap.get(lid)!.push({
+          ...b.lineBatch,
+          batchId: b.batchId || b.batch?.id,
+          sph: b.batch?.sph ?? '0.00',
+          cyl: b.batch?.cyl ?? '0.00',
+          axis: b.batch?.axis ?? '',
+          add: b.batch?.add ?? '',
+          side: b.batch?.side || 'NONE',
+          barcode: b.batch?.barcode || '',
+          powerDescription: b.batch?.powerDescription || '',
+          batch: b.batch,
+        });
+      }
+
+      for (const item of allLines) {
+        const invId = item.line.salesInvoiceId;
+        if (!linesByInvoice.has(invId)) linesByInvoice.set(invId, []);
+        linesByInvoice.get(invId)!.push({
+          ...item.line,
+          uniqueItem: item.uniqueItem,
+          uniqueItemId: item.line.uniqueItemId,
+          uniqueItemName: item.uniqueItem?.name || item.uniqueItem?.code || 'Optical Item',
+          uniqueItemCode: item.uniqueItem?.code || '',
+          sku: (item.uniqueItem as any)?.sku || item.uniqueItem?.code || '',
+          categoryCode: item.uniqueItem?.opticalCategory || '',
+          unit: item.uniqueItem?.unit || 'PRS',
+          batches: batchMap.get(item.line.id) || [],
+        });
+      }
+    }
+
     return {
       total: Number(totalCountRes?.count || 0),
       invoices: invoices.map(i => ({
@@ -2836,6 +3049,7 @@ export class SalesService {
         partyGstin: i.party?.gstin || '',
         partyState: i.party?.state || '',
         salesOrderNumber: i.salesOrderNumber || null,
+        lines: linesByInvoice.get(i.invoice.id) || [],
       })),
     };
   }

@@ -21,6 +21,7 @@ import { calculateLineTax, calculateInvoiceTotals, round2 } from './taxCalculati
 import { findOrCreateOpticalBatch, OpticalPowerInput } from './opticalMasterService.js';
 import { AuditService } from './auditService.js';
 import { PoolClient } from 'pg';
+import { BusinessSettingsService } from './businessSettingsService.js';
 
 const UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 function isValidUUID(id: string): boolean {
@@ -76,26 +77,34 @@ export class PurchaseService {
    * Generates a sequential, business-scoped purchase invoice number (e.g. PUR-000001)
    */
   static async generateInvoiceNumber(businessId: string): Promise<string> {
+    const prefixConfig = await BusinessSettingsService.getVoucherPrefix(businessId, 'purchaseInvoice').catch(() => ({
+      prefix: 'PUR-',
+      startNumber: 1,
+      method: 'AUTOMATIC',
+    }));
+    const prefix = prefixConfig.prefix || 'PUR-';
+    const startNumber = prefixConfig.startNumber || 1;
+
     const res = await pool.query(
       `SELECT invoice_number FROM purchase_invoices 
-       WHERE business_id = $1 AND invoice_number LIKE 'PUR-%' 
+       WHERE business_id = $1 AND invoice_number LIKE $2
        ORDER BY created_at DESC 
        LIMIT 50`,
-      [businessId]
+      [businessId, `${prefix}%`]
     );
 
-    let maxNum = 0;
+    let maxNum = startNumber - 1;
     for (const row of res.rows) {
-      const numStr = (row.invoice_number || '').replace('PUR-', '');
+      const numStr = (row.invoice_number || '').replace(prefix, '');
       const num = parseInt(numStr, 10);
       if (!isNaN(num) && num > maxNum) {
         maxNum = num;
       }
     }
 
-    const nextSeq = maxNum + 1;
+    const nextSeq = Math.max(maxNum + 1, startNumber);
     const padded = String(nextSeq).padStart(6, '0');
-    return `PUR-${padded}`;
+    return `${prefix}${padded}`;
   }
 
   /**
@@ -308,7 +317,7 @@ export class PurchaseService {
           igst_rate, igst_amount, cgst_rate, cgst_amount, sgst_rate, sgst_amount,
           round_off, grand_total, payment_status, status, notes,
           created_by, updated_by
-        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, 'UNPAID', 'POSTED', $20, $21, $21)
+        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, 'UNPAID', 'DRAFT', $20, $21, $21)
         RETURNING *`,
         [
           businessId,
@@ -379,9 +388,6 @@ export class PurchaseService {
           );
         }
       }
-
-      // Execute atomic posting (stock inward + supplier ledger + lot tracking)
-      await this._postPurchaseInvoiceInternal(client, businessId, invoice.id, userId);
 
       // If linked to a purchase order, mark it as CONVERTED
       if (data.purchaseOrderId) {
@@ -1079,6 +1085,10 @@ export class PurchaseService {
       throw new Error('Cancelled Purchase Invoice cannot be posted');
     }
 
+    if (inv.status === 'POSTED') {
+      throw new Error('Purchase Invoice is already posted');
+    }
+
     // Fetch lines & allocations
     const linesRes = await client.query(
       `SELECT * FROM purchase_invoice_lines WHERE purchase_invoice_id = $1`,
@@ -1729,25 +1739,33 @@ export class PurchaseService {
    * Generates a sequential, business-scoped purchase order number (e.g. PO-000001)
    */
   static async generatePurchaseOrderNumber(businessId: string): Promise<string> {
+    const prefixConfig = await BusinessSettingsService.getVoucherPrefix(businessId, 'purchaseOrder').catch(() => ({
+      prefix: 'PO-',
+      startNumber: 1,
+      method: 'AUTOMATIC',
+    }));
+    const prefix = prefixConfig.prefix || 'PO-';
+    const startNumber = prefixConfig.startNumber || 1;
+
     const res = await pool.query(
       `SELECT order_number FROM purchase_orders 
-       WHERE business_id = $1 AND order_number LIKE 'PO-%' 
+       WHERE business_id = $1 AND order_number LIKE $2
        ORDER BY created_at DESC 
        LIMIT 50`,
-      [businessId]
+      [businessId, `${prefix}%`]
     );
 
-    let maxNum = 0;
+    let maxNum = startNumber - 1;
     for (const r of res.rows) {
-      const match = r.order_number.match(/^PO-(\d+)$/i);
-      if (match) {
-        const num = parseInt(match[1], 10);
-        if (num > maxNum) maxNum = num;
+      const numStr = (r.order_number || '').replace(prefix, '');
+      const num = parseInt(numStr, 10);
+      if (!isNaN(num) && num > maxNum) {
+        maxNum = num;
       }
     }
 
-    const nextNum = maxNum + 1;
-    return `PO-${nextNum.toString().padStart(6, '0')}`;
+    const nextNum = Math.max(maxNum + 1, startNumber);
+    return `${prefix}${nextNum.toString().padStart(6, '0')}`;
   }
 
   /**

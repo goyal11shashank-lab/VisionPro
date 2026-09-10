@@ -20,6 +20,9 @@ import {
 } from 'lucide-react';
 import { PurchaseOrder, PurchaseOrderLine } from '../../types/index.js';
 import { apiRequest } from '../../api/client.js';
+import { useAuth } from '../../context/AuthContext.js';
+import { PrintPreviewModal } from '../print/PrintPreviewModal.js';
+import { PrintableVoucher } from '../print/PrintableVoucher.js';
 
 interface PurchaseOrderDetailModalProps {
   order: PurchaseOrder;
@@ -34,10 +37,12 @@ export const PurchaseOrderDetailModal: React.FC<PurchaseOrderDetailModalProps> =
   onRefresh,
   onConvert,
 }) => {
+  const { currentBusiness } = useAuth();
   const [actionLoading, setActionLoading] = useState<boolean>(false);
   const [actionError, setActionError] = useState<string | null>(null);
   const [cancelModalOpen, setCancelModalOpen] = useState<boolean>(false);
   const [cancelReason, setCancelReason] = useState<string>('');
+  const [isPrintPreviewOpen, setIsPrintPreviewOpen] = useState<boolean>(false);
 
   const handleCancelOrder = async () => {
     if (!cancelReason.trim()) {
@@ -62,7 +67,7 @@ export const PurchaseOrderDetailModal: React.FC<PurchaseOrderDetailModalProps> =
   };
 
   const handlePrint = () => {
-    window.print();
+    setIsPrintPreviewOpen(true);
   };
 
   const getStatusBadge = (status: string) => {
@@ -116,11 +121,21 @@ export const PurchaseOrderDetailModal: React.FC<PurchaseOrderDetailModalProps> =
 
           <div className="flex items-center gap-2">
             <button
-              onClick={handlePrint}
-              className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-slate-700 bg-white border border-slate-300 rounded-lg hover:bg-slate-50 shadow-2xs transition-colors"
+              id="btn-print-preview-purchase-order"
+              onClick={() => setIsPrintPreviewOpen(true)}
+              className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold text-white bg-blue-600 hover:bg-blue-700 rounded-lg shadow-xs transition-colors"
+              title="Print Preview / Export PDF"
             >
               <Printer className="w-3.5 h-3.5" />
-              <span>Print PO</span>
+              <span>Print Preview</span>
+            </button>
+            <button
+              onClick={handlePrint}
+              className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-slate-700 bg-white border border-slate-300 rounded-lg hover:bg-slate-50 shadow-2xs transition-colors"
+              title="Direct Print"
+            >
+              <Printer className="w-3.5 h-3.5" />
+              <span>Print</span>
             </button>
             <button
               onClick={onClose}
@@ -492,6 +507,28 @@ export const PurchaseOrderDetailModal: React.FC<PurchaseOrderDetailModalProps> =
           </div>
         )}
       </div>
+
+      {/* REUSABLE PRINT PREVIEW MODAL */}
+      {isPrintPreviewOpen && (
+        <PrintPreviewModal
+          isOpen={isPrintPreviewOpen}
+          onClose={() => setIsPrintPreviewOpen(false)}
+          title={`Purchase Order - ${order.orderNumber || ''}`}
+          filename={`PurchaseOrder_${order.orderNumber || 'PO'}`}
+          defaultOrientation="portrait"
+        >
+          {({ documentId }) => (
+            <PrintableVoucher
+              id={documentId}
+              business={currentBusiness}
+              voucher={order}
+              documentType="PURCHASE_ORDER"
+              customTitle="PURCHASE ORDER"
+              copyLabel="Vendor Copy"
+            />
+          )}
+        </PrintPreviewModal>
+      )}
     </div>
   );
 };

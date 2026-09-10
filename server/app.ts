@@ -60,6 +60,7 @@ export function createExpressApp() {
   app.use('/api/reports', reportRoutes);
   app.use('/api/stock-items', stockItemLedgerRoutes);
   app.use('/api/inventory/stock-items', stockItemLedgerRoutes);
+  app.use('/api/batches', stockItemLedgerRoutes);
   app.use('/api/unique-items', opticalMasterRoutes);
 
   // Catch-all 404 handler for any undefined API route so it never falls through to Vite HTML
