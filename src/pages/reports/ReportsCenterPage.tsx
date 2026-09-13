@@ -565,6 +565,7 @@ export const ReportsCenterPage: React.FC<{ initialTab?: ReportTab }> = ({ initia
               key={tab.id}
               onClick={() => {
                 setActiveTab(tab.id as ReportTab);
+                setReportData(null);
                 setPage(1);
               }}
               className={`px-4 py-2.5 rounded-xl font-semibold text-xs transition-all flex items-center gap-2 whitespace-nowrap ${
@@ -648,7 +649,7 @@ export const ReportsCenterPage: React.FC<{ initialTab?: ReportTab }> = ({ initia
           {activeTab === 'sales' && (
             <div className="flex items-center gap-1 bg-slate-100 p-1 rounded-xl">
               <button
-                onClick={() => setSalesSubTab('SUMMARY')}
+                onClick={() => { setSalesSubTab('SUMMARY'); setReportData(null); setPage(1); }}
                 className={`px-3 py-1 rounded-lg text-xs font-semibold transition-all ${
                   salesSubTab === 'SUMMARY' ? 'bg-white text-blue-600 shadow-xs' : 'text-slate-600'
                 }`}
@@ -656,7 +657,7 @@ export const ReportsCenterPage: React.FC<{ initialTab?: ReportTab }> = ({ initia
                 Invoices Summary
               </button>
               <button
-                onClick={() => setSalesSubTab('DETAILS')}
+                onClick={() => { setSalesSubTab('DETAILS'); setReportData(null); setPage(1); }}
                 className={`px-3 py-1 rounded-lg text-xs font-semibold transition-all ${
                   salesSubTab === 'DETAILS' ? 'bg-white text-blue-600 shadow-xs' : 'text-slate-600'
                 }`}
@@ -664,7 +665,7 @@ export const ReportsCenterPage: React.FC<{ initialTab?: ReportTab }> = ({ initia
                 Line-Item Drilldown
               </button>
               <button
-                onClick={() => setSalesSubTab('RETURNS')}
+                onClick={() => { setSalesSubTab('RETURNS'); setReportData(null); setPage(1); }}
                 className={`px-3 py-1 rounded-lg text-xs font-semibold transition-all ${
                   salesSubTab === 'RETURNS' ? 'bg-white text-blue-600 shadow-xs' : 'text-slate-600'
                 }`}
@@ -678,7 +679,7 @@ export const ReportsCenterPage: React.FC<{ initialTab?: ReportTab }> = ({ initia
           {activeTab === 'purchases' && (
             <div className="flex items-center gap-1 bg-slate-100 p-1 rounded-xl">
               <button
-                onClick={() => setPurchaseSubTab('SUMMARY')}
+                onClick={() => { setPurchaseSubTab('SUMMARY'); setReportData(null); setPage(1); }}
                 className={`px-3 py-1 rounded-lg text-xs font-semibold transition-all ${
                   purchaseSubTab === 'SUMMARY' ? 'bg-white text-blue-600 shadow-xs' : 'text-slate-600'
                 }`}
@@ -686,7 +687,7 @@ export const ReportsCenterPage: React.FC<{ initialTab?: ReportTab }> = ({ initia
                 Purchase Invoices
               </button>
               <button
-                onClick={() => setPurchaseSubTab('DETAILS')}
+                onClick={() => { setPurchaseSubTab('DETAILS'); setReportData(null); setPage(1); }}
                 className={`px-3 py-1 rounded-lg text-xs font-semibold transition-all ${
                   purchaseSubTab === 'DETAILS' ? 'bg-white text-blue-600 shadow-xs' : 'text-slate-600'
                 }`}
@@ -694,7 +695,7 @@ export const ReportsCenterPage: React.FC<{ initialTab?: ReportTab }> = ({ initia
                 Line-Item Drilldown
               </button>
               <button
-                onClick={() => setPurchaseSubTab('RETURNS')}
+                onClick={() => { setPurchaseSubTab('RETURNS'); setReportData(null); setPage(1); }}
                 className={`px-3 py-1 rounded-lg text-xs font-semibold transition-all ${
                   purchaseSubTab === 'RETURNS' ? 'bg-white text-blue-600 shadow-xs' : 'text-slate-600'
                 }`}
@@ -708,7 +709,7 @@ export const ReportsCenterPage: React.FC<{ initialTab?: ReportTab }> = ({ initia
           {activeTab === 'outstanding' && (
             <div className="flex items-center gap-1 bg-slate-100 p-1 rounded-xl">
               <button
-                onClick={() => setOutstandingType('CUSTOMER')}
+                onClick={() => { setOutstandingType('CUSTOMER'); setReportData(null); setPage(1); }}
                 className={`px-3 py-1 rounded-lg text-xs font-semibold transition-all ${
                   outstandingType === 'CUSTOMER' ? 'bg-white text-blue-600 shadow-xs' : 'text-slate-600'
                 }`}
@@ -716,7 +717,7 @@ export const ReportsCenterPage: React.FC<{ initialTab?: ReportTab }> = ({ initia
                 Customer Receivables
               </button>
               <button
-                onClick={() => setOutstandingType('SUPPLIER')}
+                onClick={() => { setOutstandingType('SUPPLIER'); setReportData(null); setPage(1); }}
                 className={`px-3 py-1 rounded-lg text-xs font-semibold transition-all ${
                   outstandingType === 'SUPPLIER' ? 'bg-white text-blue-600 shadow-xs' : 'text-slate-600'
                 }`}
@@ -735,8 +736,8 @@ export const ReportsCenterPage: React.FC<{ initialTab?: ReportTab }> = ({ initia
                 onChange={e => setSelectedPartyId(e.target.value)}
                 className="px-3 py-1.5 rounded-xl border border-slate-200 bg-slate-50 text-xs font-semibold text-slate-700 min-w-[200px]"
               >
-                {(partiesList || []).map(p => (
-                  <option key={p.id} value={p.id}>
+                {(partiesList || []).map((p, pIdx) => (
+                  <option key={p.id || `party-opt-${pIdx}`} value={p.id}>
                     {p.name} ({p.partyType})
                   </option>
                 ))}
@@ -771,15 +772,15 @@ export const ReportsCenterPage: React.FC<{ initialTab?: ReportTab }> = ({ initia
       {/* Summary KPI Cards if provided by report */}
       {reportData?.summary && typeof reportData.summary === 'object' && (
         <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-          {Object.entries(reportData.summary).map(([key, val]: any) => {
+          {Object.entries(reportData.summary).map(([key, val]: any, sIdx: number) => {
             if (typeof val === 'object' && val !== null) return null;
             return (
-              <div key={key} className="p-4 rounded-2xl bg-white border border-slate-200 shadow-sm">
+              <div key={key || `summary-card-${sIdx}`} className="p-4 rounded-2xl bg-white border border-slate-200 shadow-sm">
                 <div className="text-[11px] font-bold uppercase tracking-wider text-slate-400">
                   {String(key || '').replace(/([A-Z])/g, ' $1').trim()}
                 </div>
                 <div className="text-lg md:text-xl font-bold text-slate-900 mt-1">
-                  {typeof val === 'number' && key.toLowerCase().includes('amount') || key.toLowerCase().includes('total') || key.toLowerCase().includes('balance')
+                  {typeof val === 'number' && (key.toLowerCase().includes('amount') || key.toLowerCase().includes('total') || key.toLowerCase().includes('balance'))
                     ? `₹${Number(val).toLocaleString()}`
                     : String(val)}
                 </div>
@@ -831,8 +832,8 @@ export const ReportsCenterPage: React.FC<{ initialTab?: ReportTab }> = ({ initia
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-slate-100">
-                  {(reportData?.data || []).map((row: any) => (
-                    <tr key={row.batch_id} className="hover:bg-slate-50/70 transition-colors">
+                  {(reportData?.data || []).map((row: any, idx: number) => (
+                    <tr key={row.batch_id || row.id || `inv-row-${idx}`} className="hover:bg-slate-50/70 transition-colors">
                       <td className="py-2.5 px-4 font-mono font-bold text-slate-900">{row.barcode}</td>
                       <td className="py-2.5 px-4">
                         <button
@@ -918,8 +919,8 @@ export const ReportsCenterPage: React.FC<{ initialTab?: ReportTab }> = ({ initia
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-slate-100">
-                  {(reportData?.data || []).map((row: any) => (
-                    <tr key={row.id} className="hover:bg-slate-50/70 transition-colors">
+                  {(reportData?.data || []).map((row: any, idx: number) => (
+                    <tr key={row.id || `sl-row-${idx}`} className="hover:bg-slate-50/70 transition-colors">
                       <td className="py-2.5 px-4 font-mono text-slate-600">{new Date(row.created_at).toLocaleString()}</td>
                       <td className="py-2.5 px-4 font-mono font-bold text-slate-900">{row.barcode}</td>
                       <td className="py-2.5 px-4">
@@ -958,7 +959,7 @@ export const ReportsCenterPage: React.FC<{ initialTab?: ReportTab }> = ({ initia
               </table>
             )}
 
-            {/* 3. SALES REGISTER TABLE */}
+            {/* 3. SALES REGISTER TABLE - SUMMARY */}
             {activeTab === 'sales' && salesSubTab === 'SUMMARY' && (
               <table className="w-full text-left text-xs border-collapse">
                 <thead>
@@ -977,8 +978,8 @@ export const ReportsCenterPage: React.FC<{ initialTab?: ReportTab }> = ({ initia
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-slate-100">
-                  {(reportData?.data || []).map((row: any) => (
-                    <tr key={row.id} className="hover:bg-slate-50/70 transition-colors">
+                  {(reportData?.data || []).map((row: any, idx: number) => (
+                    <tr key={row.id || `sales-sum-${idx}`} className="hover:bg-slate-50/70 transition-colors">
                       <td className="py-2.5 px-4 font-mono font-bold text-blue-600">{row.invoice_number}</td>
                       <td className="py-2.5 px-4 text-slate-600">{new Date(row.invoice_date).toLocaleDateString()}</td>
                       <td className="py-2.5 px-4 font-semibold text-slate-900">{row.customer_name}</td>
@@ -1002,7 +1003,87 @@ export const ReportsCenterPage: React.FC<{ initialTab?: ReportTab }> = ({ initia
               </table>
             )}
 
-            {/* 4. PURCHASE REGISTER TABLE */}
+            {/* 3b. SALES LINE-ITEM DRILLDOWN TABLE */}
+            {activeTab === 'sales' && salesSubTab === 'DETAILS' && (
+              <table className="w-full text-left text-xs border-collapse">
+                <thead>
+                  <tr className="border-b border-slate-200 bg-slate-50 text-slate-600 font-bold uppercase tracking-wider text-[10px]">
+                    <th className="py-3 px-4">Invoice #</th>
+                    <th className="py-3 px-4">Date</th>
+                    <th className="py-3 px-4">Customer</th>
+                    <th className="py-3 px-4">Item / SKU</th>
+                    <th className="py-3 px-4">Barcode / Power</th>
+                    <th className="py-3 px-4 text-right">Qty</th>
+                    <th className="py-3 px-4 text-right">Unit Price</th>
+                    <th className="py-3 px-4 text-right">Disc %</th>
+                    <th className="py-3 px-4 text-right">Tax Rate</th>
+                    <th className="py-3 px-4 text-right">Tax Amt</th>
+                    <th className="py-3 px-4 text-right">Line Total</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-slate-100">
+                  {(reportData?.data || []).map((row: any, idx: number) => (
+                    <tr key={row.lineId || row.id || `sales-item-${idx}`} className="hover:bg-slate-50/70 transition-colors">
+                      <td className="py-2.5 px-4 font-mono font-bold text-blue-600">{row.invoiceNumber || row.invoice_number}</td>
+                      <td className="py-2.5 px-4 text-slate-600">{row.invoiceDate ? new Date(row.invoiceDate).toLocaleDateString() : '-'}</td>
+                      <td className="py-2.5 px-4 font-semibold text-slate-900">{row.customerName || row.customer_name}</td>
+                      <td className="py-2.5 px-4">
+                        <div className="font-semibold text-slate-900">{row.uniqueItemName || row.unique_item_name}</div>
+                        <div className="text-[10px] text-slate-400 font-mono">SKU: {row.sku}</div>
+                      </td>
+                      <td className="py-2.5 px-4 font-mono">
+                        <div className="font-bold text-slate-800">{row.barcode || '-'}</div>
+                        <div className="text-[10px] text-slate-500">{row.power || '-'}</div>
+                      </td>
+                      <td className="py-2.5 px-4 text-right font-bold text-slate-900">{row.quantity}</td>
+                      <td className="py-2.5 px-4 text-right">₹{Number(row.unitPrice || row.unit_price || 0).toLocaleString()}</td>
+                      <td className="py-2.5 px-4 text-right text-slate-500">{row.discountPercent || row.discount_percent || 0}%</td>
+                      <td className="py-2.5 px-4 text-right text-slate-600">{row.taxRate || row.tax_rate || 0}%</td>
+                      <td className="py-2.5 px-4 text-right text-slate-600">₹{Number(row.taxAmount || row.tax_amount || 0).toLocaleString()}</td>
+                      <td className="py-2.5 px-4 text-right font-bold text-slate-900">₹{Number(row.totalAmount || row.total_amount || 0).toLocaleString()}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            )}
+
+            {/* 3c. SALES RETURNS (CREDIT NOTES) TABLE */}
+            {activeTab === 'sales' && salesSubTab === 'RETURNS' && (
+              <table className="w-full text-left text-xs border-collapse">
+                <thead>
+                  <tr className="border-b border-slate-200 bg-slate-50 text-slate-600 font-bold uppercase tracking-wider text-[10px]">
+                    <th className="py-3 px-4">Return #</th>
+                    <th className="py-3 px-4">Date</th>
+                    <th className="py-3 px-4">Customer</th>
+                    <th className="py-3 px-4 text-right">Taxable</th>
+                    <th className="py-3 px-4 text-right">Tax Amount</th>
+                    <th className="py-3 px-4 text-right">Grand Total (Refund)</th>
+                    <th className="py-3 px-4">Reason</th>
+                    <th className="py-3 px-4 text-center">Status</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-slate-100">
+                  {(reportData?.data || []).map((row: any, idx: number) => (
+                    <tr key={row.id || `sales-ret-${idx}`} className="hover:bg-slate-50/70 transition-colors">
+                      <td className="py-2.5 px-4 font-mono font-bold text-rose-600">{row.returnNumber || row.return_number}</td>
+                      <td className="py-2.5 px-4 text-slate-600">{row.returnDate ? new Date(row.returnDate).toLocaleDateString() : '-'}</td>
+                      <td className="py-2.5 px-4 font-semibold text-slate-900">{row.partyName || row.party_name}</td>
+                      <td className="py-2.5 px-4 text-right">₹{Number(row.subtotal || 0).toLocaleString()}</td>
+                      <td className="py-2.5 px-4 text-right text-slate-600">₹{Number(row.taxAmount || row.tax_amount || 0).toLocaleString()}</td>
+                      <td className="py-2.5 px-4 text-right font-bold text-rose-600">₹{Number(row.grandTotal || row.grand_total || 0).toLocaleString()}</td>
+                      <td className="py-2.5 px-4 text-slate-500 max-w-xs truncate">{row.reason || '-'}</td>
+                      <td className="py-2.5 px-4 text-center">
+                        <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-rose-100 text-rose-700">
+                          {row.status}
+                        </span>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            )}
+
+            {/* 4. PURCHASE REGISTER TABLE - SUMMARY */}
             {activeTab === 'purchases' && purchaseSubTab === 'SUMMARY' && (
               <table className="w-full text-left text-xs border-collapse">
                 <thead>
@@ -1021,8 +1102,8 @@ export const ReportsCenterPage: React.FC<{ initialTab?: ReportTab }> = ({ initia
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-slate-100">
-                  {(reportData?.data || []).map((row: any) => (
-                    <tr key={row.id} className="hover:bg-slate-50/70 transition-colors">
+                  {(reportData?.data || []).map((row: any, idx: number) => (
+                    <tr key={row.id || `purch-sum-${idx}`} className="hover:bg-slate-50/70 transition-colors">
                       <td className="py-2.5 px-4 font-mono font-bold text-indigo-600">{row.invoice_number}</td>
                       <td className="py-2.5 px-4 text-slate-600">{new Date(row.invoice_date).toLocaleDateString()}</td>
                       <td className="py-2.5 px-4 font-semibold text-slate-900">{row.supplier_name}</td>
@@ -1037,6 +1118,86 @@ export const ReportsCenterPage: React.FC<{ initialTab?: ReportTab }> = ({ initia
                       <td className="py-2.5 px-4 text-right font-bold text-rose-600">₹{Number(row.outstanding_balance || 0).toLocaleString()}</td>
                       <td className="py-2.5 px-4 text-center">
                         <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-emerald-100 text-emerald-700">
+                          {row.status}
+                        </span>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            )}
+
+            {/* 4b. PURCHASE LINE-ITEM DRILLDOWN TABLE */}
+            {activeTab === 'purchases' && purchaseSubTab === 'DETAILS' && (
+              <table className="w-full text-left text-xs border-collapse">
+                <thead>
+                  <tr className="border-b border-slate-200 bg-slate-50 text-slate-600 font-bold uppercase tracking-wider text-[10px]">
+                    <th className="py-3 px-4">Bill #</th>
+                    <th className="py-3 px-4">Date</th>
+                    <th className="py-3 px-4">Supplier</th>
+                    <th className="py-3 px-4">Item / SKU</th>
+                    <th className="py-3 px-4">Barcode / Power</th>
+                    <th className="py-3 px-4 text-right">Qty</th>
+                    <th className="py-3 px-4 text-right">Unit Cost</th>
+                    <th className="py-3 px-4 text-right">Disc %</th>
+                    <th className="py-3 px-4 text-right">Tax Rate</th>
+                    <th className="py-3 px-4 text-right">Tax Amt</th>
+                    <th className="py-3 px-4 text-right">Line Total</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-slate-100">
+                  {(reportData?.data || []).map((row: any, idx: number) => (
+                    <tr key={row.lineId || row.id || `purch-item-${idx}`} className="hover:bg-slate-50/70 transition-colors">
+                      <td className="py-2.5 px-4 font-mono font-bold text-indigo-600">{row.invoiceNumber || row.invoice_number}</td>
+                      <td className="py-2.5 px-4 text-slate-600">{row.invoiceDate ? new Date(row.invoiceDate).toLocaleDateString() : '-'}</td>
+                      <td className="py-2.5 px-4 font-semibold text-slate-900">{row.supplierName || row.supplier_name}</td>
+                      <td className="py-2.5 px-4">
+                        <div className="font-semibold text-slate-900">{row.uniqueItemName || row.unique_item_name}</div>
+                        <div className="text-[10px] text-slate-400 font-mono">SKU: {row.sku}</div>
+                      </td>
+                      <td className="py-2.5 px-4 font-mono">
+                        <div className="font-bold text-slate-800">{row.barcode || '-'}</div>
+                        <div className="text-[10px] text-slate-500">{row.power || '-'}</div>
+                      </td>
+                      <td className="py-2.5 px-4 text-right font-bold text-slate-900">{row.quantity}</td>
+                      <td className="py-2.5 px-4 text-right">₹{Number(row.unitCost || row.unit_cost || 0).toLocaleString()}</td>
+                      <td className="py-2.5 px-4 text-right text-slate-500">{row.discountPercent || row.discount_percent || 0}%</td>
+                      <td className="py-2.5 px-4 text-right text-slate-600">{row.taxRate || row.tax_rate || 0}%</td>
+                      <td className="py-2.5 px-4 text-right text-slate-600">₹{Number(row.taxAmount || row.tax_amount || 0).toLocaleString()}</td>
+                      <td className="py-2.5 px-4 text-right font-bold text-slate-900">₹{Number(row.totalAmount || row.total_amount || 0).toLocaleString()}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            )}
+
+            {/* 4c. PURCHASE RETURNS (DEBIT NOTES) TABLE */}
+            {activeTab === 'purchases' && purchaseSubTab === 'RETURNS' && (
+              <table className="w-full text-left text-xs border-collapse">
+                <thead>
+                  <tr className="border-b border-slate-200 bg-slate-50 text-slate-600 font-bold uppercase tracking-wider text-[10px]">
+                    <th className="py-3 px-4">Return #</th>
+                    <th className="py-3 px-4">Date</th>
+                    <th className="py-3 px-4">Supplier</th>
+                    <th className="py-3 px-4 text-right">Taxable</th>
+                    <th className="py-3 px-4 text-right">Tax Amount</th>
+                    <th className="py-3 px-4 text-right">Grand Total (Debit)</th>
+                    <th className="py-3 px-4">Reason</th>
+                    <th className="py-3 px-4 text-center">Status</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-slate-100">
+                  {(reportData?.data || []).map((row: any, idx: number) => (
+                    <tr key={row.id || `purch-ret-${idx}`} className="hover:bg-slate-50/70 transition-colors">
+                      <td className="py-2.5 px-4 font-mono font-bold text-indigo-600">{row.returnNumber || row.return_number}</td>
+                      <td className="py-2.5 px-4 text-slate-600">{row.returnDate ? new Date(row.returnDate).toLocaleDateString() : '-'}</td>
+                      <td className="py-2.5 px-4 font-semibold text-slate-900">{row.partyName || row.party_name}</td>
+                      <td className="py-2.5 px-4 text-right">₹{Number(row.subtotal || 0).toLocaleString()}</td>
+                      <td className="py-2.5 px-4 text-right text-slate-600">₹{Number(row.taxAmount || row.tax_amount || 0).toLocaleString()}</td>
+                      <td className="py-2.5 px-4 text-right font-bold text-indigo-600">₹{Number(row.grandTotal || row.grand_total || 0).toLocaleString()}</td>
+                      <td className="py-2.5 px-4 text-slate-500 max-w-xs truncate">{row.reason || '-'}</td>
+                      <td className="py-2.5 px-4 text-center">
+                        <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-indigo-100 text-indigo-700">
                           {row.status}
                         </span>
                       </td>
@@ -1062,8 +1223,8 @@ export const ReportsCenterPage: React.FC<{ initialTab?: ReportTab }> = ({ initia
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-slate-100">
-                  {(reportData.parties || reportData.data || []).map((p: any) => (
-                    <tr key={p.id} className="hover:bg-slate-50/70 transition-colors">
+                  {(reportData.parties || reportData.data || []).map((p: any, idx: number) => (
+                    <tr key={p.id || p.party_id || `out-party-${idx}`} className="hover:bg-slate-50/70 transition-colors">
                       <td className="py-2.5 px-4 font-mono font-semibold text-slate-600">{p.party_code}</td>
                       <td className="py-2.5 px-4 font-bold text-slate-900">{p.name}</td>
                       <td className="py-2.5 px-4 text-slate-600">{p.mobile || '-'}</td>
@@ -1126,8 +1287,8 @@ export const ReportsCenterPage: React.FC<{ initialTab?: ReportTab }> = ({ initia
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-slate-100">
-                    {(reportData?.rows || []).map((r: any) => (
-                      <tr key={r.id} className="hover:bg-slate-50/70 transition-colors">
+                    {(reportData?.rows || reportData?.entries || []).map((r: any, idx: number) => (
+                      <tr key={r.id || `stmt-row-${idx}`} className="hover:bg-slate-50/70 transition-colors">
                         <td className="py-2.5 px-4 font-mono text-slate-600">{new Date(r.created_at).toLocaleString()}</td>
                         <td className="py-2.5 px-4 font-semibold text-slate-800">{r.transaction_type}</td>
                         <td className="py-2.5 px-4 font-mono font-semibold text-blue-600">{r.document_number}</td>
@@ -1163,8 +1324,8 @@ export const ReportsCenterPage: React.FC<{ initialTab?: ReportTab }> = ({ initia
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-slate-100">
-                  {(reportData?.data || []).map((row: any) => (
-                    <tr key={row.id} className="hover:bg-slate-50/70 transition-colors">
+                  {(reportData?.data || []).map((row: any, idx: number) => (
+                    <tr key={row.id || row.payment_id || `pmt-row-${idx}`} className="hover:bg-slate-50/70 transition-colors">
                       <td className="py-2.5 px-4 font-mono font-bold text-slate-900">{row.payment_number}</td>
                       <td className="py-2.5 px-4 text-slate-600">{new Date(row.payment_date).toLocaleDateString()}</td>
                       <td className="py-2.5 px-4 font-semibold text-slate-800">{row.party_name}</td>
@@ -1206,7 +1367,7 @@ export const ReportsCenterPage: React.FC<{ initialTab?: ReportTab }> = ({ initia
                 </thead>
                 <tbody className="divide-y divide-slate-100">
                   {(reportData?.data || []).map((row: any, idx: number) => (
-                    <tr key={idx} className="hover:bg-slate-50/70 transition-colors">
+                    <tr key={row.unique_item_id || row.id || row.sku || `analytics-${idx}`} className="hover:bg-slate-50/70 transition-colors">
                       <td className="py-2.5 px-4 font-bold text-slate-900">{row.unique_item_name}</td>
                       <td className="py-2.5 px-4 font-mono text-slate-600">{row.sku}</td>
                       <td className="py-2.5 px-4 text-slate-600">{row.category_name}</td>

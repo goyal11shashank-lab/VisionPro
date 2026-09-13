@@ -108,7 +108,7 @@ router.get(
  */
 router.post(
   '/',
-  requireAnyPermission(['parties:create', 'parties.create', 'purchase:create']),
+  requireAnyPermission(['parties:create', 'parties.create', 'purchase:create', 'sales:create']),
   async (req: Request, res: Response) => {
     try {
       const businessId = req.user!.currentBusinessId;

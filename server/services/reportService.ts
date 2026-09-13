@@ -301,13 +301,13 @@ export class ReportService {
          u.code AS sku,
          c.name AS category_name,
          sl.transaction_type,
-         sl.document_type,
-         sl.document_number,
-         sl.document_id,
+         COALESCE(sl.reference_type, sl.transaction_type) AS document_type,
+         COALESCE(si.invoice_number, pi.invoice_number, sr.return_number, pr.return_number, so.order_number, sl.reference_id, '-') AS document_number,
+         sl.reference_id AS document_id,
          sl.quantity_in,
          sl.quantity_out,
-         sl.balance_after,
-         sl.notes,
+         sl.balance AS balance_after,
+         sl.reason AS notes,
          sl.created_at,
          us.full_name AS created_by_name
        FROM stock_ledger sl
@@ -315,6 +315,11 @@ export class ReportService {
        JOIN unique_items u ON b.unique_item_id = u.id
        JOIN categories c ON b.category_id = c.id
        LEFT JOIN users us ON sl.created_by = us.id
+       LEFT JOIN sales_invoices si ON (sl.reference_type IN ('SALES_INVOICE', 'SALES_INVOICE_CANCEL') AND sl.reference_id = si.id::text)
+       LEFT JOIN purchase_invoices pi ON (sl.reference_type IN ('PURCHASE_INVOICE', 'PURCHASE_INVOICE_CANCEL') AND sl.reference_id = pi.id::text)
+       LEFT JOIN sales_returns sr ON (sl.reference_type IN ('SALES_RETURN', 'SALES_RETURN_CANCEL') AND sl.reference_id = sr.id::text)
+       LEFT JOIN purchase_returns pr ON (sl.reference_type IN ('PURCHASE_RETURN', 'PURCHASE_RETURN_CANCEL') AND sl.reference_id = pr.id::text)
+       LEFT JOIN sales_orders so ON (sl.reference_type = 'SALES_ORDER' AND sl.reference_id = so.id::text)
        WHERE ${whereClause}
        ORDER BY sl.created_at DESC, sl.id DESC
        LIMIT $${paramIndex} OFFSET $${paramIndex + 1}`,
@@ -325,20 +330,36 @@ export class ReportService {
       data: dataRes.rows.map(r => ({
         id: r.id,
         batchId: r.batch_id,
+        batch_id: r.batch_id,
         barcode: r.barcode,
         uniqueItemName: r.unique_item_name,
+        unique_item_name: r.unique_item_name,
         sku: r.sku,
         categoryName: r.category_name,
+        category_name: r.category_name,
         power: `SPH:${r.sph} CYL:${r.cyl} AXIS:${r.axis} ADD:${r.add} SIDE:${r.side}`,
+        sph: r.sph,
+        cyl: r.cyl,
+        axis: r.axis,
+        add: r.add,
+        side: r.side,
         transactionType: r.transaction_type,
+        transaction_type: r.transaction_type,
         documentType: r.document_type,
+        document_type: r.document_type,
         documentNumber: r.document_number,
+        document_number: r.document_number,
         documentId: r.document_id,
+        document_id: r.document_id,
         quantityIn: parseFloat(r.quantity_in) || 0,
+        quantity_in: parseFloat(r.quantity_in) || 0,
         quantityOut: parseFloat(r.quantity_out) || 0,
+        quantity_out: parseFloat(r.quantity_out) || 0,
         balanceAfter: parseFloat(r.balance_after) || 0,
+        balance_after: parseFloat(r.balance_after) || 0,
         notes: r.notes,
         createdAt: r.created_at,
+        created_at: r.created_at,
         createdByName: r.created_by_name,
       })),
       summary,
@@ -611,21 +632,38 @@ export class ReportService {
 
     return {
       data: dataRes.rows.map(r => ({
+        id: r.line_id,
         lineId: r.line_id,
+        line_id: r.line_id,
         invoiceId: r.invoice_id,
+        invoice_id: r.invoice_id,
         invoiceNumber: r.invoice_number,
+        invoice_number: r.invoice_number,
         invoiceDate: r.invoice_date,
+        invoice_date: r.invoice_date,
         supplierName: r.supplier_name,
+        supplier_name: r.supplier_name,
         uniqueItemName: r.unique_item_name,
+        unique_item_name: r.unique_item_name,
         sku: r.sku,
         barcode: r.barcode,
         power: r.barcode ? `SPH:${r.sph} CYL:${r.cyl} AXIS:${r.axis} ADD:${r.add} SIDE:${r.side}` : 'N/A',
+        sph: r.sph,
+        cyl: r.cyl,
+        axis: r.axis,
+        add: r.add,
+        side: r.side,
         quantity: parseFloat(r.quantity) || 0,
         unitCost: parseFloat(r.unit_cost) || 0,
+        unit_cost: parseFloat(r.unit_cost) || 0,
         discountPercent: parseFloat(r.discount_percent) || 0,
+        discount_percent: parseFloat(r.discount_percent) || 0,
         taxRate: parseFloat(r.tax_rate) || 0,
+        tax_rate: parseFloat(r.tax_rate) || 0,
         taxAmount: parseFloat(r.tax_amount) || 0,
+        tax_amount: parseFloat(r.tax_amount) || 0,
         totalAmount: parseFloat(r.total_amount) || 0,
+        total_amount: parseFloat(r.total_amount) || 0,
         status: r.status,
       })),
       summary,
@@ -677,7 +715,7 @@ export class ReportService {
       `SELECT
          COUNT(pr.id) AS total_returns,
          COALESCE(SUM(pr.subtotal), 0) AS total_subtotal,
-         COALESCE(SUM(pr.tax_amount), 0) AS total_tax,
+         COALESCE(SUM(COALESCE(pr.igst_amount, 0) + COALESCE(pr.cgst_amount, 0) + COALESCE(pr.sgst_amount, 0)), 0) AS total_tax,
          COALESCE(SUM(pr.grand_total), 0) AS total_grand_total
        FROM purchase_returns pr
        JOIN parties p ON pr.supplier_party_id = p.id
@@ -701,7 +739,7 @@ export class ReportService {
          pr.supplier_party_id AS party_id,
          p.name AS party_name,
          pr.subtotal,
-         pr.tax_amount,
+         (COALESCE(pr.igst_amount, 0) + COALESCE(pr.cgst_amount, 0) + COALESCE(pr.sgst_amount, 0)) AS tax_amount,
          pr.grand_total,
          pr.reason,
          pr.status,
@@ -718,15 +756,22 @@ export class ReportService {
       data: dataRes.rows.map(r => ({
         id: r.id,
         returnNumber: r.return_number,
+        return_number: r.return_number,
         returnDate: r.return_date,
+        return_date: r.return_date,
         partyId: r.party_id,
+        party_id: r.party_id,
         partyName: r.party_name,
+        party_name: r.party_name,
         subtotal: parseFloat(r.subtotal) || 0,
         taxAmount: parseFloat(r.tax_amount) || 0,
+        tax_amount: parseFloat(r.tax_amount) || 0,
         grandTotal: parseFloat(r.grand_total) || 0,
+        grand_total: parseFloat(r.grand_total) || 0,
         reason: r.reason,
         status: r.status,
         createdAt: r.created_at,
+        created_at: r.created_at,
       })),
       summary,
       pagination: {
@@ -995,21 +1040,38 @@ export class ReportService {
 
     return {
       data: dataRes.rows.map(r => ({
+        id: r.line_id,
         lineId: r.line_id,
+        line_id: r.line_id,
         invoiceId: r.invoice_id,
+        invoice_id: r.invoice_id,
         invoiceNumber: r.invoice_number,
+        invoice_number: r.invoice_number,
         invoiceDate: r.invoice_date,
+        invoice_date: r.invoice_date,
         customerName: r.customer_name,
+        customer_name: r.customer_name,
         uniqueItemName: r.unique_item_name,
+        unique_item_name: r.unique_item_name,
         sku: r.sku,
         barcode: r.barcode,
         power: r.barcode ? `SPH:${r.sph} CYL:${r.cyl} AXIS:${r.axis} ADD:${r.add} SIDE:${r.side}` : 'N/A',
+        sph: r.sph,
+        cyl: r.cyl,
+        axis: r.axis,
+        add: r.add,
+        side: r.side,
         quantity: parseFloat(r.quantity) || 0,
         unitPrice: parseFloat(r.unit_price) || 0,
+        unit_price: parseFloat(r.unit_price) || 0,
         discountPercent: parseFloat(r.discount_percent) || 0,
+        discount_percent: parseFloat(r.discount_percent) || 0,
         taxRate: parseFloat(r.tax_rate) || 0,
+        tax_rate: parseFloat(r.tax_rate) || 0,
         taxAmount: parseFloat(r.tax_amount) || 0,
+        tax_amount: parseFloat(r.tax_amount) || 0,
         totalAmount: parseFloat(r.total_amount) || 0,
+        total_amount: parseFloat(r.total_amount) || 0,
         status: r.status,
       })),
       summary,
@@ -1061,7 +1123,7 @@ export class ReportService {
       `SELECT
          COUNT(sr.id) AS total_returns,
          COALESCE(SUM(sr.subtotal), 0) AS total_subtotal,
-         COALESCE(SUM(sr.tax_amount), 0) AS total_tax,
+         COALESCE(SUM(COALESCE(sr.igst_amount, 0) + COALESCE(sr.cgst_amount, 0) + COALESCE(sr.sgst_amount, 0)), 0) AS total_tax,
          COALESCE(SUM(sr.grand_total), 0) AS total_grand_total
        FROM sales_returns sr
        JOIN parties p ON sr.party_id = p.id
@@ -1085,7 +1147,7 @@ export class ReportService {
          sr.party_id,
          p.name AS party_name,
          sr.subtotal,
-         sr.tax_amount,
+         (COALESCE(sr.igst_amount, 0) + COALESCE(sr.cgst_amount, 0) + COALESCE(sr.sgst_amount, 0)) AS tax_amount,
          sr.grand_total,
          sr.reason,
          sr.status,
@@ -1102,15 +1164,22 @@ export class ReportService {
       data: dataRes.rows.map(r => ({
         id: r.id,
         returnNumber: r.return_number,
+        return_number: r.return_number,
         returnDate: r.return_date,
+        return_date: r.return_date,
         partyId: r.party_id,
+        party_id: r.party_id,
         partyName: r.party_name,
+        party_name: r.party_name,
         subtotal: parseFloat(r.subtotal) || 0,
         taxAmount: parseFloat(r.tax_amount) || 0,
+        tax_amount: parseFloat(r.tax_amount) || 0,
         grandTotal: parseFloat(r.grand_total) || 0,
+        grand_total: parseFloat(r.grand_total) || 0,
         reason: r.reason,
         status: r.status,
         createdAt: r.created_at,
+        created_at: r.created_at,
       })),
       summary,
       pagination: {
@@ -1288,7 +1357,7 @@ export class ReportService {
 
     // 1. Fetch party info
     const partyRes = await pool.query(
-      `SELECT id, party_code, name, display_name, party_type, mobile, email, gstin, address_line1, city, state, credit_days
+      `SELECT id, party_code, name, display_name, party_type, mobile, email, gstin, address_line_1 AS address_line1, city, state, credit_days
        FROM parties
        WHERE id = $1 AND business_id = $2`,
       [partyId, businessId]
@@ -1335,15 +1404,20 @@ export class ReportService {
       `SELECT
          l.id,
          l.transaction_type,
-         l.document_type,
-         l.document_id,
-         l.document_number,
+         COALESCE(l.reference_type, l.transaction_type) AS document_type,
+         l.reference_id AS document_id,
+         COALESCE(si.invoice_number, pi.invoice_number, sr.return_number, pr.return_number, pm.payment_number, l.reference_id, '-') AS document_number,
          l.debit,
          l.credit,
          l.balance,
          l.notes,
          l.created_at
        FROM ${ledgerTable} l
+       LEFT JOIN sales_invoices si ON (l.reference_type IN ('SALES_INVOICE', 'SALES_INVOICE_CANCEL') AND l.reference_id = si.id::text)
+       LEFT JOIN purchase_invoices pi ON (l.reference_type IN ('PURCHASE_INVOICE', 'PURCHASE_INVOICE_CANCEL') AND l.reference_id = pi.id::text)
+       LEFT JOIN sales_returns sr ON (l.reference_type IN ('SALES_RETURN', 'SALES_RETURN_CANCEL') AND l.reference_id = sr.id::text)
+       LEFT JOIN purchase_returns pr ON (l.reference_type IN ('PURCHASE_RETURN', 'PURCHASE_RETURN_CANCEL') AND l.reference_id = pr.id::text)
+       LEFT JOIN payments pm ON (l.reference_type IN ('PAYMENT', 'PAYMENT_RECEIPT', 'PAYMENT_CANCEL') AND l.reference_id = pm.id::text)
        WHERE ${conditions.join(' AND ')}
        ORDER BY l.created_at ASC, l.id ASC`,
       params
@@ -1361,14 +1435,19 @@ export class ReportService {
       return {
         id: r.id,
         transactionType: r.transaction_type,
+        transaction_type: r.transaction_type,
         documentType: r.document_type,
+        document_type: r.document_type,
         documentId: r.document_id,
+        document_id: r.document_id,
         documentNumber: r.document_number,
+        document_number: r.document_number,
         debit,
         credit,
         balance: parseFloat(r.balance) || 0,
         notes: r.notes,
         createdAt: r.created_at,
+        created_at: r.created_at,
       };
     });
 
@@ -1394,6 +1473,7 @@ export class ReportService {
       totalCredit,
       closingBalance,
       entries,
+      rows: entries,
     };
   }
 
@@ -1464,7 +1544,7 @@ export class ReportService {
       `SELECT
          COUNT(pm.id) AS total_payments,
          COALESCE(SUM(pm.amount), 0) AS total_amount,
-         COALESCE(SUM(pm.allocated_amount), 0) AS total_allocated,
+         COALESCE(SUM(pm.amount - pm.unallocated_amount), 0) AS total_allocated,
          COALESCE(SUM(pm.unallocated_amount), 0) AS total_unallocated,
          COALESCE(SUM(pm.amount) FILTER (WHERE pm.payment_type = 'RECEIPT'), 0) AS total_receipts,
          COALESCE(SUM(pm.amount) FILTER (WHERE pm.payment_type = 'SUPPLIER_PAYMENT'), 0) AS total_supplier_payments
@@ -1516,7 +1596,7 @@ export class ReportService {
          p.name AS party_name,
          p.party_code,
          pm.amount,
-         pm.allocated_amount,
+         (pm.amount - pm.unallocated_amount) AS allocated_amount,
          pm.unallocated_amount,
          pm.status,
          pm.notes,

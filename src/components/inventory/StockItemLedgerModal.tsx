@@ -678,12 +678,12 @@ export const StockItemLedgerModal: React.FC<StockItemLedgerModalProps> = ({
                           </td>
                         </tr>
                       ) : (
-                        filteredTransactions.map((tx) => {
+                        filteredTransactions.map((tx, tIdx) => {
                           const isIn = tx.direction === 'IN';
                           const isOut = tx.direction === 'OUT';
 
                           return (
-                            <tr key={tx.id} className="hover:bg-slate-50 transition-colors">
+                            <tr key={tx.id || `tx-${tIdx}`} className="hover:bg-slate-50 transition-colors">
                               <td className="py-2.5 px-3 text-slate-600 whitespace-nowrap font-mono text-[11px]">
                                 {new Date(tx.date).toLocaleDateString('en-GB', {
                                   day: '2-digit',

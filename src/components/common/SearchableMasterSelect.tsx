@@ -6,7 +6,7 @@ import React, {
   forwardRef,
   useImperativeHandle,
 } from 'react';
-import { Search, ChevronDown, X, Check, Loader2 } from 'lucide-react';
+import { Search, ChevronDown, X, Check, Loader2, Plus } from 'lucide-react';
 import { rankSearchMatch } from '../../utils/searchNormalization';
 
 export interface SearchableOption {
@@ -38,6 +38,9 @@ export interface SearchableMasterSelectProps {
   allowClear?: boolean;
   emptyMessage?: string;
   loadingMessage?: string;
+  allowCreate?: boolean;
+  createLabel?: string | ((query: string) => string);
+  onCreate?: (query: string) => void;
 }
 
 export interface SearchableMasterSelectRef {
@@ -69,6 +72,9 @@ export const SearchableMasterSelect = forwardRef<SearchableMasterSelectRef, Sear
       allowClear = true,
       emptyMessage = 'No matching records found',
       loadingMessage = 'Searching master records...',
+      allowCreate = false,
+      createLabel,
+      onCreate,
     },
     ref
   ) => {
@@ -82,6 +88,20 @@ export const SearchableMasterSelect = forwardRef<SearchableMasterSelectRef, Sear
     const [highlightedIndex, setHighlightedIndex] = useState<number>(0);
     const [isLoading, setIsLoading] = useState(false);
     const [selectedOption, setSelectedOption] = useState<SearchableOption | null>(null);
+
+    const canCreate = Boolean(allowCreate && onCreate);
+    const totalNavItems = filteredOptions.length + (canCreate && filteredOptions.length > 0 ? 1 : 0);
+
+    const getCreateLabelText = () => {
+      const q = searchQuery.trim();
+      if (typeof createLabel === 'function') {
+        return createLabel(q);
+      }
+      if (createLabel) {
+        return q ? `${createLabel} "${q}"` : createLabel;
+      }
+      return q ? `+ Create "${q}"` : '+ Create New';
+    };
 
     // Expose focus/open/close controls to parent via ref
     useImperativeHandle(ref, () => ({
@@ -184,10 +204,12 @@ export const SearchableMasterSelect = forwardRef<SearchableMasterSelectRef, Sear
         // Try to keep currently selected item highlighted if present in filtered list
         const curIdx = filteredOptions.findIndex(o => o.id === value);
         setHighlightedIndex(curIdx >= 0 ? curIdx : 0);
+      } else if (canCreate) {
+        setHighlightedIndex(0);
       } else {
         setHighlightedIndex(-1);
       }
-    }, [filteredOptions, value]);
+    }, [filteredOptions, value, canCreate]);
 
     // Scroll highlighted item into view
     useEffect(() => {
@@ -248,8 +270,8 @@ export const SearchableMasterSelect = forwardRef<SearchableMasterSelectRef, Sear
         e.preventDefault();
         if (!isOpen) {
           setIsOpen(true);
-        } else if (filteredOptions.length > 0) {
-          setHighlightedIndex(prev => (prev + 1) % filteredOptions.length);
+        } else if (totalNavItems > 0) {
+          setHighlightedIndex(prev => (prev + 1) % totalNavItems);
         }
         return;
       }
@@ -258,16 +280,31 @@ export const SearchableMasterSelect = forwardRef<SearchableMasterSelectRef, Sear
         e.preventDefault();
         if (!isOpen) {
           setIsOpen(true);
-        } else if (filteredOptions.length > 0) {
-          setHighlightedIndex(prev => (prev - 1 + filteredOptions.length) % filteredOptions.length);
+        } else if (totalNavItems > 0) {
+          setHighlightedIndex(prev => (prev - 1 + totalNavItems) % totalNavItems);
         }
         return;
       }
 
       if (e.key === 'Enter') {
         e.preventDefault(); // Prevent accidental form submission
-        if (isOpen && highlightedIndex >= 0 && filteredOptions[highlightedIndex]) {
-          handleSelect(filteredOptions[highlightedIndex], true);
+        if (isOpen) {
+          if (filteredOptions.length === 0) {
+            if (canCreate && onCreate) {
+              setIsOpen(false);
+              onCreate(searchQuery.trim());
+            }
+            return;
+          }
+          if (highlightedIndex >= 0 && highlightedIndex < filteredOptions.length && filteredOptions[highlightedIndex]) {
+            handleSelect(filteredOptions[highlightedIndex], true);
+            return;
+          }
+          if (canCreate && highlightedIndex === filteredOptions.length && onCreate) {
+            setIsOpen(false);
+            onCreate(searchQuery.trim());
+            return;
+          }
         } else if (!isOpen) {
           // If closed and pressed Enter, open dropdown or advance
           if (value && onNextFocus) {
@@ -427,60 +464,124 @@ export const SearchableMasterSelect = forwardRef<SearchableMasterSelectRef, Sear
                   <span>{loadingMessage}</span>
                 </li>
               ) : filteredOptions.length === 0 ? (
-                <li className="px-3 py-5 text-center text-slate-400 space-y-1">
-                  <p className="font-medium text-slate-600">{emptyMessage}</p>
-                  <p className="text-[11px] text-slate-400">
-                    No results for &ldquo;{searchQuery}&rdquo;
+                <li className="p-3 text-center space-y-2">
+                  <p className="text-xs text-slate-500 font-medium">
+                    {emptyMessage}
+                    {searchQuery.trim() && (
+                      <span> for &ldquo;<span className="font-semibold text-slate-700">{searchQuery.trim()}</span>&rdquo;</span>
+                    )}
                   </p>
-                </li>
-              ) : (
-                filteredOptions.map((opt, index) => {
-                  const isHighlighted = index === highlightedIndex;
-                  const isSelected = opt.id === value;
-
-                  return (
-                    <li
-                      key={opt.id}
-                      role="option"
-                      aria-selected={isSelected}
-                      onMouseEnter={() => setHighlightedIndex(index)}
-                      onMouseDown={e => {
-                        // Prevent input blur before click handler fires
-                        e.preventDefault();
+                  {canCreate && onCreate && (
+                    <button
+                      type="button"
+                      id={`${id || 'searchable-select'}-btn-create-empty`}
+                      onMouseDown={e => e.preventDefault()}
+                      onClick={() => {
+                        setIsOpen(false);
+                        onCreate(searchQuery.trim());
                       }}
-                      onClick={() => handleSelect(opt, true)}
-                      className={`px-3 py-2 cursor-pointer flex items-center justify-between gap-2 transition-colors ${
-                        isHighlighted
-                          ? 'bg-blue-50/90 text-blue-950 font-medium'
-                          : 'text-slate-800 hover:bg-slate-50'
+                      className={`w-full py-2 px-3 rounded-lg text-xs font-semibold flex items-center justify-between transition-colors shadow-xs ${
+                        highlightedIndex === 0
+                          ? 'bg-blue-600 text-white hover:bg-blue-700 ring-2 ring-blue-400/50'
+                          : 'bg-blue-50 text-blue-700 hover:bg-blue-100 border border-blue-200'
                       }`}
                     >
-                      <div className="flex-1 min-w-0 pr-2">
-                        <div className="flex items-center gap-2">
-                          <span className="truncate font-semibold">{opt.label}</span>
-                          {opt.tag && (
-                            <span
-                              className={`px-1.5 py-0.5 rounded text-[10px] font-mono border ${getBadgeStyle(
-                                opt.badgeColor
-                              )}`}
-                            >
-                              {opt.tag}
-                            </span>
+                      <span className="flex items-center gap-1.5 truncate">
+                        <Plus className="w-4 h-4 shrink-0" />
+                        <span className="truncate">{getCreateLabelText()}</span>
+                      </span>
+                      <span className={`text-[10px] font-mono px-1.5 py-0.5 rounded shrink-0 ${
+                        highlightedIndex === 0 ? 'bg-blue-700 text-blue-100' : 'bg-blue-100 text-blue-600'
+                      }`}>
+                        ↵ Enter
+                      </span>
+                    </button>
+                  )}
+                </li>
+              ) : (
+                <>
+                  {filteredOptions.map((opt, index) => {
+                    const isHighlighted = index === highlightedIndex;
+                    const isSelected = opt.id === value;
+
+                    return (
+                      <li
+                        key={opt.id}
+                        role="option"
+                        aria-selected={isSelected}
+                        onMouseEnter={() => setHighlightedIndex(index)}
+                        onMouseDown={e => {
+                          // Prevent input blur before click handler fires
+                          e.preventDefault();
+                        }}
+                        onClick={() => handleSelect(opt, true)}
+                        className={`px-3 py-2 cursor-pointer flex items-center justify-between gap-2 transition-colors ${
+                          isHighlighted
+                            ? 'bg-blue-50/90 text-blue-950 font-medium'
+                            : 'text-slate-800 hover:bg-slate-50'
+                        }`}
+                      >
+                        <div className="flex-1 min-w-0 pr-2">
+                          <div className="flex items-center gap-2">
+                            <span className="truncate font-semibold">{opt.label}</span>
+                            {opt.tag && (
+                              <span
+                                className={`px-1.5 py-0.5 rounded text-[10px] font-mono border ${getBadgeStyle(
+                                  opt.badgeColor
+                                )}`}
+                              >
+                                {opt.tag}
+                              </span>
+                            )}
+                          </div>
+                          {opt.subLabel && (
+                            <div className="text-[11px] text-slate-500 truncate mt-0.5 font-mono">
+                              {opt.subLabel}
+                            </div>
                           )}
                         </div>
-                        {opt.subLabel && (
-                          <div className="text-[11px] text-slate-500 truncate mt-0.5 font-mono">
-                            {opt.subLabel}
-                          </div>
-                        )}
-                      </div>
 
-                      {isSelected && (
-                        <Check className="w-3.5 h-3.5 text-blue-600 shrink-0 stroke-[2.5]" />
-                      )}
+                        {isSelected && (
+                          <Check className="w-3.5 h-3.5 text-blue-600 shrink-0 stroke-[2.5]" />
+                        )}
+                      </li>
+                    );
+                  })}
+
+                  {canCreate && onCreate && (
+                    <li
+                      key="__create_new_action__"
+                      role="option"
+                      id={`${id || 'searchable-select'}-create-new-option`}
+                      aria-selected={highlightedIndex === filteredOptions.length}
+                      onMouseEnter={() => setHighlightedIndex(filteredOptions.length)}
+                      onMouseDown={e => e.preventDefault()}
+                      onClick={() => {
+                        setIsOpen(false);
+                        onCreate(searchQuery.trim());
+                      }}
+                      className={`px-3 py-2.5 cursor-pointer flex items-center justify-between gap-2 border-t border-slate-200 transition-colors ${
+                        highlightedIndex === filteredOptions.length
+                          ? 'bg-blue-600 text-white font-semibold shadow-xs'
+                          : 'bg-blue-50/60 hover:bg-blue-100/70 text-blue-700 font-medium'
+                      }`}
+                    >
+                      <div className="flex items-center gap-2 truncate">
+                        <Plus className={`w-4 h-4 shrink-0 ${highlightedIndex === filteredOptions.length ? 'text-white' : 'text-blue-600'}`} />
+                        <span className="truncate text-xs font-semibold">
+                          {getCreateLabelText()}
+                        </span>
+                      </div>
+                      <span className={`text-[10px] font-mono px-1.5 py-0.5 rounded shrink-0 ${
+                        highlightedIndex === filteredOptions.length
+                          ? 'bg-blue-700 text-blue-100'
+                          : 'bg-blue-100 text-blue-600'
+                      }`}>
+                        ↵ Enter
+                      </span>
                     </li>
-                  );
-                })
+                  )}
+                </>
               )}
             </ul>
           </div>

@@ -10,6 +10,7 @@ import {
   Hash,
 } from 'lucide-react';
 import { SearchableMasterSelect, SearchableOption } from '../common/SearchableMasterSelect';
+import { InlineStockItemModal } from '../common/InlineStockItemModal';
 import { formatOpticalBatchName } from '../../utils/searchNormalization';
 import { VoucherLineItem, ComputedVoucherLine } from './VoucherTypes';
 
@@ -19,6 +20,8 @@ interface VoucherItemGridProps {
   computedLines: ComputedVoucherLine[];
   allItems: any[];
   onItemSelect: (rowIndex: number, uniqueItemId: string) => void;
+  onItemCreated?: (newItem: any) => void;
+  allowStockItemCreate?: boolean;
   onBatchClick: (rowIndex: number) => void;
   onQuantityChange: (rowIndex: number, quantity: number) => void;
   onRateChange: (rowIndex: number, rate: number) => void;
@@ -35,6 +38,8 @@ export const VoucherItemGrid: React.FC<VoucherItemGridProps> = ({
   computedLines,
   allItems,
   onItemSelect,
+  onItemCreated,
+  allowStockItemCreate = true,
   onBatchClick,
   onQuantityChange,
   onRateChange,
@@ -46,8 +51,32 @@ export const VoucherItemGrid: React.FC<VoucherItemGridProps> = ({
 }) => {
   const isSales = voucherType === 'SALES';
 
+  // Inline Stock Item creation state
+  const [isInlineItemOpen, setIsInlineItemOpen] = useState(false);
+  const [activeCreateRowIndex, setActiveCreateRowIndex] = useState<number | null>(null);
+  const [typedItemName, setTypedItemName] = useState('');
+
   // State to track expanded nested batch allocations per row
   const [expandedRows, setExpandedRows] = useState<Record<string, boolean>>({});
+
+  const handleStockItemCreated = (newItem: any) => {
+    if (onItemCreated) {
+      onItemCreated(newItem);
+    }
+    if (activeCreateRowIndex !== null) {
+      const rowIdx = activeCreateRowIndex;
+      onItemSelect(rowIdx, newItem.id);
+      if (newItem.maintainBatches !== false) {
+        setTimeout(() => {
+          onBatchClick(rowIdx);
+        }, 80);
+      } else {
+        setTimeout(() => {
+          focusCell(rowIdx, 'qty');
+        }, 80);
+      }
+    }
+  };
 
   const toggleRowExpand = (lineId: string) => {
     setExpandedRows(prev => ({
@@ -204,11 +233,19 @@ export const VoucherItemGrid: React.FC<VoucherItemGridProps> = ({
                       <div className="flex items-center gap-1.5">
                         <div className="flex-1 min-w-0">
                           <SearchableMasterSelect
+                            id={`voucher-item-grid-select-${idx}`}
                             ref={el => setRef(idx, 'item', el as any)}
                             value={line.uniqueItemId || ''}
                             displayValue={line.uniqueItemName || ''}
                             options={itemOptions}
                             placeholder="Type stock item name..."
+                            allowCreate={allowStockItemCreate}
+                            createLabel={q => q ? `+ Create Stock Item "${q}"` : '+ Create Stock Item'}
+                            onCreate={query => {
+                              setActiveCreateRowIndex(idx);
+                              setTypedItemName(query);
+                              setIsInlineItemOpen(true);
+                            }}
                             onNextFocus={() => {
                               if (hasBatches && line.uniqueItemId) {
                                 onBatchClick(idx);
@@ -474,12 +511,6 @@ export const VoucherItemGrid: React.FC<VoucherItemGridProps> = ({
                               <span className="font-mono font-bold text-slate-900">
                                 {formattedName}
                               </span>
-                              {b.barcode && (
-                                <span className="text-[10px] text-slate-400 font-mono flex items-center gap-0.5">
-                                  <Hash className="w-2.5 h-2.5" />
-                                  <span>{b.barcode}</span>
-                                </span>
-                              )}
                             </div>
                           </td>
 
@@ -590,6 +621,24 @@ export const VoucherItemGrid: React.FC<VoucherItemGridProps> = ({
           </span>
         </div>
       </div>
+
+      {/* Inline Stock Item Creation Modal */}
+      {isInlineItemOpen && (
+        <InlineStockItemModal
+          isOpen={isInlineItemOpen}
+          onClose={() => {
+            setIsInlineItemOpen(false);
+            if (activeCreateRowIndex !== null) {
+              const r = activeCreateRowIndex;
+              setTimeout(() => {
+                focusCell(r, 'item');
+              }, 50);
+            }
+          }}
+          initialName={typedItemName}
+          onSuccess={handleStockItemCreated}
+        />
+      )}
     </div>
   );
 };

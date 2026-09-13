@@ -1,4 +1,4 @@
-import React, { useRef, useEffect } from 'react';
+import React, { useRef, useEffect, useState } from 'react';
 import {
   FileSpreadsheet,
   ArrowLeft,
@@ -11,8 +11,10 @@ import {
   Printer,
   DollarSign,
   Building2,
+  Plus,
 } from 'lucide-react';
 import { SearchableMasterSelect, SearchableOption } from '../common/SearchableMasterSelect';
+import { InlinePartyModal } from '../common/InlinePartyModal';
 
 interface VoucherHeaderProps {
   voucherType: 'SALES' | 'PURCHASE' | 'SALES_ORDER' | 'PURCHASE_ORDER';
@@ -25,6 +27,8 @@ interface VoucherHeaderProps {
   parties: any[];
   selectedPartyId: string;
   onPartyChange: (partyId: string) => void;
+  onPartyCreated?: (newParty: any) => void;
+  allowPartyCreate?: boolean;
   partyBalance?: { balance: number; type: 'Dr' | 'Cr'; isOverLimit?: boolean; creditLimit?: number };
   // Secondary voucher fields (optional / compatibility)
   gstMode?: 'INTRA_STATE' | 'INTER_STATE' | 'EXEMPT';
@@ -56,6 +60,8 @@ export const VoucherHeader: React.FC<VoucherHeaderProps> = ({
   parties,
   selectedPartyId,
   onPartyChange,
+  onPartyCreated,
+  allowPartyCreate = true,
   partyBalance,
   referenceNumber = '',
   onReferenceNumberChange,
@@ -70,13 +76,33 @@ export const VoucherHeader: React.FC<VoucherHeaderProps> = ({
   const isOrder = voucherType === 'SALES_ORDER' || voucherType === 'PURCHASE_ORDER';
   const partySelectRef = useRef<any>(null);
 
+  // Inline Party creation state
+  const [isInlinePartyOpen, setIsInlinePartyOpen] = useState(false);
+  const [typedPartyName, setTypedPartyName] = useState('');
+
   const partyOptions: SearchableOption[] = parties.map(p => ({
     id: p.id,
     label: p.name,
-    subLabel: `${p.phone || ''} ${p.city ? `• ${p.city}` : ''} ${p.gstin ? `• GST: ${p.gstin}` : ''}`.trim(),
+    subLabel: `${p.phone || p.mobile || ''} ${p.city ? `• ${p.city}` : ''} ${p.gstin ? `• GST: ${p.gstin}` : ''}`.trim(),
     tag: p.partyType,
     meta: p,
   }));
+
+  const handleInlinePartySuccess = (newParty: any) => {
+    if (onPartyCreated) {
+      onPartyCreated(newParty);
+    }
+    onPartyChange(newParty.id);
+
+    // Focus next appropriate field
+    setTimeout(() => {
+      const refInput = document.getElementById('voucher-header-ref-no') as HTMLInputElement;
+      if (refInput) {
+        refInput.focus();
+        refInput.select();
+      }
+    }, 80);
+  };
 
   // Global hotkeys (Ctrl+A for save, Esc for back)
   useEffect(() => {
@@ -227,11 +253,25 @@ export const VoucherHeader: React.FC<VoucherHeaderProps> = ({
           </span>
           <div className="flex-1 min-w-0">
             <SearchableMasterSelect
+              id="voucher-header-party-select"
               ref={partySelectRef}
               placeholder={isSales ? 'Type customer name/phone...' : 'Type supplier name...'}
               options={partyOptions}
               value={selectedPartyId}
               onSelect={opt => onPartyChange(opt ? opt.id : '')}
+              allowCreate={allowPartyCreate}
+              createLabel={q => isSales ? `+ Create Customer ${q ? `"${q}"` : 'New'}` : `+ Create Supplier ${q ? `"${q}"` : 'New'}`}
+              onCreate={query => {
+                setTypedPartyName(query);
+                setIsInlinePartyOpen(true);
+              }}
+              onNextFocus={() => {
+                const refInput = document.getElementById('voucher-header-ref-no') as HTMLInputElement;
+                if (refInput) {
+                  refInput.focus();
+                  refInput.select();
+                }
+              }}
               className="w-full"
               inputClassName="py-1 text-xs font-bold text-slate-950 bg-white border-slate-400 rounded focus:ring-1 focus:ring-blue-600 shadow-2xs"
             />
@@ -255,6 +295,7 @@ export const VoucherHeader: React.FC<VoucherHeaderProps> = ({
             {isSales ? 'Ref No:' : 'Supp Inv:'}
           </span>
           <input
+            id="voucher-header-ref-no"
             type="text"
             value={referenceNumber ?? ''}
             onChange={e => onReferenceNumberChange && onReferenceNumberChange(e.target.value)}
@@ -270,6 +311,7 @@ export const VoucherHeader: React.FC<VoucherHeaderProps> = ({
               Supp Date:
             </span>
             <input
+              id="voucher-header-supp-date"
               type="date"
               value={supplierInvoiceDate ?? ''}
               onChange={e => onSupplierInvoiceDateChange && onSupplierInvoiceDateChange(e.target.value)}
@@ -278,6 +320,23 @@ export const VoucherHeader: React.FC<VoucherHeaderProps> = ({
           </div>
         )}
       </div>
+
+      {/* Inline Party Creation Modal */}
+      {isInlinePartyOpen && (
+        <InlinePartyModal
+          isOpen={isInlinePartyOpen}
+          onClose={() => {
+            setIsInlinePartyOpen(false);
+            // Re-focus party input
+            setTimeout(() => {
+              partySelectRef.current?.focus();
+            }, 50);
+          }}
+          defaultPartyType={isSales ? 'CUSTOMER' : 'SUPPLIER'}
+          initialName={typedPartyName}
+          onSuccess={handleInlinePartySuccess}
+        />
+      )}
     </div>
   );
 };

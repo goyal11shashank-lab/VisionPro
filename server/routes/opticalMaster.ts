@@ -1769,12 +1769,31 @@ router.get(['/unique-items', '/stock-items', '/'], requireAnyPermission(['master
   }
 });
 
-router.post(['/unique-items', '/stock-items'], requirePermission('master:create'), async (req: Request, res: Response): Promise<void> => {
+router.post(['/unique-items', '/stock-items'], requireAnyPermission(['master:create', 'master.create', 'purchase:create', 'sales:create', 'inventory:create', 'inventory.create']), async (req: Request, res: Response): Promise<void> => {
   try {
     const bizId = req.user!.currentBusinessId;
     const rawCat = req.body.opticalCategory || req.body.optical_category || req.body.category || req.body.itemCategory || req.body.item_category;
+
+    let itemCode = (req.body.code || '').trim().toUpperCase();
+    if (!itemCode && (req.body.name || '').trim()) {
+      const countRes = await pool.query(
+        `SELECT code FROM unique_items WHERE business_id = $1 AND code LIKE 'ITM-%' ORDER BY created_at DESC LIMIT 50`,
+        [bizId]
+      );
+      let maxNum = 0;
+      for (const row of countRes.rows) {
+        const match = (row.code || '').match(/^ITM-(\d+)$/i);
+        if (match) {
+          const n = parseInt(match[1], 10);
+          if (!isNaN(n) && n > maxNum) maxNum = n;
+        }
+      }
+      itemCode = `ITM-${String(maxNum + 1).padStart(5, '0')}`;
+    }
+
     const bodyToParse = {
       ...req.body,
+      code: itemCode,
       maintainBatches: req.body.maintainBatches !== undefined ? req.body.maintainBatches : req.body.maintain_batches,
       opticalCategory: rawCat && ['SV', 'KT', 'PROG', 'OTHER'].includes(String(rawCat).toUpperCase())
         ? String(rawCat).toUpperCase()

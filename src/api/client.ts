@@ -66,7 +66,8 @@ export function getAuthHeaders(customBizId?: string): Record<string, string> {
 
 export async function apiRequest<T = any>(
   endpoint: string,
-  options: RequestInit = {}
+  options: RequestInit = {},
+  retries = 3
 ): Promise<T> {
   const token = getStoredToken();
   const bizId = getStoredBusinessId();
@@ -85,39 +86,72 @@ export async function apiRequest<T = any>(
     headers['X-Business-Id'] = bizId;
   }
 
-  const response = await fetch(endpoint, {
-    ...options,
-    headers,
-  });
+  let attempt = 0;
+  while (true) {
+    attempt++;
+    try {
+      const response = await fetch(endpoint, {
+        ...options,
+        headers,
+      });
 
-  const contentType = response.headers.get('content-type') || '';
-  let data: any = {};
+      const contentType = response.headers.get('content-type') || '';
+      let data: any = {};
 
-  if (contentType.includes('application/json')) {
-    data = await response.json().catch(() => ({}));
-  } else {
-    const text = await response.text().catch(() => '');
-    if (!response.ok) {
-      const err: any = new Error(`HTTP ${response.status}: Request failed`);
-      err.status = response.status;
-      err.data = text;
-      throw err;
-    }
-    if (text.startsWith('<!doctype') || text.startsWith('<html') || text.trim().startsWith('<')) {
-      const err: any = new Error(`API endpoint ${endpoint} returned HTML instead of JSON`);
-      err.status = 502;
-      err.data = text;
-      throw err;
+      if (contentType.includes('application/json')) {
+        data = await response.json().catch(() => ({}));
+      } else {
+        const text = await response.text().catch(() => '');
+        const isHtml = text.startsWith('<!doctype') || text.startsWith('<html') || text.trim().startsWith('<') || text.includes('Starting Server...');
+        
+        // If the server is warming up or restarting and returned HTML, retry up to `retries` times
+        if (isHtml && attempt <= retries) {
+          console.warn(`[API Client] Endpoint ${endpoint} returned HTML (server warming up). Retrying attempt ${attempt}/${retries}...`);
+          await new Promise((resolve) => setTimeout(resolve, attempt * 500));
+          continue;
+        }
+
+        if (!response.ok) {
+          if ((response.status === 502 || response.status === 503 || response.status === 504) && attempt <= retries) {
+            console.warn(`[API Client] Gateway ${response.status} on ${endpoint}. Retrying attempt ${attempt}/${retries}...`);
+            await new Promise((resolve) => setTimeout(resolve, attempt * 500));
+            continue;
+          }
+          const err: any = new Error(`HTTP ${response.status}: Request failed`);
+          err.status = response.status;
+          err.data = text;
+          throw err;
+        }
+
+        if (isHtml) {
+          const err: any = new Error(`API endpoint ${endpoint} returned HTML instead of JSON. The server may still be initializing.`);
+          err.status = 502;
+          err.data = text;
+          throw err;
+        }
+      }
+
+      if (!response.ok) {
+        if ((response.status === 502 || response.status === 503 || response.status === 504) && attempt <= retries) {
+          console.warn(`[API Client] Gateway error HTTP ${response.status} on ${endpoint}. Retrying attempt ${attempt}/${retries}...`);
+          await new Promise((resolve) => setTimeout(resolve, attempt * 500));
+          continue;
+        }
+        const errorMsg = data.message || data.error || `HTTP ${response.status}: Request failed`;
+        const err: any = new Error(errorMsg);
+        err.status = response.status;
+        err.data = data;
+        throw err;
+      }
+
+      return data as T;
+    } catch (networkErr: any) {
+      if (attempt <= retries && (networkErr.message?.includes('Failed to fetch') || networkErr.status === 502)) {
+        console.warn(`[API Client] Network error on ${endpoint}. Retrying attempt ${attempt}/${retries}...`);
+        await new Promise((resolve) => setTimeout(resolve, attempt * 500));
+        continue;
+      }
+      throw networkErr;
     }
   }
-
-  if (!response.ok) {
-    const errorMsg = data.message || data.error || `HTTP ${response.status}: Request failed`;
-    const err: any = new Error(errorMsg);
-    err.status = response.status;
-    err.data = data;
-    throw err;
-  }
-
-  return data as T;
 }

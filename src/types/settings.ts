@@ -18,6 +18,7 @@ export interface AppSettings {
     creditLimitAction?: 'OFF' | 'WARNING' | 'BLOCK' | string;
     defaultCustomerCreditLimit?: number;
     defaultState?: string;
+    allowPartyCreationFromVoucher?: boolean;
   };
   stockItem: {
     defaultUnit: 'PRS' | 'PCS';
@@ -33,6 +34,7 @@ export interface AppSettings {
     defaultBaseMaterial?: string;
     autoGenerateItemBarcode?: boolean;
     opticalPrescriptionMandatory?: boolean;
+    allowStockItemCreationFromVoucher?: boolean;
   };
   inventory: {
     allowNegativeStock: boolean;
@@ -57,6 +59,7 @@ export interface AppSettings {
     autoAddNextRow: boolean;
     autoOpenBatchAllocation: boolean;
     enableSalesOrders: boolean;
+    allowNewBatchCreation?: boolean;
     defaultGstMode?: string;
     defaultDiscountType?: 'NONE' | 'PERCENTAGE' | 'FIXED';
     maxDiscountPercentage?: number;
@@ -212,6 +215,7 @@ export const DEFAULT_APP_SETTINGS: AppSettings = {
     partySearchDetails: 'DETAILED',
     enforceUniqueGstin: false,
     enforceUniquePhone: false,
+    allowPartyCreationFromVoucher: true,
   },
   stockItem: {
     defaultUnit: 'PRS',
@@ -227,6 +231,7 @@ export const DEFAULT_APP_SETTINGS: AppSettings = {
     defaultBaseMaterial: 'CR39',
     autoGenerateItemBarcode: true,
     opticalPrescriptionMandatory: false,
+    allowStockItemCreationFromVoucher: true,
   },
   inventory: {
     allowNegativeStock: true,
@@ -251,6 +256,7 @@ export const DEFAULT_APP_SETTINGS: AppSettings = {
     autoAddNextRow: true,
     autoOpenBatchAllocation: true,
     enableSalesOrders: true,
+    allowNewBatchCreation: false,
     defaultGstMode: 'INTRA_STATE',
     defaultDiscountType: 'PERCENTAGE',
     maxDiscountPercentage: 20,

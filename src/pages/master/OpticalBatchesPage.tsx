@@ -376,6 +376,27 @@ export const OpticalBatchesPage: React.FC = () => {
         </div>
       )}
 
+      {/* Catalog Load Error Banner */}
+      {error && (
+        <div className="p-4 rounded-xl border bg-amber-50 border-amber-200 text-amber-900 flex items-center justify-between gap-3 shadow-sm">
+          <div className="flex items-center gap-3">
+            <AlertTriangle className="h-5 w-5 text-amber-600 shrink-0" />
+            <div>
+              <p className="text-sm font-semibold">{error}</p>
+              <p className="text-xs text-amber-700 mt-0.5">Please check your connection or reload the optical catalog.</p>
+            </div>
+          </div>
+          <button
+            onClick={() => fetchStockItems()}
+            disabled={loading}
+            className="px-3 py-1.5 bg-amber-600 hover:bg-amber-700 text-white text-xs font-medium rounded-lg flex items-center gap-1.5 transition-colors disabled:opacity-50 shadow-sm"
+          >
+            <RefreshCw className={`h-3.5 w-3.5 ${loading ? 'animate-spin' : ''}`} />
+            Retry
+          </button>
+        </div>
+      )}
+
       {/* Main Hierarchical View Router */}
       {viewMode === 'STOCK_ITEMS' && (
         <StockItemsListView

@@ -664,7 +664,12 @@ export const SalesInvoicesPage: React.FC<{
         partyId: selectedPartyId,
         invoiceDate,
         paymentTerms,
-        notes: invoiceNotes,
+        notes: (invoiceNotes || '')
+          .replace(/(?:\|\s*)?Payment Mode:\s*[^|]+/gi, '')
+          .replace(/(?:\|\s*)?Terms:\s*[^|]+/gi, '')
+          .replace(/^[\s|]+|[\s|]+$/g, '')
+          .replace(/\|\s*\|/g, '|')
+          .trim() || undefined,
         status: targetStatus,
         lines: formLines.map(l => ({
           uniqueItemId: l.uniqueItemId,
@@ -1794,11 +1799,6 @@ export const SalesInvoicesPage: React.FC<{
                                         {side && side !== 'NONE' && (
                                           <span className="px-1.5 py-0.2 bg-blue-100 text-blue-800 text-[10px] rounded font-bold uppercase">
                                             {side}
-                                          </span>
-                                        )}
-                                        {barcode && (
-                                          <span className="text-slate-500 font-mono text-[10px]">
-                                            | Barcode: <span className="font-bold text-slate-800">{barcode}</span>
                                           </span>
                                         )}
                                         {batches.length > 1 && (

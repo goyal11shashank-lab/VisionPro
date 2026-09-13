@@ -135,7 +135,6 @@ export const NormalSalesVoucherPage: React.FC<Props> = ({ onNavigate, onSuccess,
             if (inv.gstMode) setGstMode(inv.gstMode);
             if (inv.paymentTerms) setPaymentTerms(inv.paymentTerms);
             if (inv.notes) {
-              setNotes(inv.notes);
               const refMatch = inv.notes.match(/Ref:\s*([^|]+)/i);
               if (refMatch && refMatch[1]) {
                 setReferenceNumber(refMatch[1].trim());
@@ -144,6 +143,15 @@ export const NormalSalesVoucherPage: React.FC<Props> = ({ onNavigate, onSuccess,
               if (payModeMatch && payModeMatch[1]) {
                 setPaymentMode(payModeMatch[1].trim());
               }
+              // Clean Payment Mode, Terms, and Ref out of narration state
+              const cleanedNotes = inv.notes
+                .replace(/(?:\|\s*)?Payment Mode:\s*[^|]+/gi, '')
+                .replace(/(?:\|\s*)?Terms:\s*[^|]+/gi, '')
+                .replace(/(?:\|\s*)?Ref:\s*[^|]+/gi, '')
+                .replace(/^[\s|]+|[\s|]+$/g, '')
+                .replace(/\|\s*\|/g, '|')
+                .trim();
+              setNotes(cleanedNotes);
             }
 
             const loadedLines: VoucherLineItem[] = (inv.lines || []).map((l: any, i: number) => ({
@@ -607,9 +615,17 @@ export const NormalSalesVoucherPage: React.FC<Props> = ({ onNavigate, onSuccess,
         invoiceDate: invoiceDate,
         gstMode: gstMode,
         status: targetStatus,
-        notes: notes.trim()
-          ? `${notes.trim()}${referenceNumber ? ` | Ref: ${referenceNumber}` : ''}`
-          : (referenceNumber ? `Ref: ${referenceNumber}` : undefined),
+        notes: (() => {
+          const cleaned = notes
+            .replace(/(?:\|\s*)?Payment Mode:\s*[^|]+/gi, '')
+            .replace(/(?:\|\s*)?Terms:\s*[^|]+/gi, '')
+            .replace(/^[\s|]+|[\s|]+$/g, '')
+            .replace(/\|\s*\|/g, '|')
+            .trim();
+          return cleaned
+            ? `${cleaned}${referenceNumber ? ` | Ref: ${referenceNumber}` : ''}`
+            : (referenceNumber ? `Ref: ${referenceNumber}` : undefined);
+        })(),
         lines: nonBlankLines.map(l => ({
           uniqueItemId: l.uniqueItemId,
           quantity: l.quantity,
@@ -920,10 +936,9 @@ export const NormalSalesVoucherPage: React.FC<Props> = ({ onNavigate, onSuccess,
                                   const sph = b.sph ?? b.batch?.sph ?? '0.00';
                                   const cyl = b.cyl ?? b.batch?.cyl ?? '0.00';
                                   const axis = b.axis ?? b.batch?.axis;
-                                  const barcode = b.barcode ?? b.batch?.barcode;
                                   return (
                                     <div key={bIdx}>
-                                      SPH {sph}, CYL {cyl}{axis ? `, AXIS ${axis}` : ''}{barcode ? ` | ${barcode}` : ''}
+                                      SPH {sph}, CYL {cyl}{axis ? `, AXIS ${axis}` : ''}
                                     </div>
                                   );
                                 })}

@@ -265,15 +265,6 @@ export const PrintableVoucher: React.FC<PrintableVoucherProps> = ({
               </div>
             )}
           </div>
-
-          {voucher.paymentStatus && (
-            <div className="pt-2 border-t border-slate-200 mt-2 flex justify-between items-center text-[10px]">
-              <span className="text-slate-500">Payment Status:</span>
-              <span className="px-2 py-0.5 rounded font-bold uppercase tracking-wider bg-slate-200 text-slate-800">
-                {voucher.paymentStatus}
-              </span>
-            </div>
-          )}
         </div>
       </div>
 
@@ -375,11 +366,6 @@ export const PrintableVoucher: React.FC<PrintableVoucherProps> = ({
                                   {side && side !== 'NONE' && (
                                     <span className="px-1 py-0.2 bg-blue-100 text-blue-800 text-[9px] font-bold rounded">
                                       {side}
-                                    </span>
-                                  )}
-                                  {barcode && (
-                                    <span className="text-slate-500 font-mono">
-                                      | Barcode: <span className="font-semibold text-slate-800">{barcode}</span>
                                     </span>
                                   )}
                                   {batches.length > 1 && (
@@ -506,12 +492,20 @@ export const PrintableVoucher: React.FC<PrintableVoucherProps> = ({
       </div>
 
       {/* Narration / Terms / Remarks */}
-      {showNarration && voucher.notes && (
-        <div className="mb-4 text-[11px] text-slate-700 avoid-break">
-          <span className="font-bold text-slate-900">Narration / Remarks: </span>
-          <span>{voucher.notes}</span>
-        </div>
-      )}
+      {(() => {
+        const cleanedNotes = (voucher.notes || '')
+          .replace(/(?:\|\s*)?Payment Mode:\s*[^|]+/gi, '')
+          .replace(/(?:\|\s*)?Terms:\s*[^|]+/gi, '')
+          .replace(/^[\s|]+|[\s|]+$/g, '')
+          .replace(/\|\s*\|/g, '|')
+          .trim();
+        return showNarration && cleanedNotes ? (
+          <div className="mb-4 text-[11px] text-slate-700 avoid-break">
+            <span className="font-bold text-slate-900">Narration / Remarks: </span>
+            <span>{cleanedNotes}</span>
+          </div>
+        ) : null;
+      })()}
 
       {/* Terms & Conditions (if available) */}
       {effectiveShowTerms && (

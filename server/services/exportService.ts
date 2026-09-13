@@ -325,15 +325,20 @@ export class ExportService {
         u.code AS "SKU",
         CONCAT('SPH:', b.sph, ' CYL:', b.cyl, ' AXIS:', b.axis, ' ADD:', b.add, ' SIDE:', b.side) AS "Optical Power",
         sl.transaction_type AS "Transaction Type",
-        sl.document_type AS "Document Type",
-        sl.document_number AS "Document No",
+        COALESCE(sl.reference_type, sl.transaction_type) AS "Document Type",
+        COALESCE(si.invoice_number, pi.invoice_number, sr.return_number, pr.return_number, so.order_number, sl.reference_id, '-') AS "Document No",
         sl.quantity_in AS "Qty In",
         sl.quantity_out AS "Qty Out",
-        sl.balance_after AS "Balance After",
-        COALESCE(sl.notes, '') AS "Notes"
+        sl.balance AS "Balance After",
+        COALESCE(sl.reason, '') AS "Notes"
       FROM stock_ledger sl
       JOIN optical_batches b ON sl.batch_id = b.id
       JOIN unique_items u ON b.unique_item_id = u.id
+      LEFT JOIN sales_invoices si ON (sl.reference_type IN ('SALES_INVOICE', 'SALES_INVOICE_CANCEL') AND sl.reference_id = si.id::text)
+      LEFT JOIN purchase_invoices pi ON (sl.reference_type IN ('PURCHASE_INVOICE', 'PURCHASE_INVOICE_CANCEL') AND sl.reference_id = pi.id::text)
+      LEFT JOIN sales_returns sr ON (sl.reference_type IN ('SALES_RETURN', 'SALES_RETURN_CANCEL') AND sl.reference_id = sr.id::text)
+      LEFT JOIN purchase_returns pr ON (sl.reference_type IN ('PURCHASE_RETURN', 'PURCHASE_RETURN_CANCEL') AND sl.reference_id = pr.id::text)
+      LEFT JOIN sales_orders so ON (sl.reference_type = 'SALES_ORDER' AND sl.reference_id = so.id::text)
       WHERE sl.business_id = $1
     `;
     const params: any[] = [businessId];
@@ -455,7 +460,7 @@ export class ExportService {
         TO_CHAR(pr.return_date, 'YYYY-MM-DD') AS "Return Date",
         p.name AS "Supplier Name",
         pr.subtotal AS "Subtotal",
-        pr.tax_amount AS "Tax Amount",
+        (COALESCE(pr.igst_amount, 0) + COALESCE(pr.cgst_amount, 0) + COALESCE(pr.sgst_amount, 0)) AS "Tax Amount",
         pr.grand_total AS "Grand Total",
         pr.reason AS "Reason",
         pr.status AS "Status"
@@ -612,7 +617,7 @@ export class ExportService {
         TO_CHAR(sr.return_date, 'YYYY-MM-DD') AS "Return Date",
         p.name AS "Customer Name",
         sr.subtotal AS "Subtotal",
-        sr.tax_amount AS "Tax Amount",
+        (COALESCE(sr.igst_amount, 0) + COALESCE(sr.cgst_amount, 0) + COALESCE(sr.sgst_amount, 0)) AS "Tax Amount",
         sr.grand_total AS "Grand Total",
         sr.reason AS "Reason",
         sr.status AS "Status"
@@ -711,13 +716,18 @@ export class ExportService {
       SELECT
         TO_CHAR(l.created_at, 'YYYY-MM-DD HH24:MI:SS') AS "Date",
         l.transaction_type AS "Transaction Type",
-        l.document_type AS "Document Type",
-        l.document_number AS "Document No",
+        COALESCE(l.reference_type, l.transaction_type) AS "Document Type",
+        COALESCE(si.invoice_number, pi.invoice_number, sr.return_number, pr.return_number, pm.payment_number, l.reference_id, '-') AS "Document No",
         l.debit AS "Debit",
         l.credit AS "Credit",
         l.balance AS "Running Balance",
         COALESCE(l.notes, '') AS "Notes"
       FROM ${ledgerTable} l
+      LEFT JOIN sales_invoices si ON (l.reference_type IN ('SALES_INVOICE', 'SALES_INVOICE_CANCEL') AND l.reference_id = si.id::text)
+      LEFT JOIN purchase_invoices pi ON (l.reference_type IN ('PURCHASE_INVOICE', 'PURCHASE_INVOICE_CANCEL') AND l.reference_id = pi.id::text)
+      LEFT JOIN sales_returns sr ON (l.reference_type IN ('SALES_RETURN', 'SALES_RETURN_CANCEL') AND l.reference_id = sr.id::text)
+      LEFT JOIN purchase_returns pr ON (l.reference_type IN ('PURCHASE_RETURN', 'PURCHASE_RETURN_CANCEL') AND l.reference_id = pr.id::text)
+      LEFT JOIN payments pm ON (l.reference_type IN ('PAYMENT', 'PAYMENT_RECEIPT', 'PAYMENT_CANCEL') AND l.reference_id = pm.id::text)
       WHERE l.business_id = $1 AND l.party_id = $2
     `;
     const params: any[] = [businessId, filters.partyId];
@@ -747,7 +757,7 @@ export class ExportService {
         pm.payment_type AS "Payment Type",
         pm.payment_mode AS "Payment Mode",
         pm.amount AS "Amount",
-        pm.allocated_amount AS "Allocated Amount",
+        (pm.amount - pm.unallocated_amount) AS "Allocated Amount",
         pm.unallocated_amount AS "Unallocated Amount",
         COALESCE(pm.reference_number, '') AS "Reference Number",
         COALESCE(pm.bank_name, '') AS "Bank Name",

@@ -318,11 +318,6 @@ export const VoucherDetailModal: React.FC<VoucherDetailModalProps> = ({
                                   )}
                                 </div>
                                 <div className="flex flex-wrap items-center gap-1 mt-0.5">
-                                  {barcode && (
-                                    <span className="font-mono text-[10px] text-slate-500 bg-slate-100 px-1 py-0.5 rounded mr-1">
-                                      Barcode: {barcode}
-                                    </span>
-                                  )}
                                   {powerDescription && (
                                     <span className="text-[10px] text-slate-600 font-medium font-mono">
                                       Power: {powerDescription}
