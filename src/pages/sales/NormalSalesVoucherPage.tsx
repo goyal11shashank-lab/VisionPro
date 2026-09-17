@@ -24,6 +24,7 @@ import {
 } from '../../components/voucher/VoucherTypes';
 import { PrintPreviewModal } from '../../components/print/PrintPreviewModal';
 import { PrintableVoucher } from '../../components/print/PrintableVoucher';
+import { cleanNarrationNotes } from '../../utils/narrationHelper';
 
 interface Props {
   onNavigate?: (path: string) => void;
@@ -144,12 +145,9 @@ export const NormalSalesVoucherPage: React.FC<Props> = ({ onNavigate, onSuccess,
                 setPaymentMode(payModeMatch[1].trim());
               }
               // Clean Payment Mode, Terms, and Ref out of narration state
-              const cleanedNotes = inv.notes
-                .replace(/(?:\|\s*)?Payment Mode:\s*[^|]+/gi, '')
-                .replace(/(?:\|\s*)?Terms:\s*[^|]+/gi, '')
+              const cleanedNotes = cleanNarrationNotes(inv.notes)
                 .replace(/(?:\|\s*)?Ref:\s*[^|]+/gi, '')
                 .replace(/^[\s|]+|[\s|]+$/g, '')
-                .replace(/\|\s*\|/g, '|')
                 .trim();
               setNotes(cleanedNotes);
             }
@@ -616,12 +614,7 @@ export const NormalSalesVoucherPage: React.FC<Props> = ({ onNavigate, onSuccess,
         gstMode: gstMode,
         status: targetStatus,
         notes: (() => {
-          const cleaned = notes
-            .replace(/(?:\|\s*)?Payment Mode:\s*[^|]+/gi, '')
-            .replace(/(?:\|\s*)?Terms:\s*[^|]+/gi, '')
-            .replace(/^[\s|]+|[\s|]+$/g, '')
-            .replace(/\|\s*\|/g, '|')
-            .trim();
+          const cleaned = cleanNarrationNotes(notes);
           return cleaned
             ? `${cleaned}${referenceNumber ? ` | Ref: ${referenceNumber}` : ''}`
             : (referenceNumber ? `Ref: ${referenceNumber}` : undefined);

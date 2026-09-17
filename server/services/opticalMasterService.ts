@@ -59,7 +59,7 @@ export function validateOpticalPower(
 
   const sphNum = normalizeOpticalNumber(sphRaw);
   const cylNum = normalizeOpticalNumber(cylRaw);
-  let axisNum = normalizeOpticalNumber(axisRaw, 0);
+  let axisNum = Math.round(normalizeOpticalNumber(axisRaw, 0));
   let addNum = normalizeOpticalNumber(addRaw, 0);
   let sideNormalized: 'NONE' | 'R' | 'L' | 'BE' = 'NONE';
 
@@ -80,14 +80,20 @@ export function validateOpticalPower(
     }
     axisNum = 0;
     if (addRaw !== undefined && addRaw !== null && addRaw !== '' && Number(addRaw) !== 0) {
-      throw new Error('Single Vision (SV) lenses do not have ADD power.');
+      throw new Error('ADD is not applicable to Single Vision.');
     }
     addNum = 0;
+    if (sideRaw !== undefined && sideRaw !== null && String(sideRaw).trim() !== '' && String(sideRaw).trim().toUpperCase() !== 'NONE') {
+      throw new Error('Single Vision (SV) lenses do not have SIDE.');
+    }
     sideNormalized = 'NONE';
   }
 
   // Category Specific Rule: Kryptok Bifocal (KT)
   if (cat === 'KT') {
+    if (sideRaw !== undefined && sideRaw !== null && String(sideRaw).trim() !== '' && String(sideRaw).trim().toUpperCase() !== 'NONE') {
+      throw new Error('Kryptok (KT) lenses do not have SIDE.');
+    }
     // KT has SPH, CYL, AXIS (when CYL != 0), ADD. No side.
     if (cylNum !== 0) {
       if (axisRaw === undefined || axisRaw === null || axisRaw === '' || isNaN(Number(axisRaw))) {
@@ -99,6 +105,11 @@ export function validateOpticalPower(
     } else {
       axisNum = 0;
     }
+
+    if (addRaw === undefined || addRaw === null || addRaw === '' || isNaN(Number(addRaw))) {
+      throw new Error('ADD power is required for Kryptok (KT) lenses.');
+    }
+
     sideNormalized = 'NONE';
   }
 
@@ -116,11 +127,24 @@ export function validateOpticalPower(
       axisNum = 0;
     }
 
-    const sideUpper = (sideRaw || '').trim().toUpperCase();
-    if (sideUpper !== 'R' && sideUpper !== 'L' && sideUpper !== 'BE') {
+    if (addRaw === undefined || addRaw === null || addRaw === '' || isNaN(Number(addRaw))) {
+      throw new Error('ADD power is required for Progressive (PROG) lenses.');
+    }
+
+    if (sideRaw === undefined || sideRaw === null || String(sideRaw).trim() === '') {
+      throw new Error('SIDE is required for Progressive (PROG) lenses.');
+    }
+
+    const sideClean = String(sideRaw).trim().toUpperCase();
+    if (sideClean === 'R' || sideClean === 'RIGHT' || sideClean === 'RIGHT EYE') {
+      sideNormalized = 'R';
+    } else if (sideClean === 'L' || sideClean === 'LEFT' || sideClean === 'LEFT EYE') {
+      sideNormalized = 'L';
+    } else if (sideClean === 'BE' || sideClean === 'BOTH' || sideClean === 'BOTH EYES') {
+      sideNormalized = 'BE';
+    } else {
       throw new Error('Progressive (PROG) lens requires SIDE to be specified as "R", "L", or "BE".');
     }
-    sideNormalized = sideUpper as 'R' | 'L' | 'BE';
   }
 
   // Category Specific Rule: OTHER
@@ -158,6 +182,46 @@ export function validateOpticalPower(
     identityKey,
     categoryCode: cat as 'SV' | 'KT' | 'PROG' | 'OTHER',
   };
+}
+
+/**
+ * Format readable Power Specification for display / preview ONLY.
+ * e.g.:
+ * SV: -2.50 / -1.00
+ * KT: +1.00 / -2.00 × 90 ADD +2.00
+ * PROG: -2.00 / -1.00 × 180 ADD +2.00 R
+ */
+export function buildBatchDisplayName(powers: {
+  categoryCode?: string | null;
+  sph: number | string;
+  cyl: number | string;
+  axis?: number | string | null;
+  add?: number | string | null;
+  side?: string | null;
+}): string {
+  const cat = (powers.categoryCode || 'SV').toUpperCase().trim();
+  const sphNum = Number(powers.sph) || 0;
+  const cylNum = Number(powers.cyl) || 0;
+  const axisNum = Math.round(Number(powers.axis) || 0);
+  const addNum = Number(powers.add) || 0;
+  const side = powers.side ? String(powers.side).toUpperCase().trim() : 'NONE';
+
+  const sphStr = sphNum > 0 ? `+${sphNum.toFixed(2)}` : sphNum.toFixed(2);
+  const cylStr = cylNum > 0 ? `+${cylNum.toFixed(2)}` : cylNum.toFixed(2);
+  const axisPart = cylNum !== 0 && axisNum > 0 ? ` × ${axisNum}` : '';
+  const addPart = addNum > 0 ? ` ADD +${addNum.toFixed(2)}` : '';
+
+  if (cat === 'SV') {
+    return `${sphStr} / ${cylStr}`;
+  }
+  if (cat === 'KT') {
+    return `${sphStr} / ${cylStr}${axisPart}${addPart}`;
+  }
+  if (cat === 'PROG') {
+    const sidePart = side && side !== 'NONE' ? ` ${side}` : '';
+    return `${sphStr} / ${cylStr}${axisPart}${addPart}${sidePart}`;
+  }
+  return `${sphStr} / ${cylStr}`;
 }
 
 /**
@@ -221,8 +285,8 @@ export async function findOrCreateOpticalBatch(input: OpticalPowerInput) {
     throw err;
   }
 
-  // Direct Stock Item Category drives batch parameters
-  const categoryCode = uItem.categoryCode || uItem.opticalCategory || 'SV';
+  // Direct Stock Item Category drives batch parameters (prioritize direct opticalCategory on Stock Item)
+  const categoryCode = (uItem.opticalCategory || uItem.categoryCode || 'SV').toUpperCase().trim();
   let categoryId = input.categoryId || uItem.categoryId;
 
   // Preserve legacy categoryId foreign key on opticalBatches if present
@@ -485,6 +549,7 @@ export async function updateOpticalBatch(
       name: uniqueItems.name,
       code: uniqueItems.code,
       maintainBatches: uniqueItems.maintainBatches,
+      opticalCategory: uniqueItems.opticalCategory,
       categoryId: primaryItems.categoryId,
       categoryCode: categories.code,
     })
@@ -504,7 +569,7 @@ export async function updateOpticalBatch(
     throw err;
   }
 
-  const categoryCode = uItem.categoryCode || 'SV';
+  const categoryCode = (uItem.opticalCategory || uItem.categoryCode || 'SV').toUpperCase().trim();
 
   const sph = input.sph !== undefined ? input.sph : current.sph;
   const cyl = input.cyl !== undefined ? input.cyl : current.cyl;

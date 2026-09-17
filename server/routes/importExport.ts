@@ -155,6 +155,13 @@ router.post(
       // Extract detected header keys
       const detectedHeaders = Object.keys(rawRows[0] || {});
 
+      // Check for legacy optical batch format
+      if (importType === 'OPTICAL_BATCH' && ColumnMappingService.isLegacyOpticalBatchFormat(detectedHeaders)) {
+        return res.status(400).json({
+          error: 'This Batch Import file uses the old power format. Please download the latest Batch Import Template containing separate SPH, CYL, AXIS, ADD and SIDE columns.',
+        });
+      }
+
       // Auto-detect column mapping or use provided override
       let columnMapping: Record<string, string> = {};
       if (req.body.columnMapping) {

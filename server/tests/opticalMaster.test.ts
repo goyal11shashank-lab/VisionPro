@@ -312,6 +312,45 @@ export async function runOpticalMasterTests(): Promise<{ total: number; passed: 
       throw new Error('Second call must report isNew=false');
     }
 
+    // KT: Different AXIS must yield distinct batches
+    const [ktItem] = await db.select().from(uniqueItems).where(and(eq(uniqueItems.businessId, defaultBiz.id), eq(uniqueItems.code, 'PGHC_KT_STD'))).limit(1);
+    if (ktItem) {
+      const ktBatchAxis90 = await findOrCreateOpticalBatch({
+        businessId: defaultBiz.id,
+        uniqueItemId: ktItem.id,
+        sph: 2.00,
+        cyl: -1.00,
+        axis: 90,
+        add: 1.50,
+      });
+
+      const ktBatchAxis180 = await findOrCreateOpticalBatch({
+        businessId: defaultBiz.id,
+        uniqueItemId: ktItem.id,
+        sph: 2.00,
+        cyl: -1.00,
+        axis: 180,
+        add: 1.50,
+      });
+
+      if (ktBatchAxis90.batch.id === ktBatchAxis180.batch.id) {
+        throw new Error('Distinct AXIS batches unexpectedly merged into same batch');
+      }
+
+      const ktBatchAxis90Dup = await findOrCreateOpticalBatch({
+        businessId: defaultBiz.id,
+        uniqueItemId: ktItem.id,
+        sph: '2.00',
+        cyl: '-1.00',
+        axis: 90,
+        add: '1.50',
+      });
+
+      if (ktBatchAxis90Dup.batch.id !== ktBatchAxis90.batch.id || ktBatchAxis90Dup.isNew !== false) {
+        throw new Error('Identical KT batch failed idempotency lookup');
+      }
+    }
+
     results.push({
       scenario: 9,
       title: 'Optical Batch idempotency & duplicate power prevention',
@@ -353,6 +392,7 @@ export async function runOpticalMasterTests(): Promise<{ total: number; passed: 
       primaryItemId: primaryId2,
       name: 'HC SV SKU 2',
       code: 'HC_SV_SKU2',
+      maintainBatches: true,
     }).onConflictDoNothing().returning();
     const uItemId2 = uItem2?.id || (await db.select().from(uniqueItems).where(and(eq(uniqueItems.businessId, secondBiz.id), eq(uniqueItems.code, 'HC_SV_SKU2'))))[0].id;
 
@@ -435,6 +475,13 @@ export async function runOpticalMasterTests(): Promise<{ total: number; passed: 
       ktMissingAxisRejected = true;
     }
 
+    let ktMissingAddRejected = false;
+    try {
+      validateOpticalPower('KT', 1.00, -1.00, 90, null, 'NONE');
+    } catch (e: any) {
+      ktMissingAddRejected = true;
+    }
+
     let progMissingSideRejected = false;
     try {
       validateOpticalPower('PROG', 1.00, -1.00, 90, 2.00, null);
@@ -442,8 +489,15 @@ export async function runOpticalMasterTests(): Promise<{ total: number; passed: 
       progMissingSideRejected = true;
     }
 
-    if (!svAxisRejected || !ktMissingAxisRejected || !progMissingSideRejected) {
-      throw new Error(`Validation rules failed: svAxisRejected=${svAxisRejected}, ktMissingAxisRejected=${ktMissingAxisRejected}, progMissingSideRejected=${progMissingSideRejected}`);
+    let progMissingAddRejected = false;
+    try {
+      validateOpticalPower('PROG', 1.00, -1.00, 90, null, 'R');
+    } catch (e: any) {
+      progMissingAddRejected = true;
+    }
+
+    if (!svAxisRejected || !ktMissingAxisRejected || !ktMissingAddRejected || !progMissingSideRejected || !progMissingAddRejected) {
+      throw new Error(`Validation rules failed: svAxisRejected=${svAxisRejected}, ktMissingAxisRejected=${ktMissingAxisRejected}, ktMissingAddRejected=${ktMissingAddRejected}, progMissingSideRejected=${progMissingSideRejected}, progMissingAddRejected=${progMissingAddRejected}`);
     }
 
     results.push({

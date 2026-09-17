@@ -1448,7 +1448,12 @@ export class PaymentService {
    * Customer Outstanding Overview
    */
   static async getCustomerOutstanding(businessId: string, filters?: { search?: string }) {
-    const searchFilter = filters?.search ? `AND (p.name ILIKE '%${filters.search}%' OR p.mobile ILIKE '%${filters.search}%')` : '';
+    const params: any[] = [businessId];
+    let searchFilter = '';
+    if (filters?.search?.trim()) {
+      params.push(`%${filters.search.trim()}%`);
+      searchFilter = `AND (p.name ILIKE $${params.length} OR p.mobile ILIKE $${params.length})`;
+    }
 
     const query = `
       WITH LatestLedger AS (
@@ -1464,19 +1469,19 @@ export class PaymentService {
           MIN(si.invoice_date) as oldest_invoice_date,
           COALESCE(SUM(si.grand_total - COALESCE(pa.paid, 0)), 0) as total_unpaid_amount,
           COALESCE(SUM(CASE 
-            WHEN CURRENT_DATE - si.invoice_date <= 30 THEN (si.grand_total - COALESCE(pa.paid, 0))
+            WHEN (CURRENT_DATE - si.invoice_date::date) <= 30 THEN (si.grand_total - COALESCE(pa.paid, 0))
             ELSE 0
           END), 0) as bucket_0_30,
           COALESCE(SUM(CASE 
-            WHEN CURRENT_DATE - si.invoice_date BETWEEN 31 AND 60 THEN (si.grand_total - COALESCE(pa.paid, 0))
+            WHEN (CURRENT_DATE - si.invoice_date::date) BETWEEN 31 AND 60 THEN (si.grand_total - COALESCE(pa.paid, 0))
             ELSE 0
           END), 0) as bucket_31_60,
           COALESCE(SUM(CASE 
-            WHEN CURRENT_DATE - si.invoice_date BETWEEN 61 AND 90 THEN (si.grand_total - COALESCE(pa.paid, 0))
+            WHEN (CURRENT_DATE - si.invoice_date::date) BETWEEN 61 AND 90 THEN (si.grand_total - COALESCE(pa.paid, 0))
             ELSE 0
           END), 0) as bucket_61_90,
           COALESCE(SUM(CASE 
-            WHEN CURRENT_DATE - si.invoice_date > 90 THEN (si.grand_total - COALESCE(pa.paid, 0))
+            WHEN (CURRENT_DATE - si.invoice_date::date) > 90 THEN (si.grand_total - COALESCE(pa.paid, 0))
             ELSE 0
           END), 0) as bucket_over_90
         FROM sales_invoices si
@@ -1515,7 +1520,7 @@ export class PaymentService {
       ORDER BY COALESCE(ll.balance::numeric, 0) DESC, p.name ASC
     `;
 
-    const res = await pool.query(query, [businessId]);
+    const res = await pool.query(query, params);
     return res.rows.map(r => ({
       partyId: r.party_id,
       partyName: r.party_name,
@@ -1543,7 +1548,12 @@ export class PaymentService {
    * Supplier Outstanding Overview
    */
   static async getSupplierOutstanding(businessId: string, filters?: { search?: string }) {
-    const searchFilter = filters?.search ? `AND (p.name ILIKE '%${filters.search}%' OR p.mobile ILIKE '%${filters.search}%')` : '';
+    const params: any[] = [businessId];
+    let searchFilter = '';
+    if (filters?.search?.trim()) {
+      params.push(`%${filters.search.trim()}%`);
+      searchFilter = `AND (p.name ILIKE $${params.length} OR p.mobile ILIKE $${params.length})`;
+    }
 
     const query = `
       WITH LatestLedger AS (
@@ -1559,19 +1569,19 @@ export class PaymentService {
           MIN(pi.invoice_date) as oldest_bill_date,
           COALESCE(SUM(pi.grand_total - COALESCE(pa.paid, 0)), 0) as total_unpaid_amount,
           COALESCE(SUM(CASE 
-            WHEN CURRENT_DATE - pi.invoice_date <= 30 THEN (pi.grand_total - COALESCE(pa.paid, 0))
+            WHEN (CURRENT_DATE - pi.invoice_date::date) <= 30 THEN (pi.grand_total - COALESCE(pa.paid, 0))
             ELSE 0
           END), 0) as bucket_0_30,
           COALESCE(SUM(CASE 
-            WHEN CURRENT_DATE - pi.invoice_date BETWEEN 31 AND 60 THEN (pi.grand_total - COALESCE(pa.paid, 0))
+            WHEN (CURRENT_DATE - pi.invoice_date::date) BETWEEN 31 AND 60 THEN (pi.grand_total - COALESCE(pa.paid, 0))
             ELSE 0
           END), 0) as bucket_31_60,
           COALESCE(SUM(CASE 
-            WHEN CURRENT_DATE - pi.invoice_date BETWEEN 61 AND 90 THEN (pi.grand_total - COALESCE(pa.paid, 0))
+            WHEN (CURRENT_DATE - pi.invoice_date::date) BETWEEN 61 AND 90 THEN (pi.grand_total - COALESCE(pa.paid, 0))
             ELSE 0
           END), 0) as bucket_61_90,
           COALESCE(SUM(CASE 
-            WHEN CURRENT_DATE - pi.invoice_date > 90 THEN (pi.grand_total - COALESCE(pa.paid, 0))
+            WHEN (CURRENT_DATE - pi.invoice_date::date) > 90 THEN (pi.grand_total - COALESCE(pa.paid, 0))
             ELSE 0
           END), 0) as bucket_over_90
         FROM purchase_invoices pi
@@ -1610,7 +1620,7 @@ export class PaymentService {
       ORDER BY COALESCE(ll.balance::numeric, 0) DESC, p.name ASC
     `;
 
-    const res = await pool.query(query, [businessId]);
+    const res = await pool.query(query, params);
     return res.rows.map(r => ({
       partyId: r.party_id,
       partyName: r.party_name,

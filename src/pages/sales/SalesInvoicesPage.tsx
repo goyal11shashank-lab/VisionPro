@@ -34,6 +34,7 @@ import { PrintPreviewModal } from '../../components/print/PrintPreviewModal.js';
 import { PrintableVoucher } from '../../components/print/PrintableVoucher.js';
 import { exportToExcel, ExcelColumn } from '../../utils/excelExporter.js';
 import { exportToCsv } from '../../utils/csvExporter.js';
+import { cleanNarrationNotes } from '../../utils/narrationHelper.js';
 
 interface SalesInvoiceLineBatch {
   id?: string;
@@ -664,12 +665,7 @@ export const SalesInvoicesPage: React.FC<{
         partyId: selectedPartyId,
         invoiceDate,
         paymentTerms,
-        notes: (invoiceNotes || '')
-          .replace(/(?:\|\s*)?Payment Mode:\s*[^|]+/gi, '')
-          .replace(/(?:\|\s*)?Terms:\s*[^|]+/gi, '')
-          .replace(/^[\s|]+|[\s|]+$/g, '')
-          .replace(/\|\s*\|/g, '|')
-          .trim() || undefined,
+        notes: cleanNarrationNotes(invoiceNotes) || undefined,
         status: targetStatus,
         lines: formLines.map(l => ({
           uniqueItemId: l.uniqueItemId,
@@ -1639,7 +1635,6 @@ export const SalesInvoicesPage: React.FC<{
             <div className="px-6 py-3.5 bg-slate-900 text-white flex items-center justify-between print:hidden">
               <div className="flex items-center gap-3">
                 <span className="font-mono font-bold">{selectedInvoice.invoiceNumber}</span>
-                {getStatusBadge(selectedInvoice.status)}
               </div>
               <div className="flex items-center gap-2">
                 {selectedInvoice.status !== 'CANCELLED' && (
@@ -1789,7 +1784,6 @@ export const SalesInvoicesPage: React.FC<{
                                     const cyl = b.cyl ?? b.batch?.cyl ?? '0.00';
                                     const axis = b.axis ?? b.batch?.axis;
                                     const add = b.add ?? b.batch?.add;
-                                    const barcode = b.barcode ?? b.batch?.barcode;
                                     const side = b.side ?? b.batch?.side;
                                     return (
                                       <div key={bIdx} className="flex flex-wrap items-center gap-x-2 bg-slate-50 p-1 rounded border border-slate-200/60 text-slate-700">

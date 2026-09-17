@@ -1,168 +1,174 @@
 import * as XLSX from 'xlsx';
 
 export interface SampleOpticalBatchRow {
-  unique_item: string;
-  batch_name: string;
-  sku: string;
-  opening_stock_quantity: number | string;
-  purchase_cost: number | string;
-  selling_price: number | string;
-  unit: string;
-  barcode: string;
-  supplier: string;
-  purchase_date: string;
-  batch_reference: string;
-  expiry_date: string;
-  location: string;
-  reorder_level: number | string;
-  remarks: string;
+  'Stock Item': string;
+  SPH: string | number;
+  CYL: string | number;
+  AXIS: string | number;
+  ADD: string | number;
+  SIDE: string;
+  SKU: string;
+  'Opening Stock Qty': number | string;
+  'Purchase Cost': number | string;
+  'Selling Price': number | string;
+  Barcode: string;
+  Supplier: string;
+  Notes: string;
+  Status: string;
 }
 
 export const SAMPLE_OPTICAL_BATCH_ROWS: SampleOpticalBatchRow[] = [
   {
-    unique_item: 'HC_SV_-6/-2',
-    batch_name: '-6.00/-2.00',
-    sku: 'HCSV-600-200',
-    opening_stock_quantity: 10,
-    purchase_cost: 100,
-    selling_price: 250,
-    unit: 'prs',
-    barcode: '890000000001',
-    supplier: 'ABC Optical',
-    purchase_date: '2026-08-31',
-    batch_reference: 'AB123',
-    expiry_date: '',
-    location: 'Main Store',
-    reorder_level: 2,
-    remarks: '',
+    'Stock Item': 'HC SV -6/-2',
+    SPH: '-2.50',
+    CYL: '-1.00',
+    AXIS: '',
+    ADD: '',
+    SIDE: '',
+    SKU: 'HCSV-250-100',
+    'Opening Stock Qty': 10,
+    'Purchase Cost': 150.00,
+    'Selling Price': 250.00,
+    Barcode: '',
+    Supplier: 'Vision Tech Distributors',
+    Notes: 'Single vision stock lens',
+    Status: 'ACTIVE',
   },
   {
-    unique_item: 'HC_SV_+4/+2',
-    batch_name: '+4.00/+2.00',
-    sku: 'HCSV-400-200',
-    opening_stock_quantity: 5,
-    purchase_cost: 110,
-    selling_price: 275,
-    unit: 'prs',
-    barcode: '890000000002',
-    supplier: 'XYZ Optical',
-    purchase_date: '2026-08-31',
-    batch_reference: 'XY456',
-    expiry_date: '',
-    location: 'Main Store',
-    reorder_level: 1,
-    remarks: '',
+    'Stock Item': 'BCG KT 2 CYL',
+    SPH: '+1.00',
+    CYL: '-2.00',
+    AXIS: '90',
+    ADD: '+2.00',
+    SIDE: '',
+    SKU: 'BCGKT-P100-M200-90-P200',
+    'Opening Stock Qty': 5,
+    'Purchase Cost': 280.00,
+    'Selling Price': 450.00,
+    Barcode: '',
+    Supplier: 'Essilor India Pvt Ltd',
+    Notes: 'Kryptok bifocal batch',
+    Status: 'ACTIVE',
+  },
+  {
+    'Stock Item': 'BCG PROG',
+    SPH: '-2.00',
+    CYL: '-1.00',
+    AXIS: '180',
+    ADD: '+2.00',
+    SIDE: 'R',
+    SKU: 'BCGPROG-M200-M100-180-P200-R',
+    'Opening Stock Qty': 2,
+    'Purchase Cost': 650.00,
+    'Selling Price': 1100.00,
+    Barcode: '',
+    Supplier: 'Hoya Lens India',
+    Notes: 'Progressive right eye',
+    Status: 'ACTIVE',
   },
 ];
 
 export const OPTICAL_BATCH_COLUMNS = [
-  'unique_item',
-  'batch_name',
-  'sku',
-  'opening_stock_quantity',
-  'purchase_cost',
-  'selling_price',
-  'unit',
-  'barcode',
-  'supplier',
-  'purchase_date',
-  'batch_reference',
-  'expiry_date',
-  'location',
-  'reorder_level',
-  'remarks',
+  'Stock Item',
+  'SPH',
+  'CYL',
+  'AXIS',
+  'ADD',
+  'SIDE',
+  'SKU',
+  'Opening Stock Qty',
+  'Purchase Cost',
+  'Selling Price',
+  'Barcode',
+  'Supplier',
+  'Notes',
+  'Status',
 ];
 
 export const OPTICAL_BATCH_INSTRUCTIONS = [
   {
-    column: 'unique_item',
+    column: 'Stock Item',
     requirement: 'Required',
-    format: 'HC_SV_-6/-2',
-    description: 'Stock Item code/name. Must already exist in the software. Do NOT create a new Stock Item through Excel.',
+    format: 'HC SV -6/-2, BCG KT 2 CYL',
+    description: 'Stock Item code or name. Must already exist in the software. Stock Items cannot be auto-created.',
   },
   {
-    column: 'batch_name',
+    column: 'SPH',
     requirement: 'Required',
-    format: '-6.00/-2.00 or +4.00/+2.00',
-    description: 'Batch/power identification belonging to the selected Stock Item.',
+    format: '-2.50, +1.00, 0.00',
+    description: 'Spherical power in diopters. Required for Single Vision (SV), Kryptok (KT), and Progressive (PROG).',
   },
   {
-    column: 'sku',
+    column: 'CYL',
     requirement: 'Required',
-    format: 'HCSV-600-200',
-    description: 'Unique SKU for the batch.',
+    format: '-1.00, -2.00, 0.00',
+    description: 'Cylindrical power in diopters. Required for SV, KT, and PROG.',
   },
   {
-    column: 'opening_stock_quantity',
+    column: 'AXIS',
+    requirement: 'Category-specific',
+    format: '90, 180 (0 to 180)',
+    description: 'Cylinder axis in degrees. Required for KT and PROG when CYL is non-zero. Must be blank for Single Vision (SV).',
+  },
+  {
+    column: 'ADD',
+    requirement: 'Category-specific',
+    format: '+2.00, +1.50',
+    description: 'Near addition power. Required for KT (Bifocal) and PROG (Progressive). Must be blank for Single Vision (SV).',
+  },
+  {
+    column: 'SIDE',
+    requirement: 'Category-specific',
+    format: 'R, L, or BE',
+    description: 'Eye side. Required for Progressive (PROG): "R" (Right), "L" (Left), or "BE" (Both Eyes). Must be blank for SV and KT.',
+  },
+  {
+    column: 'SKU',
     requirement: 'Required',
-    format: '10, 0.5, 1, 1.5',
-    description: 'Initial stock quantity to be added in pairs/pieces. Must be a positive value in steps of 0.5 (e.g., 0.5, 1, 1.5, 2).',
+    format: 'HCSV-250-100',
+    description: 'Unique SKU identifier for the batch. Must be unique per business and per file.',
   },
   {
-    column: 'purchase_cost',
+    column: 'Opening Stock Qty',
     requirement: 'Required',
-    format: '100',
-    description: 'Purchase cost according to the existing stock/batch pricing structure.',
+    format: '10, 5, 2 (steps of 0.5 for PRS)',
+    description: 'Initial stock quantity. For pair unit (PRS), must be in steps of 0.5 (e.g., 0.5, 1, 1.5, 2).',
   },
   {
-    column: 'selling_price',
+    column: 'Purchase Cost',
     requirement: 'Required',
-    format: '250',
-    description: 'Selling price according to the existing pricing architecture. Do not create a second pricing system.',
+    format: '150.00',
+    description: 'Procurement / purchase rate per unit (non-negative numeric).',
   },
   {
-    column: 'unit',
+    column: 'Selling Price',
     requirement: 'Required',
-    format: 'prs',
-    description: 'Must use a unit supported by the application (prs, pairs, pcs, pieces). Default is prs.',
+    format: '250.00',
+    description: 'Selling price / MRP per unit (non-negative numeric).',
   },
   {
-    column: 'barcode',
+    column: 'Barcode',
     requirement: 'Optional',
-    format: '890000000001',
-    description: 'Optional barcode. Must comply with the existing barcode rules (Standard Code 128 auto-generated if left empty).',
+    format: 'OPT-SV-000101',
+    description: 'Optional Code 128 permanent barcode. Standard unique barcode is auto-generated if left empty.',
   },
   {
-    column: 'supplier',
+    column: 'Supplier',
     requirement: 'Optional',
-    format: 'ABC Optical',
-    description: 'Optional supplier associated with the opening stock.',
+    format: 'Vision Tech Distributors',
+    description: 'Optional supplier name or party code associated with the opening stock.',
   },
   {
-    column: 'purchase_date',
+    column: 'Notes',
     requirement: 'Optional',
-    format: '2026-08-31',
-    description: 'Optional purchase/opening-stock date (YYYY-MM-DD format).',
+    format: 'Single vision stock lens',
+    description: 'Optional batch notes, lot references, or comments.',
   },
   {
-    column: 'batch_reference',
+    column: 'Status',
     requirement: 'Optional',
-    format: 'AB123',
-    description: 'Optional supplier/manufacturer batch reference.',
-  },
-  {
-    column: 'expiry_date',
-    requirement: 'Optional',
-    format: '2028-12-31',
-    description: 'Optional expiry date (YYYY-MM-DD format).',
-  },
-  {
-    column: 'location',
-    requirement: 'Optional',
-    format: 'Main Store',
-    description: 'Optional inventory location.',
-  },
-  {
-    column: 'reorder_level',
-    requirement: 'Optional',
-    format: '2',
-    description: 'Optional minimum stock threshold.',
-  },
-  {
-    column: 'remarks',
-    requirement: 'Optional',
-    format: 'Opening balance',
-    description: 'Optional notes or comments.',
+    format: 'ACTIVE',
+    description: 'Batch lifecycle status. Allowed: ACTIVE, INACTIVE. Defaults to ACTIVE.',
   },
 ];
 
@@ -185,21 +191,20 @@ export function generateClientOpticalBatchTemplate(): void {
 
   // Set column widths for readability
   wsStock['!cols'] = [
-    { wch: 18 }, // unique_item
-    { wch: 16 }, // batch_name
-    { wch: 18 }, // sku
-    { wch: 24 }, // opening_stock_quantity
-    { wch: 15 }, // purchase_cost
-    { wch: 15 }, // selling_price
-    { wch: 10 }, // unit
-    { wch: 18 }, // barcode
-    { wch: 18 }, // supplier
-    { wch: 15 }, // purchase_date
-    { wch: 18 }, // batch_reference
-    { wch: 14 }, // expiry_date
-    { wch: 16 }, // location
-    { wch: 15 }, // reorder_level
-    { wch: 22 }, // remarks
+    { wch: 22 }, // Stock Item
+    { wch: 10 }, // SPH
+    { wch: 10 }, // CYL
+    { wch: 10 }, // AXIS
+    { wch: 10 }, // ADD
+    { wch: 10 }, // SIDE
+    { wch: 22 }, // SKU
+    { wch: 18 }, // Opening Stock Qty
+    { wch: 15 }, // Purchase Cost
+    { wch: 15 }, // Selling Price
+    { wch: 18 }, // Barcode
+    { wch: 25 }, // Supplier
+    { wch: 28 }, // Notes
+    { wch: 12 }, // Status
   ];
 
   XLSX.utils.book_append_sheet(wb, wsStock, 'Stock Import');
@@ -217,8 +222,8 @@ export function generateClientOpticalBatchTemplate(): void {
 
   const wsInstructions = XLSX.utils.aoa_to_sheet(instructionRows);
   wsInstructions['!cols'] = [
-    { wch: 24 }, // Field Name
-    { wch: 14 }, // Requirement
+    { wch: 20 }, // Field Name
+    { wch: 18 }, // Requirement
     { wch: 28 }, // Format / Example
     { wch: 85 }, // Description
   ];

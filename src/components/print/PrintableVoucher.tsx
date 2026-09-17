@@ -7,6 +7,7 @@ import React from 'react';
 import { Business } from '../../types/index.js';
 import { numberToIndianWords } from '../../utils/numberToWords.js';
 import { useBusinessSettings } from '../../context/SettingsContext.js';
+import { cleanNarrationNotes } from '../../utils/narrationHelper.js';
 
 export type VoucherDocumentType =
   | 'SALES_INVOICE'
@@ -252,12 +253,6 @@ export const PrintableVoucher: React.FC<PrintableVoucherProps> = ({
                 <span className="font-mono font-bold">{sourceOrderNo}</span>
               </div>
             )}
-            {paymentTerms && (
-              <div className="flex justify-between">
-                <span className="text-slate-500 font-medium">Payment Terms:</span>
-                <span className="font-semibold text-slate-800">{paymentTerms}</span>
-              </div>
-            )}
             {dueDate && (
               <div className="flex justify-between">
                 <span className="text-slate-500 font-medium">Due Date:</span>
@@ -355,7 +350,6 @@ export const PrintableVoucher: React.FC<PrintableVoucherProps> = ({
                               const axis = b.axis ?? b.batch?.axis;
                               const add = b.add ?? b.batch?.add;
                               const side = b.side ?? b.batch?.side;
-                              const barcode = b.barcode ?? b.batch?.barcode;
                               const batchQty = b.quantity || 1;
 
                               return (
@@ -493,12 +487,7 @@ export const PrintableVoucher: React.FC<PrintableVoucherProps> = ({
 
       {/* Narration / Terms / Remarks */}
       {(() => {
-        const cleanedNotes = (voucher.notes || '')
-          .replace(/(?:\|\s*)?Payment Mode:\s*[^|]+/gi, '')
-          .replace(/(?:\|\s*)?Terms:\s*[^|]+/gi, '')
-          .replace(/^[\s|]+|[\s|]+$/g, '')
-          .replace(/\|\s*\|/g, '|')
-          .trim();
+        const cleanedNotes = cleanNarrationNotes(voucher.notes);
         return showNarration && cleanedNotes ? (
           <div className="mb-4 text-[11px] text-slate-700 avoid-break">
             <span className="font-bold text-slate-900">Narration / Remarks: </span>

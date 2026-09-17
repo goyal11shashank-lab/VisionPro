@@ -17,6 +17,7 @@ import {
   rankSearchMatch,
 } from '../../utils/searchNormalization';
 import { BatchAllocation, OpticalCategoryCode } from './VoucherTypes';
+import { useBusinessSettings } from '../../context/BusinessSettingsContext';
 
 /**
  * Checks whether a quantity is a valid quantity for the item's unit:
@@ -36,11 +37,33 @@ export function isValidHalfStepQty(qty: number): boolean {
   return isValidQtyForUnit(qty, 'PRS');
 }
 
-interface OpticalBatchModalProps {
+export function parsePowerFromQuery(query: string) {
+  if (!query) return { sph: '0.00', cyl: '0.00', axis: '' };
+  const clean = query.trim();
+  const parts = clean.split(/[\s/|,]+/);
+  let sph = '0.00';
+  let cyl = '0.00';
+  let axis = '';
+  if (parts.length >= 1 && !isNaN(parseFloat(parts[0]))) {
+    const s = parseFloat(parts[0]);
+    sph = s > 0 ? `+${s.toFixed(2)}` : s.toFixed(2);
+  }
+  if (parts.length >= 2 && !isNaN(parseFloat(parts[1]))) {
+    const c = parseFloat(parts[1]);
+    cyl = c > 0 ? `+${c.toFixed(2)}` : c.toFixed(2);
+  }
+  if (parts.length >= 3 && !isNaN(parseInt(parts[2], 10))) {
+    axis = String(Math.min(180, Math.max(0, parseInt(parts[2], 10))));
+  }
+  return { sph, cyl, axis };
+}
+
+export interface OpticalBatchModalProps {
   isOpen: boolean;
   onClose: () => void;
   onApply: (batches: BatchAllocation[], lineQty: number) => void;
   mode: 'sales' | 'purchase';
+  allowBatchCreate?: boolean;
   itemName: string;
   itemCode?: string;
   uniqueItemId?: string;
@@ -63,6 +86,7 @@ export const OpticalBatchModal: React.FC<OpticalBatchModalProps> = ({
   onClose,
   onApply,
   mode,
+  allowBatchCreate,
   itemName,
   itemCode,
   uniqueItemId,
@@ -73,6 +97,13 @@ export const OpticalBatchModal: React.FC<OpticalBatchModalProps> = ({
   lineQuantity = 1,
   lineRate = 0,
 }) => {
+  const { settings } = useBusinessSettings();
+  const canCreateBatch = allowBatchCreate !== undefined
+    ? allowBatchCreate
+    : (mode === 'purchase'
+        ? (settings?.purchase?.allowNewBatchCreation ?? true)
+        : (settings?.sales?.allowNewBatchCreation ?? true));
+
   const normCategory = (String(categoryCode || 'SV').toUpperCase()) as OpticalCategoryCode;
   const isBifocalOrProg = normCategory === 'KT' || normCategory === 'PROG';
   const unitDisplay = (unit || 'PRS').toUpperCase();
@@ -96,7 +127,7 @@ export const OpticalBatchModal: React.FC<OpticalBatchModalProps> = ({
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [duplicateNotice, setDuplicateNotice] = useState<string | null>(null);
 
-  // Purchase mode: New batch creation drawer
+  // Batch creation drawer
   const [showCreateBatch, setShowCreateBatch] = useState(false);
   const [newSph, setNewSph] = useState('0.00');
   const [newCyl, setNewCyl] = useState('0.00');
@@ -105,6 +136,15 @@ export const OpticalBatchModal: React.FC<OpticalBatchModalProps> = ({
   const [newSide, setNewSide] = useState<'NONE' | 'R' | 'L' | 'BE'>('NONE');
   const [creatingBatch, setCreatingBatch] = useState(false);
   const [createError, setCreateError] = useState<string | null>(null);
+
+  const prefillFromSearch = (query: string) => {
+    const parsed = parsePowerFromQuery(query);
+    if (parsed.sph !== '0.00' || parsed.cyl !== '0.00') {
+      setNewSph(parsed.sph);
+      setNewCyl(parsed.cyl);
+      if (parsed.axis) setNewAxis(parsed.axis);
+    }
+  };
 
   // Input element refs for keyboard flow
   const searchInputRef = useRef<HTMLInputElement>(null);
@@ -545,15 +585,18 @@ export const OpticalBatchModal: React.FC<OpticalBatchModalProps> = ({
     setCreatingBatch(true);
     setCreateError(null);
     try {
+      const cylVal = parseFloat(newCyl) || 0;
+      const isCylNonZero = cylVal !== 0;
+
       const res = await apiRequest<any>('/api/optical-master/batches/find-or-create', {
         method: 'POST',
         body: JSON.stringify({
           uniqueItemId,
           sph: parseFloat(newSph) || 0,
-          cyl: parseFloat(newCyl) || 0,
-          axis: newAxis ? parseInt(newAxis, 10) : 0,
-          add: newAdd ? parseFloat(newAdd) : 0,
-          side: newSide,
+          cyl: cylVal,
+          axis: isBifocalOrProg ? (isCylNonZero ? (parseInt(newAxis, 10) || 0) : 0) : 0,
+          add: isBifocalOrProg ? (parseFloat(newAdd) || 0) : 0,
+          side: normCategory === 'PROG' ? (newSide === 'NONE' ? 'R' : newSide) : 'NONE',
         }),
       });
 
@@ -568,6 +611,8 @@ export const OpticalBatchModal: React.FC<OpticalBatchModalProps> = ({
       // Select and add this newly created batch
       handleSelectBatch(created);
       setShowCreateBatch(false);
+      setSearchQuery('');
+      setShowDropdown(false);
     } catch (err: any) {
       setCreateError(err.message || 'Failed to create optical batch');
     } finally {
@@ -662,10 +707,15 @@ export const OpticalBatchModal: React.FC<OpticalBatchModalProps> = ({
             <label className="text-xs font-black text-slate-950 uppercase tracking-wide">
               Add Batch / Power:
             </label>
-            {mode === 'purchase' && (
+            {canCreateBatch && (
               <button
                 type="button"
-                onClick={() => setShowCreateBatch(prev => !prev)}
+                onClick={() => {
+                  if (!showCreateBatch) {
+                    prefillFromSearch(searchQuery);
+                  }
+                  setShowCreateBatch(prev => !prev);
+                }}
                 className="text-xs text-blue-600 hover:text-blue-800 font-semibold flex items-center gap-1"
               >
                 <Plus className="w-3 h-3" />
@@ -707,11 +757,19 @@ export const OpticalBatchModal: React.FC<OpticalBatchModalProps> = ({
                     setShowDropdown(false);
                     setSearchQuery('');
                   }
-                } else if (e.key === 'Enter' && !searchQuery.trim()) {
-                  // If user presses Enter on empty search and allocations exist, accept
-                  if (allocatedIds.length > 0) {
+                } else if (e.key === 'Enter') {
+                  if (!searchQuery.trim()) {
+                    // If user presses Enter on empty search and allocations exist, accept
+                    if (allocatedIds.length > 0) {
+                      e.preventDefault();
+                      handleApply();
+                    }
+                  } else if (canCreateBatch) {
+                    // Quick-create batch with power parsed from query
                     e.preventDefault();
-                    handleApply();
+                    prefillFromSearch(searchQuery);
+                    setShowCreateBatch(true);
+                    setShowDropdown(false);
                   }
                 } else if (e.key === 'ArrowDown' && allocatedIds.length > 0) {
                   // Down arrow moves into allocated table
@@ -754,17 +812,18 @@ export const OpticalBatchModal: React.FC<OpticalBatchModalProps> = ({
                     <p className="text-[11px] text-slate-400 mt-0.5">
                       No batch matching &quot;{searchQuery}&quot;
                     </p>
-                    {mode === 'purchase' && (
+                    {canCreateBatch && (
                       <button
                         type="button"
                         onClick={() => {
+                          prefillFromSearch(searchQuery);
                           setShowCreateBatch(true);
                           setShowDropdown(false);
                         }}
                         className="mt-2 px-3 py-1 text-xs font-bold text-blue-700 bg-blue-50 hover:bg-blue-100 rounded border border-blue-200 inline-flex items-center gap-1"
                       >
                         <Plus className="w-3 h-3" />
-                        <span>Create This Missing Batch</span>
+                        <span>Create Missing Batch {searchQuery ? `"${searchQuery}"` : ''}</span>
                       </button>
                     )}
                   </div>
@@ -839,8 +898,8 @@ export const OpticalBatchModal: React.FC<OpticalBatchModalProps> = ({
           </div>
         </div>
 
-        {/* Purchase Mode: Create New Batch Form Drawer */}
-        {mode === 'purchase' && showCreateBatch && (
+        {/* Create New Batch Form Drawer */}
+        {canCreateBatch && showCreateBatch && (
           <form
             onSubmit={handleCreateNewBatch}
             className="bg-blue-50/70 border-b border-blue-200 px-4 py-3 shrink-0 animate-in fade-in"
@@ -885,18 +944,25 @@ export const OpticalBatchModal: React.FC<OpticalBatchModalProps> = ({
                 />
               </div>
 
-              <div>
-                <label className="block text-[10px] font-black text-slate-950 uppercase tracking-wider mb-0.5">AXIS</label>
-                <input
-                  type="number"
-                  min="0"
-                  max="180"
-                  value={newAxis}
-                  onChange={e => setNewAxis(e.target.value)}
-                  placeholder="0-180"
-                  className="w-full px-2 py-1 text-xs border border-slate-300 rounded font-mono text-center bg-white font-bold"
-                />
-              </div>
+              {isBifocalOrProg && (
+                <div>
+                  <label className="block text-[10px] font-black text-slate-950 uppercase tracking-wider mb-0.5">AXIS</label>
+                  <input
+                    type="number"
+                    min="0"
+                    max="180"
+                    value={parseFloat(newCyl) === 0 ? '0' : newAxis}
+                    onChange={e => setNewAxis(e.target.value)}
+                    disabled={parseFloat(newCyl) === 0}
+                    placeholder="0-180"
+                    className={`w-full px-2 py-1 text-xs border rounded font-mono text-center font-bold ${
+                      parseFloat(newCyl) === 0
+                        ? 'bg-slate-100 border-slate-200 text-slate-400 cursor-not-allowed'
+                        : 'bg-white border-slate-300'
+                    }`}
+                  />
+                </div>
+              )}
 
               {isBifocalOrProg && (
                 <div>
@@ -904,7 +970,7 @@ export const OpticalBatchModal: React.FC<OpticalBatchModalProps> = ({
                   <input
                     type="number"
                     step="0.25"
-                    min="0"
+                    min="0.25"
                     value={newAdd}
                     onChange={e => setNewAdd(e.target.value)}
                     placeholder="+1.00"
@@ -913,15 +979,14 @@ export const OpticalBatchModal: React.FC<OpticalBatchModalProps> = ({
                 </div>
               )}
 
-              {isBifocalOrProg && (
+              {normCategory === 'PROG' && (
                 <div>
                   <label className="block text-[10px] font-black text-slate-950 uppercase tracking-wider mb-0.5">SIDE</label>
                   <select
-                    value={newSide}
+                    value={newSide === 'NONE' ? 'R' : newSide}
                     onChange={e => setNewSide(e.target.value as any)}
                     className="w-full px-1.5 py-1 text-xs border border-slate-300 rounded bg-white text-slate-950 font-bold"
                   >
-                    <option value="NONE">NONE</option>
                     <option value="R">R (Right)</option>
                     <option value="L">L (Left)</option>
                     <option value="BE">BE (Both)</option>

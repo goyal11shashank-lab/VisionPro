@@ -41,6 +41,7 @@ interface ValidationResult {
       mapped: Record<string, any>;
       resolvedData?: {
         uniqueItem?: { id: string; name: string; code: string };
+        category?: { id: string; code: string; name: string };
         powers?: {
           sphNum: number;
           cylNum: number;
@@ -49,6 +50,12 @@ interface ValidationResult {
           sideNormalized: string;
           identityKey: string;
         };
+        displayPower?: string;
+        sph?: string;
+        cyl?: string;
+        axis?: number | null;
+        add?: string | null;
+        side?: string | null;
         sku?: string;
         openingStockQuantity?: number;
         purchaseCost?: number;
@@ -337,20 +344,26 @@ export const OpticalBatchImportModal: React.FC<OpticalBatchImportModalProps> = (
               <div className="bg-indigo-50/70 border border-indigo-100 rounded-xl p-4 text-xs text-indigo-900 space-y-2">
                 <div className="flex items-center gap-2 font-semibold text-indigo-800 text-sm">
                   <HelpCircle className="h-4 w-4 text-indigo-600" />
-                  Important Data Hierarchy & Import Rules
+                  Important Optical Batch Import Rules
                 </div>
                 <p>
-                  Existing Hierarchy: <span className="font-semibold">Primary Item → Category → Group Level → Stock Item → Batch</span>.
+                  Hierarchy: <span className="font-semibold">Primary Item → Category (SV / KT / PROG) → Stock Item → Optical Batch</span>.
                 </p>
                 <ul className="list-disc pl-5 space-y-1 text-slate-700">
                   <li>
-                    <strong className="text-indigo-900">Stock Item Must Pre-Exist:</strong> The <code className="bg-indigo-100 px-1 py-0.5 rounded text-indigo-800">unique_item</code> (Stock Item) in your Excel file must already be created in the system (e.g. <code>HC_SV_-6/-2</code>, <code>HC_SV_+4/+2</code>). The import will not create new Primary Items.
+                    <strong className="text-indigo-900">Stock Item Must Pre-Exist:</strong> The <code className="bg-indigo-100 px-1 py-0.5 rounded text-indigo-800">stock_item</code> in your Excel file must already be created in the system with <strong>Maintain Batches enabled</strong>. The Stock Item category determines which optical power columns are required.
                   </li>
                   <li>
-                    <strong className="text-indigo-900">Power Configuration:</strong> Supports standard optical power strings such as <code>-6.00/-2.00</code>, <code>+1.75/-2.00/90/+2.00</code>, or individual SPH/CYL/AXIS/ADD/SIDE columns.
+                    <strong className="text-indigo-900">Structured Optical Power Columns:</strong> Optical parameters must be provided in distinct structured columns:
+                    <div className="mt-1 flex flex-wrap gap-2 text-[11px] font-mono">
+                      <span className="bg-indigo-100/80 text-indigo-900 px-1.5 py-0.5 rounded">SV: SPH, CYL</span>
+                      <span className="bg-amber-100/80 text-amber-900 px-1.5 py-0.5 rounded">KT: SPH, CYL, AXIS, ADD</span>
+                      <span className="bg-purple-100/80 text-purple-900 px-1.5 py-0.5 rounded">PROG: SPH, CYL, AXIS, ADD, SIDE</span>
+                    </div>
+                    Power is strictly validated from these columns and never parsed or inferred from text strings or batch names.
                   </li>
                   <li>
-                    <strong className="text-indigo-900">Stock & Pricing:</strong> Opening stock quantity will be initialized in the stock ledger. Existing pricing structures for the Stock Item are preserved.
+                    <strong className="text-indigo-900">Stock & Pricing:</strong> Opening stock quantity, purchase cost, selling price (MRP), and unique SKU are required for every batch.
                   </li>
                 </ul>
               </div>
@@ -524,102 +537,164 @@ export const OpticalBatchImportModal: React.FC<OpticalBatchImportModalProps> = (
 
               {/* Rows Preview Table */}
               <div className="border border-slate-200 rounded-xl overflow-hidden shadow-xs">
-                <div className="max-h-[320px] overflow-y-auto">
+                <div className="max-h-[360px] overflow-y-auto overflow-x-auto">
                   <table className="w-full text-left text-xs">
                     <thead className="bg-slate-50/80 sticky top-0 border-b border-slate-200 text-slate-600 font-semibold uppercase tracking-wider">
                       <tr>
-                        <th className="px-3 py-2.5">Row</th>
-                        <th className="px-3 py-2.5">Status</th>
-                        <th className="px-3 py-2.5">Stock Item</th>
-                        <th className="px-3 py-2.5">Power Specification</th>
-                        <th className="px-3 py-2.5">SKU</th>
-                        <th className="px-3 py-2.5 text-right">Opening Qty</th>
-                        <th className="px-3 py-2.5 text-right">Cost / MRP</th>
-                        <th className="px-3 py-2.5">Validation Details</th>
+                        <th className="px-3 py-2.5 whitespace-nowrap">Row</th>
+                        <th className="px-3 py-2.5 whitespace-nowrap">Status</th>
+                        <th className="px-3 py-2.5 whitespace-nowrap">Stock Item</th>
+                        <th className="px-3 py-2.5 whitespace-nowrap">Cat</th>
+                        <th className="px-3 py-2.5 whitespace-nowrap">Structured Power</th>
+                        <th className="px-3 py-2.5 whitespace-nowrap">Canonical Identity</th>
+                        <th className="px-3 py-2.5 whitespace-nowrap">SKU</th>
+                        <th className="px-3 py-2.5 whitespace-nowrap text-right">Opening Qty</th>
+                        <th className="px-3 py-2.5 whitespace-nowrap text-right">Cost / MRP</th>
+                        <th className="px-3 py-2.5 min-w-[200px]">Validation Details</th>
                       </tr>
                     </thead>
                     <tbody className="divide-y divide-slate-100">
                       {filteredRows.length === 0 ? (
                         <tr>
-                          <td colSpan={8} className="px-4 py-8 text-center text-slate-400">
+                          <td colSpan={10} className="px-4 py-8 text-center text-slate-400">
                             No rows match the selected filter.
                           </td>
                         </tr>
                       ) : (
-                        filteredRows.map((row) => (
-                          <tr
-                            key={row.rowNumber}
-                            className={`hover:bg-slate-50/60 ${
-                              !row.isValid ? 'bg-rose-50/20' : row.isDuplicate ? 'bg-amber-50/20' : ''
-                            }`}
-                          >
-                            <td className="px-3 py-2 font-mono font-bold text-slate-600">
-                              #{row.rowNumber}
-                            </td>
-                            <td className="px-3 py-2">
-                              {row.isValid ? (
-                                <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-semibold bg-emerald-100 text-emerald-800">
-                                  <CheckCircle2 className="h-3 w-3" /> Valid
+                        filteredRows.map((row) => {
+                          const catCode = (row.resolvedData?.category?.code || 'SV').toUpperCase();
+                          return (
+                            <tr
+                              key={row.rowNumber}
+                              className={`hover:bg-slate-50/60 ${
+                                !row.isValid ? 'bg-rose-50/20' : row.isDuplicate ? 'bg-amber-50/20' : ''
+                              }`}
+                            >
+                              <td className="px-3 py-2 font-mono font-bold text-slate-600 whitespace-nowrap">
+                                #{row.rowNumber}
+                              </td>
+                              <td className="px-3 py-2 whitespace-nowrap">
+                                {!row.isValid ? (
+                                  <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-semibold bg-rose-100 text-rose-800">
+                                    <XCircle className="h-3 w-3" /> Error
+                                  </span>
+                                ) : row.isDuplicate ? (
+                                  <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-semibold bg-amber-100 text-amber-800">
+                                    <AlertTriangle className="h-3 w-3" /> Duplicate
+                                  </span>
+                                ) : (
+                                  <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-semibold bg-emerald-100 text-emerald-800">
+                                    <CheckCircle2 className="h-3 w-3" /> Valid
+                                  </span>
+                                )}
+                              </td>
+                              <td className="px-3 py-2 whitespace-nowrap">
+                                {row.resolvedData?.uniqueItem ? (
+                                  <div>
+                                    <span className="font-semibold text-slate-800">
+                                      {row.resolvedData.uniqueItem.name}
+                                    </span>
+                                    {row.resolvedData.uniqueItem.code && (
+                                      <span className="ml-1 text-[10px] text-slate-400 font-mono">
+                                        ({row.resolvedData.uniqueItem.code})
+                                      </span>
+                                    )}
+                                  </div>
+                                ) : (
+                                  <span className="text-rose-600 font-mono text-[11px]">
+                                    {row.mapped.unique_item ?? row.mapped.stock_item ?? row.mapped.item ?? '(Missing)'}
+                                  </span>
+                                )}
+                              </td>
+                              <td className="px-3 py-2 whitespace-nowrap">
+                                <span
+                                  className={`px-1.5 py-0.5 rounded text-[10px] font-bold ${
+                                    catCode === 'PROG'
+                                      ? 'bg-purple-100 text-purple-800'
+                                      : catCode === 'KT'
+                                      ? 'bg-amber-100 text-amber-800'
+                                      : 'bg-sky-100 text-sky-800'
+                                  }`}
+                                >
+                                  {catCode}
                                 </span>
-                              ) : (
-                                <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-semibold bg-rose-100 text-rose-800">
-                                  <XCircle className="h-3 w-3" /> Error
-                                </span>
-                              )}
-                            </td>
-                            <td className="px-3 py-2">
-                              {row.resolvedData?.uniqueItem ? (
-                                <span className="font-semibold text-slate-800">
-                                  {row.resolvedData.uniqueItem.name}
-                                </span>
-                              ) : (
-                                <span className="text-rose-600 font-mono text-[11px]">
-                                  {row.mapped.unique_item || row.mapped.uniqueItem || '(Missing)'}
-                                </span>
-                              )}
-                            </td>
-                            <td className="px-3 py-2">
-                              {row.resolvedData?.powers ? (
-                                <span className="font-mono font-medium text-indigo-700 bg-indigo-50 px-1.5 py-0.5 rounded">
-                                  {row.resolvedData.powers.identityKey}
-                                </span>
-                              ) : (
-                                <span className="text-slate-500 font-mono">
-                                  {row.mapped.batch_name || row.mapped.batchName || '-'}
-                                </span>
-                              )}
-                            </td>
-                            <td className="px-3 py-2 font-mono text-slate-700">
-                              {row.resolvedData?.sku || row.mapped.sku || '-'}
-                            </td>
-                            <td className="px-3 py-2 text-right font-medium text-slate-800">
-                              {row.resolvedData?.openingStockQuantity !== undefined
-                                ? `${row.resolvedData.openingStockQuantity} ${row.resolvedData.unit || 'prs'}`
-                                : '-'}
-                            </td>
-                            <td className="px-3 py-2 text-right font-mono text-slate-600">
-                              ₹{row.resolvedData?.purchaseCost || 0} / ₹{row.resolvedData?.sellingPrice || 0}
-                            </td>
-                            <td className="px-3 py-2 max-w-xs">
-                              {row.errors.length > 0 ? (
-                                <div className="space-y-0.5">
-                                  {row.errors.map((err, idx) => (
-                                    <div
-                                      key={idx}
-                                      className={`text-[11px] leading-tight ${
-                                        err.severity === 'ERROR' ? 'text-rose-700 font-medium' : 'text-amber-700'
-                                      }`}
-                                    >
-                                      • {err.message}
-                                    </div>
-                                  ))}
-                                </div>
-                              ) : (
-                                <span className="text-slate-400 text-[11px]">Passes all validation checks</span>
-                              )}
-                            </td>
-                          </tr>
-                        ))
+                              </td>
+                              <td className="px-3 py-2 whitespace-nowrap">
+                                {row.resolvedData?.powers ? (
+                                  <div className="flex items-center gap-1 font-mono text-[11px]">
+                                    <span className="bg-slate-100 px-1 py-0.5 rounded text-slate-700">
+                                      SPH {row.resolvedData.sph}
+                                    </span>
+                                    <span className="bg-slate-100 px-1 py-0.5 rounded text-slate-700">
+                                      CYL {row.resolvedData.cyl}
+                                    </span>
+                                    {(catCode === 'KT' || catCode === 'PROG') && (
+                                      <>
+                                        <span className="bg-amber-50 px-1 py-0.5 rounded text-amber-800">
+                                          AXIS {row.resolvedData.axis}°
+                                        </span>
+                                        <span className="bg-amber-50 px-1 py-0.5 rounded text-amber-800">
+                                          ADD {row.resolvedData.add}
+                                        </span>
+                                      </>
+                                    )}
+                                    {catCode === 'PROG' && (
+                                      <span className="bg-purple-50 px-1 py-0.5 rounded text-purple-800 font-bold">
+                                        {row.resolvedData.side}
+                                      </span>
+                                    )}
+                                  </div>
+                                ) : (
+                                  <div className="text-[11px] font-mono text-slate-500 flex items-center gap-1">
+                                    <span>SPH: {row.mapped.sph || '-'}</span>
+                                    <span>CYL: {row.mapped.cyl || '-'}</span>
+                                    {row.mapped.axis && <span>AXIS: {row.mapped.axis}</span>}
+                                    {row.mapped.add && <span>ADD: {row.mapped.add}</span>}
+                                    {row.mapped.side && <span>SIDE: {row.mapped.side}</span>}
+                                  </div>
+                                )}
+                              </td>
+                              <td className="px-3 py-2 whitespace-nowrap">
+                                {row.resolvedData?.powers?.identityKey ? (
+                                  <span className="font-mono text-[10px] text-indigo-700 bg-indigo-50 border border-indigo-100 px-1.5 py-0.5 rounded">
+                                    {row.resolvedData.powers.identityKey}
+                                  </span>
+                                ) : (
+                                  <span className="text-slate-400 font-mono text-[10px]">-</span>
+                                )}
+                              </td>
+                              <td className="px-3 py-2 font-mono text-slate-700 whitespace-nowrap">
+                                {row.resolvedData?.sku || row.mapped.sku || '-'}
+                              </td>
+                              <td className="px-3 py-2 text-right font-medium text-slate-800 whitespace-nowrap">
+                                {row.resolvedData?.openingStockQuantity !== undefined
+                                  ? `${row.resolvedData.openingStockQuantity} ${row.resolvedData.unit || 'PRS'}`
+                                  : '-'}
+                              </td>
+                              <td className="px-3 py-2 text-right font-mono text-slate-600 whitespace-nowrap">
+                                ₹{row.resolvedData?.purchaseCost ?? 0} / ₹{row.resolvedData?.sellingPrice ?? 0}
+                              </td>
+                              <td className="px-3 py-2">
+                                {row.errors.length > 0 ? (
+                                  <div className="space-y-0.5">
+                                    {row.errors.map((err, idx) => (
+                                      <div
+                                        key={idx}
+                                        className={`text-[11px] leading-tight ${
+                                          err.severity === 'ERROR' ? 'text-rose-700 font-medium' : 'text-amber-700'
+                                        }`}
+                                      >
+                                        • {err.message}
+                                      </div>
+                                    ))}
+                                  </div>
+                                ) : (
+                                  <span className="text-slate-400 text-[11px]">Passes all validation checks</span>
+                                )}
+                              </td>
+                            </tr>
+                          );
+                        })
                       )}
                     </tbody>
                   </table>

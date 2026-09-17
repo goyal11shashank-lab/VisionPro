@@ -13,7 +13,7 @@ import {
 } from '../db/schema.js';
 import { ImportType } from './excelTemplateService.js';
 import { ColumnMappingService } from './columnMappingService.js';
-import { validateOpticalPower, normalizeOpticalNumber } from './opticalMasterService.js';
+import { validateOpticalPower, normalizeOpticalNumber, buildBatchDisplayName } from './opticalMasterService.js';
 
 export interface ImportError {
   row: number;
@@ -83,6 +83,9 @@ export class ImportValidationService {
           code: uniqueItems.code,
           primaryItemId: uniqueItems.primaryItemId,
           categoryId: primaryItems.categoryId,
+          opticalCategory: uniqueItems.opticalCategory,
+          maintainBatches: uniqueItems.maintainBatches,
+          unit: uniqueItems.unit,
           purchaseRate: uniqueItems.purchaseRate,
           mrp: uniqueItems.mrp,
         })
@@ -233,6 +236,7 @@ export class ImportValidationService {
             categoryMapById,
             partyMapByName,
             partyMapByCode,
+            importMode,
             rowErrors
           );
           break;
@@ -261,7 +265,7 @@ export class ImportValidationService {
         mapped,
         resolvedData,
         isValid: !hasFatalErrors,
-        isDuplicate: false,
+        isDuplicate: Boolean(resolvedData?.isDuplicate),
         errors: rowErrors,
         documentKey,
       });
@@ -714,8 +718,9 @@ export class ImportValidationService {
 
   /**
    * Validates a single Optical Batch & Powers import row.
-   * STRICT CONSTRAINT: Unique Item MUST already exist in the database.
-   * Reuses validateOpticalPower from opticalMasterService.
+   * STRICT CONSTRAINT: Stock Item MUST already exist in the database with Maintain Batches enabled.
+   * Uses structured power columns (SPH, CYL, AXIS, ADD, SIDE) based on Stock Item category.
+   * Never infers optical parameters from batch name, power spec, sku, or stock item name.
    */
   private static async validateOpticalBatchRow(
     businessId: string,
@@ -726,80 +731,106 @@ export class ImportValidationService {
     categoryMapById: Map<string, any>,
     partyMapByName: Map<string, any>,
     partyMapByCode: Map<string, any>,
+    importMode: 'CREATE_ONLY' | 'UPSERT',
     errors: ImportError[]
   ): Promise<Record<string, any>> {
     const resolved: Record<string, any> = {};
 
-    // 1. Unique Item (Required - MUST already exist in database)
-    const uniqueItemInput = mapped.unique_item || mapped.uniqueItem || mapped.item || mapped.sku_name;
-    if (!uniqueItemInput || String(uniqueItemInput).trim() === '') {
+    // 1. Stock Item (Required - MUST already exist in database)
+    const stockItemInput = mapped.unique_item ?? mapped.stock_item ?? mapped.item ?? mapped.uniqueItem ?? mapped.stockItem;
+    if (!stockItemInput || String(stockItemInput).trim() === '') {
       errors.push({
         row: rowNumber,
         field: 'unique_item',
-        value: uniqueItemInput,
+        value: stockItemInput,
         severity: 'ERROR',
-        message: 'Unique Item is required.',
+        message: 'Stock Item is required.',
       });
       return resolved;
     }
 
-    const itemKey = String(uniqueItemInput).trim().toLowerCase();
+    const itemKey = String(stockItemInput).trim().toLowerCase();
     const item = itemMapByCode.get(itemKey) || itemMapByName.get(itemKey);
 
     if (!item) {
       errors.push({
         row: rowNumber,
         field: 'unique_item',
-        value: uniqueItemInput,
+        value: stockItemInput,
         severity: 'ERROR',
-        message: `Unique Item "${uniqueItemInput}" does not exist in the database. Create the Unique Item in the software before importing batches.`,
+        message: `Stock Item "${stockItemInput}" does not exist in the database. Create the Stock Item before importing batches.`,
+      });
+      return resolved;
+    }
+
+    // Direct Batch Create Protection: Validate maintainBatches is enabled
+    if (!item.maintainBatches) {
+      errors.push({
+        row: rowNumber,
+        field: 'unique_item',
+        value: stockItemInput,
+        severity: 'ERROR',
+        message: `Stock Item "${item.name}" does not have Maintain Batches enabled. Enable Maintain Batches in Stock Item Master before importing batches.`,
       });
       return resolved;
     }
 
     resolved.uniqueItem = item;
     const category = categoryMapById.get(item.categoryId);
-    const catCode = (category?.code || 'SV').toUpperCase();
+    const catCode = (item.opticalCategory || category?.code || 'SV').toUpperCase().trim();
     resolved.category = category || { id: item.categoryId, code: catCode, name: catCode };
 
-    // 2. Batch Name & Optical Power Validation
-    const batchNameInput = mapped.batch_name || mapped.batchName || mapped.power || mapped.powers;
-    const parsedPowers = this.parseOpticalPowerValues(batchNameInput, mapped, catCode);
+    // 2. Optical Power Validation using Structured Columns ONLY (NO textual inference)
+    const sphRaw = mapped.sph;
+    const cylRaw = mapped.cyl;
+    const axisRaw = mapped.axis;
+    const addRaw = mapped.add;
+    const sideRaw = mapped.side;
 
-    if (!parsedPowers) {
+    try {
+      const validatedPowers = validateOpticalPower(
+        catCode,
+        sphRaw,
+        cylRaw,
+        axisRaw,
+        addRaw,
+        sideRaw
+      );
+      resolved.powers = validatedPowers;
+      resolved.identityKey = validatedPowers.identityKey;
+      resolved.fullIdentityKey = `${item.id}:${validatedPowers.identityKey}`;
+      resolved.displayPower = buildBatchDisplayName({
+        categoryCode: catCode,
+        sph: validatedPowers.sphNum,
+        cyl: validatedPowers.cylNum,
+        axis: validatedPowers.axisNum,
+        add: validatedPowers.addNum,
+        side: validatedPowers.sideNormalized,
+      });
+      resolved.sph = validatedPowers.sphNum.toFixed(2);
+      resolved.cyl = validatedPowers.cylNum.toFixed(2);
+      resolved.axis = catCode === 'SV' ? null : validatedPowers.axisNum;
+      resolved.add = catCode === 'SV' ? null : validatedPowers.addNum.toFixed(2);
+      resolved.side = validatedPowers.sideNormalized;
+    } catch (err: any) {
+      const errMsg = err.message || 'Invalid optical power configuration.';
+      let errField = 'sph';
+      if (/cyl/i.test(errMsg)) errField = 'cyl';
+      else if (/axis/i.test(errMsg)) errField = 'axis';
+      else if (/add/i.test(errMsg)) errField = 'add';
+      else if (/side/i.test(errMsg)) errField = 'side';
+
       errors.push({
         row: rowNumber,
-        field: 'batch_name',
-        value: batchNameInput,
+        field: errField,
+        value: mapped[errField] ?? `${sphRaw || ''}/${cylRaw || ''}`,
         severity: 'ERROR',
-        message: 'Valid optical batch power is required (e.g. "-6.00/-2.00", "+1.75/-2.00/90/+2.00", or "+1.00/-0.50/180/+1.50/R").',
+        message: errMsg,
       });
-    } else {
-      try {
-        const validatedPowers = validateOpticalPower(
-          catCode,
-          parsedPowers.sph,
-          parsedPowers.cyl,
-          parsedPowers.axis,
-          parsedPowers.add,
-          parsedPowers.side
-        );
-        resolved.powers = validatedPowers;
-        resolved.identityKey = validatedPowers.identityKey;
-        resolved.fullIdentityKey = `${item.id}:${validatedPowers.identityKey}`;
-      } catch (err: any) {
-        errors.push({
-          row: rowNumber,
-          field: 'batch_name',
-          value: batchNameInput,
-          severity: 'ERROR',
-          message: `Optical power validation failed: ${err.message}`,
-        });
-      }
     }
 
     // 3. SKU (Required)
-    const skuInput = mapped.sku || mapped.sku_code || mapped.batch_sku;
+    const skuInput = mapped.sku ?? mapped.sku_code ?? mapped.batch_sku;
     if (!skuInput || String(skuInput).trim() === '') {
       errors.push({
         row: rowNumber,
@@ -901,8 +932,8 @@ export class ImportValidationService {
       }
     }
 
-    // 7. Unit (Required, allowed units: prs, pairs, pcs, pieces)
-    const unitInput = mapped.unit || 'prs';
+    // 7. Unit (Optional, defaults to item.unit || 'PRS')
+    const unitInput = mapped.unit || item.unit || 'PRS';
     const validUnits = ['prs', 'pairs', 'pcs', 'pieces', 'pr', 'pair', 'pc', 'piece'];
     const normUnit = String(unitInput).trim().toLowerCase();
     if (!validUnits.includes(normUnit)) {
@@ -911,7 +942,7 @@ export class ImportValidationService {
         field: 'unit',
         value: unitInput,
         severity: 'ERROR',
-        message: `Unit "${unitInput}" is invalid. Allowed units: prs, pairs, pcs, pieces.`,
+        message: `Unit "${unitInput}" is invalid. Allowed units: PRS, PCS.`,
       });
     } else {
       resolved.unit = normUnit;
@@ -956,107 +987,51 @@ export class ImportValidationService {
       const rl = Number(mapped.reorder_level);
       if (!isNaN(rl) && rl >= 0) resolved.reorderLevel = rl;
     }
-    if (mapped.remarks) {
-      resolved.remarks = String(mapped.remarks).trim();
+    if (mapped.notes || mapped.remarks) {
+      resolved.remarks = String(mapped.notes || mapped.remarks).trim();
     }
 
-    // 11. Check if batch already exists in DB
+    // 11. Database Duplicate Detection
     if (resolved.uniqueItem && resolved.powers) {
-      const existingBatch = await this.findBatchByPowers(businessId, resolved.uniqueItem.id, {
-        sph: resolved.powers.sphNum.toFixed(2),
-        cyl: resolved.powers.cylNum.toFixed(2),
-        axis: resolved.powers.axisNum,
-        add: resolved.powers.addNum.toFixed(2),
-        side: resolved.powers.sideNormalized,
-      });
+      const [existingBatch] = await db
+        .select()
+        .from(opticalBatches)
+        .where(
+          and(
+            eq(opticalBatches.businessId, businessId),
+            eq(opticalBatches.uniqueItemId, resolved.uniqueItem.id),
+            or(
+              eq(opticalBatches.identityKey, resolved.powers.identityKey),
+              eq(opticalBatches.identityKey, resolved.fullIdentityKey)
+            )
+          )
+        )
+        .limit(1);
 
       if (existingBatch) {
         resolved.existingBatch = existingBatch;
-        errors.push({
-          row: rowNumber,
-          field: 'batch_name',
-          value: batchNameInput,
-          severity: 'WARNING',
-          message: `Optical Batch with barcode ${existingBatch.barcode} already exists in database for this power combination. Importing will add to opening stock balance.`,
-        });
+        resolved.isDuplicate = true;
+        if (importMode === 'CREATE_ONLY') {
+          errors.push({
+            row: rowNumber,
+            field: 'sph',
+            value: resolved.displayPower,
+            severity: 'ERROR',
+            message: `Duplicate ${catCode} Batch: A batch with power ${resolved.displayPower} already exists in database for Stock Item "${resolved.uniqueItem.name}" (Barcode: ${existingBatch.barcode}).`,
+          });
+        } else {
+          errors.push({
+            row: rowNumber,
+            field: 'sph',
+            value: resolved.displayPower,
+            severity: 'WARNING',
+            message: `Batch already exists in database (Barcode: ${existingBatch.barcode}). Existing batch details will be preserved and opening stock updated.`,
+          });
+        }
       }
     }
 
     return resolved;
-  }
-
-  /**
-   * Helper: Parses optical power parameters from batch_name string or explicit fields.
-   */
-  private static parseOpticalPowerValues(
-    batchNameRaw: any,
-    mapped: Record<string, any>,
-    categoryCode: string
-  ): { sph: string; cyl: string; axis: string | null; add: string | null; side: string | null } | null {
-    const cat = categoryCode.toUpperCase();
-    let sph: string | null = null;
-    let cyl: string | null = null;
-    let axis: string | null = null;
-    let add: string | null = null;
-    let side: string | null = null;
-
-    // Check if explicit power fields are provided in mapped
-    if (mapped.sph !== undefined && mapped.sph !== '') sph = String(mapped.sph).trim();
-    if (mapped.cyl !== undefined && mapped.cyl !== '') cyl = String(mapped.cyl).trim();
-    if (mapped.axis !== undefined && mapped.axis !== '') axis = String(mapped.axis).trim();
-    if (mapped.add !== undefined && mapped.add !== '') add = String(mapped.add).trim();
-    if (mapped.side !== undefined && mapped.side !== '') side = String(mapped.side).trim().toUpperCase();
-
-    // If batch_name string is provided, extract power coordinates
-    const batchName = String(batchNameRaw || '').trim();
-    if (batchName) {
-      if (/SPH[:=\s]/i.test(batchName)) {
-        const sphMatch = batchName.match(/SPH[:=\s]*([+-]?\d+(?:\.\d+)?)/i);
-        const cylMatch = batchName.match(/CYL[:=\s]*([+-]?\d+(?:\.\d+)?)/i);
-        const axisMatch = batchName.match(/AXIS[:=\s]*(\d+(?:\.\d+)?)/i);
-        const addMatch = batchName.match(/ADD[:=\s]*([+-]?\d+(?:\.\d+)?)/i);
-        const sideMatch = batchName.match(/SIDE[:=\s]*(NONE|R|L|BE)/i);
-
-        if (sphMatch && !sph) sph = sphMatch[1];
-        if (cylMatch && !cyl) cyl = cylMatch[1];
-        if (axisMatch && !axis) axis = axisMatch[1];
-        if (addMatch && !add) add = addMatch[1];
-        if (sideMatch && !side) side = sideMatch[1].toUpperCase();
-      } else {
-        // Clean up leading/trailing brackets or prefixes
-        const cleaned = batchName.replace(/^[(\[]|[)\]]$/g, '').trim();
-        const parts = cleaned.split(/[\/\s,]+/).filter(p => p.length > 0);
-
-        if (parts.length >= 1 && !sph) {
-          sph = parts[0];
-        }
-        if (parts.length >= 2 && !cyl) {
-          cyl = parts[1];
-        }
-        if (parts.length >= 3 && !axis && (cat === 'KT' || cat === 'PROG')) {
-          axis = parts[2];
-        }
-        if (parts.length >= 4 && !add && (cat === 'KT' || cat === 'PROG')) {
-          add = parts[3];
-        }
-        if (parts.length >= 5 && !side && cat === 'PROG') {
-          side = parts[4].toUpperCase();
-        } else if (parts.length >= 3 && !side && cat === 'PROG' && ['R', 'L', 'BE'].includes(parts[2].toUpperCase())) {
-          side = parts[2].toUpperCase();
-        }
-      }
-    }
-
-    if (!sph) return null;
-    if (!cyl) cyl = '0.00';
-
-    return {
-      sph,
-      cyl,
-      axis: axis || (cat === 'SV' ? null : '0'),
-      add: add || (cat === 'SV' ? null : '0.00'),
-      side: side || (cat === 'PROG' ? 'BE' : 'NONE'),
-    };
   }
 
   /**
@@ -1367,16 +1342,17 @@ export class ImportValidationService {
       const seenBarcodes = new Map<string, number>();
 
       for (const row of rows) {
-        // Check batch identity key duplication under same unique item
+        // Check batch identity key duplication under same stock item
         if (row.resolvedData?.fullIdentityKey) {
           const key = row.resolvedData.fullIdentityKey;
           if (seenBatches.has(key)) {
             row.isDuplicate = true;
             row.isValid = false;
             const prevRow = seenBatches.get(key);
-            const msg = `Duplicate optical batch power for this Unique Item in row ${prevRow}. Each batch must have a distinct optical power configuration.`;
-            row.errors.push({ row: row.rowNumber, field: 'batch_name', value: row.mapped.batch_name || row.mapped.batchName, severity: 'ERROR', message: msg });
-            allErrors.push({ row: row.rowNumber, field: 'batch_name', value: row.mapped.batch_name || row.mapped.batchName, severity: 'ERROR', message: msg });
+            const displayPwr = row.resolvedData?.displayPower || '';
+            const msg = `Duplicate optical batch power for this Stock Item in row ${prevRow}${displayPwr ? `: ${displayPwr}` : ''}. Each batch must have a distinct optical power configuration.`;
+            row.errors.push({ row: row.rowNumber, field: 'sph', value: row.mapped.sph ?? key, severity: 'ERROR', message: msg });
+            allErrors.push({ row: row.rowNumber, field: 'sph', value: row.mapped.sph ?? key, severity: 'ERROR', message: msg });
           } else {
             seenBatches.set(key, row.rowNumber);
           }
