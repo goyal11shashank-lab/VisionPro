@@ -120,6 +120,7 @@ export const NormalSalesVoucherPage: React.FC<Props> = ({ onNavigate, onSuccess,
         try {
           const inv = await apiRequest<any>(`/api/sales/invoices/${editInvoiceId}`);
           if (inv) {
+            setCreatedInvoice(inv);
             const partyId = inv.partyId || '';
             setSelectedPartyId(partyId);
             const foundParty = validCustomers.find((p: any) => p.id === partyId) || inv.party || null;
@@ -686,6 +687,44 @@ export const NormalSalesVoucherPage: React.FC<Props> = ({ onNavigate, onSuccess,
     });
   };
 
+  const getPrintableInvoice = () => {
+    if (createdInvoice) return createdInvoice;
+    return {
+      id: editInvoiceId || 'draft',
+      invoiceNumber: invoiceNumber || 'DRAFT-INVOICE',
+      invoiceDate: invoiceDate || new Date().toISOString(),
+      dueDate: dueDate || invoiceDate,
+      status: 'DRAFT',
+      partyName: selectedParty?.name || 'Cash Customer',
+      partyGstin: selectedParty?.gstin || '',
+      partyAddress: selectedParty?.address || '',
+      partyState: selectedParty?.state || '',
+      partyPhone: selectedParty?.phone || '',
+      party: selectedParty,
+      taxableAmount: totals.taxableAmount,
+      cgstAmount: totals.cgstAmount,
+      sgstAmount: totals.sgstAmount,
+      igstAmount: totals.igstAmount,
+      roundOff: totals.roundOff,
+      grandTotal: totals.grandTotal,
+      lines: computedLines.filter(l => l.uniqueItemId && l.quantity > 0).map(l => ({
+        ...l,
+        uniqueItemName: l.uniqueItemName,
+        uniqueItemCode: l.uniqueItemCode,
+        quantity: l.quantity,
+        unit: 'PRS',
+        rate: l.rate,
+        taxableAmount: l.taxable,
+        cgstAmount: l.cgst,
+        sgstAmount: l.sgst,
+        igstAmount: l.igst,
+        lineTotal: l.total,
+        batches: l.batches || [],
+      })),
+      notes: notes,
+    };
+  };
+
   return (
     <div
       id="normal-sales-voucher-page"
@@ -717,12 +756,15 @@ export const NormalSalesVoucherPage: React.FC<Props> = ({ onNavigate, onSuccess,
               }
             : undefined
         }
-        gstMode={gstMode}
-        onGstModeChange={setGstMode}
         referenceNumber={referenceNumber}
         onReferenceNumberChange={setReferenceNumber}
         submitting={submitting}
         onSavePost={() => handleSaveVoucher('POSTED')}
+        onPrint={() => {
+          const previewBeforePrint = settings?.print?.previewBeforePrint ?? true;
+          setAutoInvokePrint(!previewBeforePrint);
+          setIsPrintPreviewOpen(true);
+        }}
         onBack={() => (onBack ? onBack() : onNavigate ? onNavigate('/sales/invoices') : window.history.back())}
       />
 
@@ -1035,12 +1077,12 @@ export const NormalSalesVoucherPage: React.FC<Props> = ({ onNavigate, onSuccess,
       )}
 
       {/* REUSABLE A4 PRINT PREVIEW MODAL */}
-      {isPrintPreviewOpen && createdInvoice && (
+      {isPrintPreviewOpen && (
         <PrintPreviewModal
           isOpen={isPrintPreviewOpen}
           onClose={() => setIsPrintPreviewOpen(false)}
-          title={`Tax Invoice - ${createdInvoice.invoiceNumber || ''}`}
-          filename={`Invoice_${createdInvoice.invoiceNumber || 'INV'}`}
+          title={`Tax Invoice - ${(createdInvoice || getPrintableInvoice()).invoiceNumber || ''}`}
+          filename={`Invoice_${(createdInvoice || getPrintableInvoice()).invoiceNumber || 'INV'}`}
           defaultOrientation="portrait"
           autoInvokePrint={autoInvokePrint}
         >
@@ -1048,7 +1090,7 @@ export const NormalSalesVoucherPage: React.FC<Props> = ({ onNavigate, onSuccess,
             <PrintableVoucher
               id={documentId}
               business={currentBusiness}
-              voucher={createdInvoice}
+              voucher={createdInvoice || getPrintableInvoice()}
               documentType="SALES_INVOICE"
               customTitle={settings?.print?.invoiceTitle || "TAX INVOICE"}
               copyLabel="Original for Recipient"

@@ -1,14 +1,12 @@
 /**
  * Robust Web Printing Service
  * Handles direct native printing via window.print(), ensuring the OS/Browser
- * system print dialog (Chrome, Safari, Edge, macOS) is invoked.
+ * system print dialog (Chrome, Safari, Edge, macOS, Windows, Linux) is invoked.
  *
- * Utilizes @media print CSS rules for document isolation (hiding web chrome,
- * sidebars, navigation, modals, and toolbars, and printing only the dedicated
- * invoice document).
+ * Utilizes a dedicated #print-root DOM node and @media print CSS rules for document
+ * isolation (hiding web chrome, sidebars, navigation, modals, and toolbars, and
+ * printing exclusively the dedicated document).
  */
-
-import { exportToPdf } from './pdfExporter.js';
 
 export interface PrintOptions {
   elementOrId: HTMLElement | string;
@@ -19,7 +17,7 @@ export interface PrintOptions {
 
 export interface PrintResult {
   success: boolean;
-  method: 'native_print' | 'pdf_download' | 'new_tab';
+  method: 'native_print' | 'restricted' | 'error';
   message?: string;
 }
 
@@ -42,19 +40,41 @@ export async function printDocument(options: PrintOptions): Promise<PrintResult>
   const {
     elementOrId,
     title,
-    filename = 'invoice',
     orientation = 'portrait',
   } = options;
+
+  // Feature detection (Requirement #33)
+  if (typeof window === 'undefined' || typeof window.print !== 'function') {
+    throw new Error('Browser native printing is not supported in this environment.');
+  }
 
   const targetEl = typeof elementOrId === 'string'
     ? document.getElementById(elementOrId)
     : elementOrId;
 
   if (!targetEl) {
-    throw new Error(`Print target element "${String(elementOrId)}" not found in DOM.`);
+    console.error('[PrintService] Target element not found:', elementOrId);
+    throw new Error('Unable to prepare this document for printing.');
   }
 
-  // Set document title temporarily so Chrome/Safari defaults the PDF filename to this title
+  // Ensure #print-root exists in document body
+  let printRoot = document.getElementById('print-root');
+  if (!printRoot) {
+    printRoot = document.createElement('div');
+    printRoot.id = 'print-root';
+    document.body.appendChild(printRoot);
+  }
+
+  // Populate #print-root with a clean clone of the printable content
+  printRoot.innerHTML = '';
+  const clone = targetEl.cloneNode(true) as HTMLElement;
+  clone.classList.add('print-document-container');
+  printRoot.appendChild(clone);
+
+  // Mark body as currently printing
+  document.body.classList.add('is-printing');
+
+  // Set document title temporarily so Chrome/Safari defaults the PDF/printed document title
   const originalTitle = document.title;
   if (title) {
     document.title = title;
@@ -67,17 +87,28 @@ export async function printDocument(options: PrintOptions): Promise<PrintResult>
     document.body.classList.remove('print-landscape');
   }
 
-  try {
-    // Ensure styles and DOM are fully settled before invoking print
-    await new Promise<void>((resolve) => {
-      requestAnimationFrame(() => {
-        setTimeout(resolve, 50);
-      });
-    });
+  // Cleanup handler
+  let cleanedUp = false;
+  const cleanup = () => {
+    if (cleanedUp) return;
+    cleanedUp = true;
+    document.title = originalTitle;
+    document.body.classList.remove('print-landscape');
+    document.body.classList.remove('is-printing');
+    if (printRoot) {
+      printRoot.innerHTML = '';
+    }
+    window.removeEventListener('afterprint', cleanup);
+  };
 
+  window.addEventListener('afterprint', cleanup, { once: true });
+  // Safety fallback cleanup in case afterprint does not fire in certain browser versions
+  setTimeout(cleanup, 2000);
+
+  try {
     window.focus();
 
-    // Call native window.print() directly
+    // Call native window.print() directly within the user gesture execution context
     window.print();
 
     return {
@@ -87,32 +118,24 @@ export async function printDocument(options: PrintOptions): Promise<PrintResult>
   } catch (err: any) {
     console.warn('[PrintService] Direct window.print() failed:', err);
 
-    // If window.print was blocked by an iframe sandbox without allow-modals,
-    // gracefully fall back to downloading high-resolution PDF for the user
-    try {
-      await exportToPdf({
-        elementOrId: targetEl,
-        filename,
-        orientation,
-      });
+    // Detect iframe sandbox modal restrictions (e.g. AI Studio embedded preview without allow-modals)
+    const errString = String(err?.message || err || '');
+    const isSandboxRestricted =
+      err?.name === 'SecurityError' ||
+      errString.includes('sandbox') ||
+      errString.includes('modal dialog') ||
+      errString.includes('not permitted');
 
+    if (isSandboxRestricted || isRunningInIframe()) {
       return {
-        success: true,
-        method: 'pdf_download',
-        message: 'Direct print was restricted by the browser preview sandbox. High-resolution PDF has been downloaded.',
+        success: false,
+        method: 'restricted',
+        message: 'Printing is restricted in the embedded preview. Open the app preview in a browser tab and print again.',
       };
-    } catch (pdfErr: any) {
-      console.error('[PrintService] PDF fallback failed:', pdfErr);
-      throw new Error(
-        `Print dialog could not be opened: ${err?.message || 'Blocked by browser'}. PDF generation also failed: ${pdfErr?.message || 'Unknown error'}`
-      );
     }
-  } finally {
-    // Restore document title and orientation class
-    setTimeout(() => {
-      document.title = originalTitle;
-      document.body.classList.remove('print-landscape');
-    }, 500);
+
+    throw new Error(err?.message || 'Unable to prepare this document for printing.');
   }
 }
+
 

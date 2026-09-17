@@ -82,6 +82,11 @@ input[type="number"] {
   appearance: textfield;
 }
 
+/* Dedicated Print Root - hidden on screen */
+#print-root {
+  display: none;
+}
+
 /* =========================================================================
    COMPREHENSIVE PRINT SYSTEM STYLING (@media print)
    ========================================================================= */
@@ -89,32 +94,72 @@ input[type="number"] {
   /* Page configuration */
   @page {
     size: A4 portrait;
-    margin: 8mm;
+    margin: 10mm;
   }
 
   body.print-landscape {
     @page {
       size: A4 landscape;
-      margin: 8mm;
+      margin: 10mm;
     }
   }
 
-  /* Universal Print Isolation: Hide all page content by default */
-  body * {
-    visibility: hidden;
+  /* Reset body and html for clean print output */
+  html, body {
+    margin: 0 !important;
+    padding: 0 !important;
+    background: #ffffff !important;
+    color: #0f172a !important;
+    font-size: 10pt !important;
+    height: auto !important;
+    min-height: 100% !important;
+    overflow: visible !important;
+    position: static !important;
+    -webkit-print-color-adjust: exact !important;
+    print-color-adjust: exact !important;
   }
 
-  /* Make ONLY the printable invoice document and its contents visible */
-  .print-document-container,
-  .print-document-container * {
+  /* Hide interactive web chrome: sidebar, navigation, modals, buttons, toolbars */
+  #root,
+  nav,
+  aside,
+  header:not(.print-header),
+  footer,
+  .no-print,
+  .print-toolbar,
+  .print-preview-dialog,
+  .modal-backdrop,
+  [role="dialog"],
+  button,
+  input,
+  select,
+  textarea {
+    display: none !important;
+  }
+
+  /* Show the isolated #print-root document cleanly */
+  #print-root {
+    display: block !important;
+    position: static !important;
+    width: 100% !important;
+    max-width: 100% !important;
+    margin: 0 !important;
+    padding: 0 !important;
+    background: #ffffff !important;
+    color: #0f172a !important;
+    overflow: visible !important;
     visibility: visible !important;
   }
 
-  /* Position printable document at the top-left of physical page */
+  #print-root * {
+    visibility: visible !important;
+  }
+
+  /* Direct printable document formatting */
   .print-document-container {
-    position: absolute !important;
-    left: 0 !important;
-    top: 0 !important;
+    display: block !important;
+    visibility: visible !important;
+    position: static !important;
     width: 100% !important;
     max-width: 100% !important;
     margin: 0 !important;
@@ -134,59 +179,23 @@ input[type="number"] {
     max-width: 100% !important;
   }
 
-  /* Completely collapse web chrome elements so they consume 0 space */
-  nav,
-  aside,
-  header:not(.print-header),
-  .no-print,
-  .print-toolbar,
-  .modal-backdrop,
-  button,
-  input,
-  select,
-  textarea {
-    display: none !important;
+  /* Fallback if printing directly without #print-root (e.g. browser Ctrl+P on standalone page) */
+  body:not(.is-printing) #root {
+    display: block !important;
   }
-
-  /* Reset body and container backgrounds */
-  html, body, #root, #root > div, .h-screen, main {
-    margin: 0 !important;
-    padding: 0 !important;
-    background: #ffffff !important;
-    color: #0f172a !important;
-    font-size: 10pt !important;
-    height: auto !important;
-    min-height: auto !important;
-    overflow: visible !important;
-    position: static !important;
-    -webkit-print-color-adjust: exact !important;
-    print-color-adjust: exact !important;
+  body:not(.is-printing) body * {
+    visibility: hidden;
   }
-
-  /* Unconstrain modal wrappers during print */
-  .print-preview-dialog {
-    position: static !important;
-    inset: auto !important;
-    width: 100% !important;
-    height: auto !important;
-    overflow: visible !important;
-    background: transparent !important;
-    backdrop-filter: none !important;
-    box-shadow: none !important;
-    padding: 0 !important;
-    margin: 0 !important;
-  }
-
-  .print-preview-dialog > div {
-    overflow: visible !important;
-    background: transparent !important;
-    padding: 0 !important;
+  body:not(.is-printing) .print-document-container,
+  body:not(.is-printing) .print-document-container * {
+    visibility: visible !important;
   }
 
   /* Tables & Page Breaks */
   table {
-    page-break-inside: auto;
+    border-collapse: collapse !important;
     width: 100% !important;
+    page-break-inside: auto;
   }
 
   thead {
@@ -202,12 +211,15 @@ input[type="number"] {
     break-inside: avoid !important;
   }
 
-  .avoid-break {
+  /* Page Break & Isolation Utilities */
+  .avoid-break,
+  .print-avoid-break {
     page-break-inside: avoid !important;
     break-inside: avoid !important;
   }
 
-  .force-page-break {
+  .force-page-break,
+  .print-page-break {
     page-break-after: always !important;
     break-after: page !important;
   }

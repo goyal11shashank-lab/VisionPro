@@ -47,6 +47,7 @@ interface VoucherHeaderProps {
   submitting: boolean;
   onSaveDraft?: () => void;
   onSavePost: () => void;
+  onPrint?: () => void;
   onBack: () => void;
 }
 
@@ -70,6 +71,7 @@ export const VoucherHeader: React.FC<VoucherHeaderProps> = ({
   submitting,
   onSaveDraft,
   onSavePost,
+  onPrint,
   onBack,
 }) => {
   const isSales = voucherType === 'SALES' || voucherType === 'SALES_ORDER';
@@ -197,6 +199,18 @@ export const VoucherHeader: React.FC<VoucherHeaderProps> = ({
 
           {/* Action buttons */}
           <div className="flex items-center gap-1.5 ml-2 font-sans">
+            {onPrint && (
+              <button
+                type="button"
+                id="btn-voucher-header-print"
+                onClick={onPrint}
+                className="px-2.5 py-1 text-xs font-semibold text-slate-700 bg-white hover:bg-slate-100 rounded border border-slate-300 transition-colors flex items-center gap-1.5 shadow-2xs"
+                title="Print or Preview Voucher"
+              >
+                <Printer className="w-3.5 h-3.5 text-slate-600" />
+                <span>Print</span>
+              </button>
+            )}
             {onSaveDraft && (
               <button
                 type="button"

@@ -107,6 +107,7 @@ export const CreatePurchaseInvoicePage: React.FC<Props> = ({
   const [createdInvoice, setCreatedInvoice] = useState<any | null>(null);
   const [showPrintModal, setShowPrintModal] = useState<boolean>(false);
   const [isPrintPreviewOpen, setIsPrintPreviewOpen] = useState<boolean>(false);
+  const [autoInvokePrint, setAutoInvokePrint] = useState<boolean>(false);
 
   // Helper: Auto calculate Due Date based on payment terms
   const updateDueDate = (baseDate: string, terms: string) => {
@@ -166,6 +167,7 @@ export const CreatePurchaseInvoicePage: React.FC<Props> = ({
       if (isOrder && editOrderId) {
         const ord = await apiRequest<any>(`/api/purchases/orders/${editOrderId}`);
         if (ord) {
+          setCreatedInvoice(ord);
           setExistingInvoiceNumber(ord.orderNumber);
           setExistingStatus(ord.status);
           const initialSupId = ord.supplierPartyId || (ord.supplier?.id ?? '');
@@ -290,6 +292,7 @@ export const CreatePurchaseInvoicePage: React.FC<Props> = ({
           apiRequest<any>(`/api/purchases/${editInvoiceId}`)
         );
         if (inv) {
+          setCreatedInvoice(inv);
           setExistingInvoiceNumber(inv.invoiceNumber);
           setExistingStatus(inv.status);
           const initialSupId = inv.supplierPartyId || (inv.supplier?.id ?? '');
@@ -919,6 +922,47 @@ export const CreatePurchaseInvoicePage: React.FC<Props> = ({
     );
   }
 
+  const getPrintableVoucher = () => {
+    if (createdInvoice) return createdInvoice;
+    return {
+      id: editOrderId || editInvoiceId || 'draft',
+      orderNumber: isOrder ? (existingInvoiceNumber || 'DRAFT-PO') : undefined,
+      invoiceNumber: !isOrder ? (existingInvoiceNumber || 'DRAFT-PUR') : undefined,
+      invoiceDate: invoiceDate || new Date().toISOString(),
+      orderDate: invoiceDate || new Date().toISOString(),
+      status: 'DRAFT',
+      partyName: selectedParty?.name || 'Procurement Supplier',
+      partyGstin: selectedParty?.gstin || '',
+      partyAddress: selectedParty?.address || '',
+      partyState: selectedParty?.state || '',
+      partyPhone: selectedParty?.phone || '',
+      party: selectedParty,
+      supplier: selectedParty,
+      taxableAmount: totals.taxableAmount,
+      cgstAmount: totals.cgstAmount,
+      sgstAmount: totals.sgstAmount,
+      igstAmount: totals.igstAmount,
+      roundOff: totals.roundOff,
+      grandTotal: totals.grandTotal,
+      lines: computedLines.filter(l => l.uniqueItemId && l.quantity > 0).map(l => ({
+        ...l,
+        uniqueItemName: l.uniqueItemName,
+        uniqueItemCode: l.uniqueItemCode,
+        quantity: l.quantity,
+        unit: 'PRS',
+        rate: l.rate,
+        taxableAmount: l.taxable,
+        cgstAmount: l.cgst,
+        sgstAmount: l.sgst,
+        igstAmount: l.igst,
+        lineTotal: l.total,
+        batches: l.batches || [],
+      })),
+      notes: notes,
+      supplierInvoiceNumber: supplierInvoiceNumber,
+    };
+  };
+
   return (
     <div
       id="normal-purchase-voucher-page"
@@ -946,6 +990,10 @@ export const CreatePurchaseInvoicePage: React.FC<Props> = ({
         onSupplierInvoiceDateChange={setSupplierInvoiceDate}
         submitting={submitting}
         onSavePost={() => handleSaveInvoice(true)}
+        onPrint={() => {
+          setAutoInvokePrint(false);
+          setIsPrintPreviewOpen(true);
+        }}
         onBack={onBack}
       />
 
@@ -1147,19 +1195,20 @@ export const CreatePurchaseInvoicePage: React.FC<Props> = ({
       )}
 
       {/* REUSABLE A4 PRINT PREVIEW MODAL */}
-      {isPrintPreviewOpen && createdInvoice && (
+      {isPrintPreviewOpen && (
         <PrintPreviewModal
           isOpen={isPrintPreviewOpen}
           onClose={() => setIsPrintPreviewOpen(false)}
-          title={`${isOrder ? 'Purchase Order' : 'Purchase Invoice'} - ${createdInvoice.orderNumber || createdInvoice.invoiceNumber || existingInvoiceNumber || ''}`}
-          filename={`${isOrder ? 'PO' : 'PI'}_${createdInvoice.orderNumber || createdInvoice.invoiceNumber || 'VOUCHER'}`}
+          title={`${isOrder ? 'Purchase Order' : 'Purchase Invoice'} - ${(createdInvoice || getPrintableVoucher()).orderNumber || (createdInvoice || getPrintableVoucher()).invoiceNumber || existingInvoiceNumber || ''}`}
+          filename={`${isOrder ? 'PO' : 'PI'}_${(createdInvoice || getPrintableVoucher()).orderNumber || (createdInvoice || getPrintableVoucher()).invoiceNumber || 'VOUCHER'}`}
           defaultOrientation="portrait"
+          autoInvokePrint={autoInvokePrint}
         >
           {({ documentId }) => (
             <PrintableVoucher
               id={documentId}
               business={currentBusiness}
-              voucher={createdInvoice}
+              voucher={createdInvoice || getPrintableVoucher()}
               documentType={isOrder ? 'PURCHASE_ORDER' : 'PURCHASE_INVOICE'}
               customTitle={isOrder ? 'PURCHASE ORDER' : 'PURCHASE INVOICE'}
               copyLabel="Original for Records"

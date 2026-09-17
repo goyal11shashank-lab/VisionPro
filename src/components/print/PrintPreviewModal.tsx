@@ -64,13 +64,12 @@ export const PrintPreviewModal: React.FC<PrintPreviewModalProps> = ({
         orientation,
       });
 
-      // Only display message if it gracefully fell back to PDF download
-      if (result.method === 'pdf_download' && result.message) {
-        setStatusMessage(result.message);
+      if (result.method === 'restricted' && result.message) {
+        setErrorMessage(result.message);
       }
     } catch (err: any) {
       console.error('Print error:', err);
-      setErrorMessage(err.message || 'Unable to open system print dialog.');
+      setErrorMessage(err.message || 'Unable to prepare this document for printing.');
     } finally {
       setIsPrinting(false);
     }
@@ -245,11 +244,23 @@ export const PrintPreviewModal: React.FC<PrintPreviewModalProps> = ({
         </div>
       )}
 
-      {/* Error banner if export failed */}
+      {/* Error or Restriction banner */}
       {errorMessage && (
-        <div className="no-print bg-red-600 text-white px-4 py-2 text-xs font-medium flex justify-between items-center">
-          <span>{errorMessage}</span>
-          <button onClick={() => setErrorMessage(null)} className="font-bold ml-2">✕</button>
+        <div className="no-print bg-amber-600 text-white px-4 py-2 text-xs font-medium flex flex-wrap justify-between items-center gap-2 shadow-sm">
+          <div className="flex items-center gap-2">
+            <span className="font-semibold">{errorMessage}</span>
+          </div>
+          <div className="flex items-center gap-3">
+            {errorMessage.includes('embedded preview') && (
+              <button
+                onClick={() => window.open(window.location.href, '_blank')}
+                className="px-2.5 py-1 bg-white text-amber-900 rounded font-bold hover:bg-amber-50 transition text-[11px]"
+              >
+                Open in New Tab
+              </button>
+            )}
+            <button onClick={() => setErrorMessage(null)} className="font-bold hover:opacity-80 text-sm">✕</button>
+          </div>
         </div>
       )}
 
