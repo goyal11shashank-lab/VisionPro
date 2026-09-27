@@ -42,7 +42,7 @@ import {
   stockReservations,
   auditLogs,
 } from '../db/schema.js';
-import { eq, and, sql } from 'drizzle-orm';
+import { eq, and, ne, sql } from 'drizzle-orm';
 import { StockService } from '../services/stockService.js';
 import { findOrCreateOpticalBatch } from '../services/opticalMasterService.js';
 import { seedInitialDatabase } from '../db/seed.js';
@@ -71,14 +71,14 @@ export async function runPhase3StockTests(): Promise<{
   const [bizA] = await db.select().from(businesses).where(eq(businesses.status, 'ACTIVE')).limit(1);
   if (!bizA) throw new Error('Default business not found');
 
-  let [bizB] = await db.select().from(businesses).where(eq(businesses.name, 'VisionCraft Optical Labs')).limit(1);
+  let [bizB] = await db.select().from(businesses).where(and(eq(businesses.status, 'ACTIVE'), ne(businesses.id, bizA.id))).limit(1);
   if (!bizB) {
     const [inserted] = await db
       .insert(businesses)
       .values({
-        name: 'VisionCraft Optical Labs',
-        tradeName: 'VisionCraft Labs',
-        gstin: '27AABCV1234F1Z8',
+        name: 'VisionCraft South Branch',
+        tradeName: 'South Branch Labs',
+        gstin: '27AABCV9999F1Z9',
         currency: 'INR',
         status: 'ACTIVE',
       })

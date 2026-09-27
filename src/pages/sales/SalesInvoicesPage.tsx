@@ -892,7 +892,7 @@ export const SalesInvoicesPage: React.FC<{
   }
 
   return (
-    <div id="sales-invoices-container" className="p-6 max-w-7xl mx-auto space-y-6">
+    <div id="sales-invoices-container" className="w-full space-y-4">
       {/* Toast Notification Banner */}
       {notification && (
         <div

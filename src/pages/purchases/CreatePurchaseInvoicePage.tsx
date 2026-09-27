@@ -6,6 +6,8 @@ import {
   CheckCircle2,
   AlertTriangle,
   RefreshCw,
+  ShoppingCart,
+  X,
 } from 'lucide-react';
 import { useAuth } from '../../context/AuthContext';
 import { apiRequest } from '../../api/client';
@@ -29,6 +31,7 @@ import {
 interface Props {
   editInvoiceId?: string | null;
   fromPurchaseOrderId?: string | null;
+  orderId?: string | null;
   isOrder?: boolean;
   editOrderId?: string | null;
   onBack?: () => void;
@@ -39,6 +42,7 @@ interface Props {
 export const CreatePurchaseInvoicePage: React.FC<Props> = ({
   editInvoiceId,
   fromPurchaseOrderId,
+  orderId,
   isOrder = false,
   editOrderId,
   onBack = () => window.history.back(),
@@ -47,6 +51,21 @@ export const CreatePurchaseInvoicePage: React.FC<Props> = ({
 }) => {
   const { currentBusiness } = useAuth();
 
+  const detectedOrderId = (() => {
+    if (fromPurchaseOrderId) return fromPurchaseOrderId;
+    if (orderId) return orderId;
+    if (typeof window !== 'undefined') {
+      const sp = new URLSearchParams(window.location.search);
+      return sp.get('fromPurchaseOrderId') || sp.get('orderId') || sp.get('fromOrderId') || null;
+    }
+    return null;
+  })();
+
+  const [convertingOrderId, setConvertingOrderId] = useState<string | null>(
+    !isOrder ? detectedOrderId : null
+  );
+  const [convertingOrderNumber, setConvertingOrderNumber] = useState<string | null>(null);
+
   // Master Data
   const [suppliers, setSuppliers] = useState<Party[]>([]);
   const [uniqueItemsList, setUniqueItemsList] = useState<UniqueItem[]>([]);
@@ -54,7 +73,7 @@ export const CreatePurchaseInvoicePage: React.FC<Props> = ({
   const [existingInvoiceNumber, setExistingInvoiceNumber] = useState<string>('');
   const [existingStatus, setExistingStatus] = useState<string>('');
   const [linkedPurchaseOrderId, setLinkedPurchaseOrderId] = useState<string | null>(
-    fromPurchaseOrderId || null
+    !isOrder ? detectedOrderId : null
   );
   const [expectedDeliveryDate, setExpectedDeliveryDate] = useState<string>('');
 
@@ -230,18 +249,37 @@ export const CreatePurchaseInvoicePage: React.FC<Props> = ({
             setLines([createEmptyVoucherLine('p-row')]);
           }
         }
-      } else if (!isOrder && fromPurchaseOrderId) {
+      } else if (!isOrder && detectedOrderId) {
         // Prefill from Purchase Order for Conversion to Actual Invoice
-        const po = await apiRequest<any>(`/api/purchases/orders/${fromPurchaseOrderId}`);
+        const po = await apiRequest<any>(`/api/purchases/orders/${detectedOrderId}`);
         if (po) {
-          setLinkedPurchaseOrderId(fromPurchaseOrderId);
-          const initialSupId = po.supplierPartyId || (po.supplier?.id ?? '');
+          setConvertingOrderId(detectedOrderId);
+          setConvertingOrderNumber(po.orderNumber || po.order?.orderNumber || null);
+          setLinkedPurchaseOrderId(detectedOrderId);
+
+          const initialSupId = po.supplierPartyId || po.supplier?.id || (po.order?.supplierPartyId ?? '');
           setSupplierPartyId(initialSupId);
           const sup = validSuppliers.find(p => p.id === initialSupId) || po.supplier || null;
           setSelectedParty(sup);
-          setSupplierInvoiceNumber(po.supplierReference || '');
-          setGstMode(po.gstMode || 'INTRA_STATE');
-          setNotes(po.notes ? `Ref: PO #${po.orderNumber}. ${po.notes}` : `Ref: PO #${po.orderNumber}`);
+          setSupplierInvoiceNumber(po.supplierReference || po.order?.supplierReference || '');
+
+          // Authoritative GST mode
+          let authoritativeGstMode: 'INTRA_STATE' | 'INTER_STATE' | 'EXEMPT' =
+            po.gstMode || po.order?.gstMode || 'INTRA_STATE';
+          if (authoritativeGstMode !== 'EXEMPT') {
+            const supState = sup?.state || po.supplier?.state;
+            if (currentBusiness?.state && supState) {
+              authoritativeGstMode =
+                currentBusiness.state.trim().toLowerCase() === supState.trim().toLowerCase()
+                  ? 'INTRA_STATE'
+                  : 'INTER_STATE';
+            }
+          }
+          setGstMode(authoritativeGstMode);
+
+          const poOrderNumber = po.orderNumber || po.order?.orderNumber;
+          const poNotes = po.notes || po.order?.notes;
+          setNotes(poNotes ? `Ref: PO #${poOrderNumber}. ${poNotes}` : `Ref: PO #${poOrderNumber}`);
 
           if (initialSupId) {
             try {
@@ -258,30 +296,53 @@ export const CreatePurchaseInvoicePage: React.FC<Props> = ({
             }
           }
 
-          if (po.lines && po.lines.length > 0) {
-            const loadedLines: VoucherLineItem[] = po.lines.map((l: any, i: number) => ({
-              id: `po-conv-row-${i}-${l.id || i}`,
-              uniqueItemId: l.uniqueItemId,
-              uniqueItemName: l.uniqueItem?.name || 'Item',
-              uniqueItemCode: l.uniqueItem?.code || '',
-              categoryCode: l.category?.code || l.uniqueItem?.categoryCode || 'SV',
-              maintainBatches: l.uniqueItem?.maintainBatches !== false,
-              quantity: parseFloat(l.quantity) || 1,
-              rate: parseFloat(l.rate) || 0,
-              discountType: l.discountType || 'NONE',
-              discountValue: parseFloat(l.discountValue) || 0,
-              gstRate: parseFloat(l.gstRate) || 12,
-              batches: (l.batches || []).map((b: any) => ({
-                batchId: b.batchId || b.batch?.id,
-                sph: b.batch?.sph !== undefined ? parseFloat(b.batch.sph) : parseFloat(b.sph || 0),
-                cyl: b.batch?.cyl !== undefined ? parseFloat(b.batch.cyl) : parseFloat(b.cyl || 0),
-                axis: b.batch?.axis !== undefined ? parseFloat(b.batch.axis) : parseFloat(b.axis || 0),
-                add: b.batch?.add !== undefined ? parseFloat(b.batch.add) : parseFloat(b.add || 0),
-                side: b.batch?.side || b.side || 'NONE',
-                quantity: parseFloat(b.quantity) || 1,
-                rate: parseFloat(b.rate !== undefined ? b.rate : (l.rate || 0)),
-              })),
-            }));
+          const rawPoLines = po.lines || [];
+          const linesToHydrate = rawPoLines.filter((l: any) => {
+            const rem = l.remainingQuantity !== undefined ? parseFloat(l.remainingQuantity) : parseFloat(l.quantity || '0');
+            return rem > 0;
+          });
+
+          if (linesToHydrate.length > 0) {
+            const loadedLines: VoucherLineItem[] = linesToHydrate.map((l: any, i: number) => {
+              const lineRemQty = l.remainingQuantity !== undefined ? parseFloat(l.remainingQuantity) : (parseFloat(l.quantity) || 1);
+              const poBatches = (l.batches || []).filter((b: any) => {
+                const bRem = b.remainingQuantity !== undefined ? parseFloat(b.remainingQuantity) : (parseFloat(b.quantity) || 0);
+                return bRem > 0;
+              });
+
+              const hydratedBatches = poBatches.map((b: any) => {
+                const bRem = b.remainingQuantity !== undefined ? parseFloat(b.remainingQuantity) : (parseFloat(b.quantity) || 0);
+                return {
+                  batchId: b.batchId || b.batch?.id,
+                  sph: b.batch?.sph !== undefined ? parseFloat(b.batch.sph) : parseFloat(b.sph || 0),
+                  cyl: b.batch?.cyl !== undefined ? parseFloat(b.batch.cyl) : parseFloat(b.cyl || 0),
+                  axis: b.batch?.axis !== undefined ? parseFloat(b.batch.axis) : parseFloat(b.axis || 0),
+                  add: b.batch?.add !== undefined ? parseFloat(b.batch.add) : parseFloat(b.add || 0),
+                  side: b.batch?.side || b.side || 'NONE',
+                  quantity: bRem,
+                  rate: parseFloat(b.rate !== undefined ? b.rate : (l.rate || 0)),
+                };
+              });
+
+              const totalBatchQty = hydratedBatches.reduce((acc: number, b: any) => acc + b.quantity, 0);
+              const finalQty = hydratedBatches.length > 0 ? totalBatchQty : lineRemQty;
+
+              return {
+                id: `po-conv-row-${i}-${l.id || i}`,
+                uniqueItemId: l.uniqueItemId,
+                uniqueItemName: l.uniqueItem?.name || 'Item',
+                uniqueItemCode: l.uniqueItem?.code || '',
+                categoryCode: l.category?.code || l.uniqueItem?.categoryCode || 'SV',
+                maintainBatches: l.uniqueItem?.maintainBatches !== false,
+                unit: l.uniqueItem?.unit || 'PRS',
+                quantity: finalQty,
+                rate: parseFloat(l.rate) || 0,
+                discountType: l.discountType || 'NONE',
+                discountValue: parseFloat(l.discountValue) || 0,
+                gstRate: parseFloat(l.gstRate) || 12,
+                batches: hydratedBatches,
+              };
+            });
             setLines(ensureTrailingBlankRow(loadedLines, 'p-row'));
           } else {
             setLines([createEmptyVoucherLine('p-row')]);
@@ -765,9 +826,18 @@ export const CreatePurchaseInvoicePage: React.FC<Props> = ({
         }
       }
 
-      if (line.quantity <= 0) {
-        setError(`Line #${lineNum} (${itemName}) has invalid quantity (${line.quantity}). Must be ≥ 0.5.`);
-        return;
+      const itemUnit = (uniqueItemsList.find(u => u.id === line.uniqueItemId)?.unit || line.unit || 'PRS').toUpperCase();
+      const isDiscrete = ['PCS', 'PIECES', 'BOX', 'BOXES', 'NOS', 'PKT', 'PACKET', 'UNIT', 'UNITS'].includes(itemUnit);
+      if (isDiscrete) {
+        if (!Number.isInteger(line.quantity) || line.quantity < 1) {
+          setError(`Line #${lineNum} (${itemName}): Quantity must be a positive whole integer for unit ${itemUnit}.`);
+          return;
+        }
+      } else {
+        if (line.quantity < 0.5 || Math.round(line.quantity * 2) !== line.quantity * 2) {
+          setError(`Line #${lineNum} (${itemName}): Quantity must be in increments of 0.5 (min 0.5) for unit ${itemUnit}.`);
+          return;
+        }
       }
 
       if (line.rate < 0) {
@@ -880,6 +950,31 @@ export const CreatePurchaseInvoicePage: React.FC<Props> = ({
             method: 'POST',
           });
         }
+      } else if (convertingOrderId) {
+        // Atomic PO Conversion endpoint
+        const created = await apiRequest<any>(
+          `/api/purchases/orders/${convertingOrderId}/convert`,
+          {
+            method: 'POST',
+            body: JSON.stringify({
+              invoiceDate: payload.invoiceDate,
+              supplierInvoiceNumber: payload.supplierInvoiceNumber,
+              supplierInvoiceDate: payload.supplierInvoiceDate,
+              gstMode: payload.gstMode,
+              notes: payload.notes,
+              lines: payload.lines,
+              status: 'POSTED',
+            }),
+          }
+        );
+        resultId = created.id;
+        finalInvoice = created;
+
+        if (created.status !== 'POSTED') {
+          finalInvoice = await apiRequest(`/api/purchases/invoices/${created.id}/post`, {
+            method: 'POST',
+          });
+        }
       } else {
         const created = await apiRequest<any>(
           '/api/purchases/invoices',
@@ -963,11 +1058,47 @@ export const CreatePurchaseInvoicePage: React.FC<Props> = ({
     };
   };
 
+  const handleUnlinkReset = () => {
+    setConvertingOrderId(null);
+    setConvertingOrderNumber(null);
+    setLinkedPurchaseOrderId(null);
+    setSupplierPartyId('');
+    setSelectedParty(null);
+    setPartyBalance(null);
+    setSupplierInvoiceNumber('');
+    setSupplierInvoiceDate('');
+    setNotes('');
+    setLines([createEmptyVoucherLine('p-row')]);
+  };
+
   return (
     <div
       id="normal-purchase-voucher-page"
       className="flex flex-col h-full w-full bg-slate-100 border border-slate-300 rounded-md overflow-hidden select-none font-sans"
     >
+      {/* PO Conversion Banner */}
+      {convertingOrderId && (
+        <div
+          id="po-conversion-banner"
+          className="bg-amber-50 border-b border-amber-200 px-4 py-2 flex items-center justify-between text-xs text-amber-900 shrink-0"
+        >
+          <div className="flex items-center space-x-2">
+            <ShoppingCart className="w-4 h-4 text-amber-600 shrink-0" />
+            <span>
+              Converting Purchase Order: <strong className="font-mono font-semibold">{convertingOrderNumber || convertingOrderId}</strong>. Remaining quantities and optical batch allocations have been pre-hydrated.
+            </span>
+          </div>
+          <button
+            type="button"
+            id="btn-unlink-po"
+            onClick={handleUnlinkReset}
+            className="text-amber-700 hover:text-amber-900 underline font-medium cursor-pointer"
+          >
+            Unlink / Reset to Clean Purchase Invoice
+          </button>
+        </div>
+      )}
+
       {/* 1. Tally-style Voucher Header */}
       <VoucherHeader
         voucherType={isOrder ? 'PURCHASE_ORDER' : 'PURCHASE'}

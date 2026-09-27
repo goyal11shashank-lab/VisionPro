@@ -198,6 +198,11 @@ export interface AppSettings {
     enableKeyboardNavigation: boolean;
     autoFocusNextField: boolean;
   };
+  dealer?: {
+    shareStockWithMain: boolean;
+    notifyOnOrderDispatched?: boolean;
+    notifyOnStockReservation?: boolean;
+  };
 }
 
 export const DEFAULT_APP_SETTINGS: AppSettings = {
@@ -295,10 +300,10 @@ export const DEFAULT_APP_SETTINGS: AppSettings = {
     numbering: {
       salesInvoice: { prefix: 'INV-', startNumber: 1, method: 'AUTOMATIC' },
       salesOrder: { prefix: 'SO-', startNumber: 1, method: 'AUTOMATIC' },
-      salesReturn: { prefix: 'CN-', startNumber: 1, method: 'AUTOMATIC' },
+      salesReturn: { prefix: 'SR-', startNumber: 1, method: 'AUTOMATIC' },
       purchaseInvoice: { prefix: 'PUR-', startNumber: 1, method: 'AUTOMATIC' },
       purchaseOrder: { prefix: 'PO-', startNumber: 1, method: 'AUTOMATIC' },
-      purchaseReturn: { prefix: 'DN-', startNumber: 1, method: 'AUTOMATIC' },
+      purchaseReturn: { prefix: 'PR-', startNumber: 1, method: 'AUTOMATIC' },
       customerReceipt: { prefix: 'REC-', startNumber: 1, method: 'AUTOMATIC' },
       supplierPayment: { prefix: 'PAY-', startNumber: 1, method: 'AUTOMATIC' },
     },
@@ -394,6 +399,11 @@ export const DEFAULT_APP_SETTINGS: AppSettings = {
     searchResultLimit: 25,
     enableKeyboardNavigation: true,
     autoFocusNextField: true,
+  },
+  dealer: {
+    shareStockWithMain: false,
+    notifyOnOrderDispatched: true,
+    notifyOnStockReservation: true,
   },
 };
 

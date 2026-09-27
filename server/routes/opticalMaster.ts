@@ -6,7 +6,7 @@ import {
   categories, bases, coatings, baseCategories, primaryItems, uniqueItems,
   opticalBatches, opticalStocks, stockLedger, businesses
 } from '../db/schema.js';
-import { eq, and, desc, sql, ilike, or, ne } from 'drizzle-orm';
+import { eq, and, desc, sql, ilike, or, ne, inArray } from 'drizzle-orm';
 import { recordAuditLog } from '../services/auditService.js';
 import { findOrCreateOpticalBatch, OpticalPowerInput, validateOpticalPower, updateOpticalBatch } from '../services/opticalMasterService.js';
 import { rankSearchMatch, formatOpticalBatchName } from '../utils/searchNormalization.js';
@@ -2071,39 +2071,19 @@ router.delete(['/unique-items/:id', '/stock-items/:id'], requireAnyPermission(['
       return;
     }
 
-    // Check if any invoices (sales or purchase) or documents reference this unique item
+    // Check all dependencies and audit records referencing this stock item
     const checkRes = await pool.query(
       `SELECT 
-        (
-          SELECT COUNT(*)::int 
-          FROM sales_invoice_lines sil
-          WHERE sil.unique_item_id = $1
-        ) AS sales_invoice_lines_count,
-        (
-          SELECT COUNT(*)::int 
-          FROM purchase_invoice_lines pil
-          WHERE pil.unique_item_id = $1
-        ) AS purchase_invoice_lines_count,
-        (
-          SELECT COUNT(*)::int 
-          FROM sales_order_lines sol
-          WHERE sol.unique_item_id = $1
-        ) AS sales_order_lines_count,
-        (
-          SELECT COUNT(*)::int 
-          FROM sales_return_lines srl
-          WHERE srl.unique_item_id = $1
-        ) AS sales_return_lines_count,
-        (
-          SELECT COUNT(*)::int 
-          FROM purchase_return_lines prl
-          WHERE prl.unique_item_id = $1
-        ) AS purchase_return_lines_count,
-        (
-          SELECT COUNT(*)::int 
-          FROM optical_batches ob
-          WHERE ob.unique_item_id = $1
-        ) AS optical_batches_count
+        (SELECT COUNT(*)::int FROM sales_invoice_lines sil WHERE sil.unique_item_id = $1) AS sales_invoice_lines_count,
+        (SELECT COUNT(*)::int FROM purchase_invoice_lines pil WHERE pil.unique_item_id = $1) AS purchase_invoice_lines_count,
+        (SELECT COUNT(*)::int FROM sales_order_lines sol WHERE sol.unique_item_id = $1) AS sales_order_lines_count,
+        (SELECT COUNT(*)::int FROM purchase_order_lines pol WHERE pol.unique_item_id = $1) AS purchase_order_lines_count,
+        (SELECT COUNT(*)::int FROM sales_return_lines srl WHERE srl.unique_item_id = $1) AS sales_return_lines_count,
+        (SELECT COUNT(*)::int FROM purchase_return_lines prl WHERE prl.unique_item_id = $1) AS purchase_return_lines_count,
+        (SELECT COUNT(*)::int FROM optical_batches ob WHERE ob.unique_item_id = $1) AS optical_batches_count,
+        (SELECT COUNT(*)::int FROM stock_ledger sl JOIN optical_batches ob ON sl.batch_id = ob.id WHERE ob.unique_item_id = $1) AS stock_ledger_count,
+        (SELECT COUNT(*)::int FROM stock_reservations sr JOIN optical_batches ob ON sr.batch_id = ob.id WHERE ob.unique_item_id = $1 AND sr.status = 'ACTIVE') AS stock_reservations_count,
+        (SELECT COALESCE(SUM(ABS(os.physical_stock)), 0)::numeric FROM optical_batches ob JOIN optical_stocks os ON ob.id = os.batch_id WHERE ob.unique_item_id = $1) AS total_physical_stock
       `,
       [id]
     );
@@ -2112,54 +2092,63 @@ router.delete(['/unique-items/:id', '/stock-items/:id'], requireAnyPermission(['
       sales_invoice_lines_count,
       purchase_invoice_lines_count,
       sales_order_lines_count,
+      purchase_order_lines_count,
       sales_return_lines_count,
       purchase_return_lines_count,
       optical_batches_count,
+      stock_ledger_count,
+      stock_reservations_count,
+      total_physical_stock,
     } = checkRes.rows[0];
 
     if (sales_invoice_lines_count > 0 || purchase_invoice_lines_count > 0 || sales_return_lines_count > 0 || purchase_return_lines_count > 0) {
       res.status(400).json({
-        error: `Cannot delete Stock Item "${current.name}" (${current.code}): Sales or Purchase Invoices / Returns have already been recorded with this SKU item. Invoiced items cannot be deleted to preserve financial audit trails.`
+        error: `Cannot delete Stock Item "${current.name}" (${current.code}): Sales or Purchase Invoices / Returns have already been recorded with this SKU item. Invoiced items cannot be deleted to preserve financial audit trails. Mark it INACTIVE instead.`
       });
       return;
     }
 
     if (sales_order_lines_count > 0) {
       res.status(400).json({
-        error: `Cannot delete Stock Item "${current.name}" (${current.code}): Active Sales Orders reference this SKU item. Cancel or complete the orders first.`
+        error: `Cannot delete Stock Item "${current.name}" (${current.code}): Active Sales Orders reference this SKU item. Cancel or complete the orders first, or mark the item INACTIVE.`
       });
       return;
     }
 
-    // Clean up dependent child master data in sequence
-    await pool.query(
-      `DELETE FROM stock_ledger 
-       WHERE batch_id IN (
-         SELECT id FROM optical_batches WHERE unique_item_id = $1
-       )`,
-      [id]
-    );
+    if (purchase_order_lines_count > 0) {
+      res.status(400).json({
+        error: `Cannot delete Stock Item "${current.name}" (${current.code}): Active Purchase Orders reference this SKU item. Cancel or complete the orders first, or mark the item INACTIVE.`
+      });
+      return;
+    }
 
-    await pool.query(
-      `DELETE FROM stock_reservations 
-       WHERE batch_id IN (
-         SELECT id FROM optical_batches WHERE unique_item_id = $1
-       )`,
-      [id]
-    );
+    if (Number(stock_ledger_count) > 0) {
+      res.status(400).json({
+        error: `Cannot delete Stock Item "${current.name}" (${current.code}): Inventory movements (${stock_ledger_count}) have already been recorded in the stock ledger. Mark it INACTIVE instead to preserve audit trails.`
+      });
+      return;
+    }
 
-    await pool.query(
-      `DELETE FROM optical_stocks 
-       WHERE batch_id IN (
-         SELECT id FROM optical_batches WHERE unique_item_id = $1
-       )`,
-      [id]
-    );
+    if (Number(total_physical_stock) !== 0) {
+      res.status(400).json({
+        error: `Cannot delete Stock Item "${current.name}" (${current.code}): Item currently holds active inventory stock (${total_physical_stock}). Adjust or transfer stock to 0, or mark the item INACTIVE.`
+      });
+      return;
+    }
 
-    await pool.query(
-      `DELETE FROM optical_batches WHERE unique_item_id = $1`,
-      [id]
-    );
+    if (Number(stock_reservations_count) > 0) {
+      res.status(400).json({
+        error: `Cannot delete Stock Item "${current.name}" (${current.code}): Item has ${stock_reservations_count} active stock reservations. Release or convert reservations first, or mark the item INACTIVE.`
+      });
+      return;
+    }
+
+    if (Number(optical_batches_count) > 0) {
+      res.status(400).json({
+        error: `Cannot delete Stock Item "${current.name}" (${current.code}): Item has ${optical_batches_count} associated optical batches. Please delete or mark batches inactive first, or mark the item INACTIVE.`
+      });
+      return;
+    }
 
     await pool.query(
       `DELETE FROM party_item_prices WHERE unique_item_id = $1`,
@@ -2218,8 +2207,13 @@ router.post(['/unique-items/bulk-delete', '/stock-items/bulk-delete'], requireAn
             (SELECT COUNT(*)::int FROM sales_invoice_lines sil WHERE sil.unique_item_id = $1) AS sales_invoice_lines_count,
             (SELECT COUNT(*)::int FROM purchase_invoice_lines pil WHERE pil.unique_item_id = $1) AS purchase_invoice_lines_count,
             (SELECT COUNT(*)::int FROM sales_order_lines sol WHERE sol.unique_item_id = $1) AS sales_order_lines_count,
+            (SELECT COUNT(*)::int FROM purchase_order_lines pol WHERE pol.unique_item_id = $1) AS purchase_order_lines_count,
             (SELECT COUNT(*)::int FROM sales_return_lines srl WHERE srl.unique_item_id = $1) AS sales_return_lines_count,
-            (SELECT COUNT(*)::int FROM purchase_return_lines prl WHERE prl.unique_item_id = $1) AS purchase_return_lines_count
+            (SELECT COUNT(*)::int FROM purchase_return_lines prl WHERE prl.unique_item_id = $1) AS purchase_return_lines_count,
+            (SELECT COUNT(*)::int FROM optical_batches ob WHERE ob.unique_item_id = $1) AS optical_batches_count,
+            (SELECT COUNT(*)::int FROM stock_ledger sl JOIN optical_batches ob ON sl.batch_id = ob.id WHERE ob.unique_item_id = $1) AS stock_ledger_count,
+            (SELECT COUNT(*)::int FROM stock_reservations sr JOIN optical_batches ob ON sr.batch_id = ob.id WHERE ob.unique_item_id = $1 AND sr.status = 'ACTIVE') AS stock_reservations_count,
+            (SELECT COALESCE(SUM(ABS(os.physical_stock)), 0)::numeric FROM optical_batches ob JOIN optical_stocks os ON ob.id = os.batch_id WHERE ob.unique_item_id = $1) AS total_physical_stock
           `,
           [id]
         );
@@ -2228,46 +2222,30 @@ router.post(['/unique-items/bulk-delete', '/stock-items/bulk-delete'], requireAn
           sales_invoice_lines_count,
           purchase_invoice_lines_count,
           sales_order_lines_count,
+          purchase_order_lines_count,
           sales_return_lines_count,
           purchase_return_lines_count,
+          optical_batches_count,
+          stock_ledger_count,
+          stock_reservations_count,
+          total_physical_stock,
         } = checkRes.rows[0];
 
         if (sales_invoice_lines_count > 0 || purchase_invoice_lines_count > 0 || sales_return_lines_count > 0 || purchase_return_lines_count > 0) {
-          errors.push(`"${current.name}" (${current.code}) has recorded sales/purchase invoices or returns.`);
+          errors.push(`"${current.name}" (${current.code}) has recorded invoices or returns.`);
           continue;
         }
 
-        if (sales_order_lines_count > 0) {
-          errors.push(`"${current.name}" (${current.code}) has active sales orders.`);
+        if (sales_order_lines_count > 0 || purchase_order_lines_count > 0) {
+          errors.push(`"${current.name}" (${current.code}) has active orders.`);
           continue;
         }
 
-        // Clean up child tables
-        await pool.query(
-          `DELETE FROM stock_ledger 
-           WHERE batch_id IN (
-             SELECT id FROM optical_batches WHERE unique_item_id = $1
-           )`,
-          [id]
-        );
+        if (Number(stock_ledger_count) > 0 || Number(total_physical_stock) !== 0 || Number(stock_reservations_count) > 0 || Number(optical_batches_count) > 0) {
+          errors.push(`"${current.name}" (${current.code}) has associated batches, stock, or ledger transactions.`);
+          continue;
+        }
 
-        await pool.query(
-          `DELETE FROM stock_reservations 
-           WHERE batch_id IN (
-             SELECT id FROM optical_batches WHERE unique_item_id = $1
-           )`,
-          [id]
-        );
-
-        await pool.query(
-          `DELETE FROM optical_stocks 
-           WHERE batch_id IN (
-             SELECT id FROM optical_batches WHERE unique_item_id = $1
-           )`,
-          [id]
-        );
-
-        await pool.query(`DELETE FROM optical_batches WHERE unique_item_id = $1`, [id]);
         await pool.query(`DELETE FROM party_item_prices WHERE unique_item_id = $1`, [id]);
         await db.delete(uniqueItems).where(and(eq(uniqueItems.id, id), eq(uniqueItems.businessId, bizId)));
 
@@ -3039,6 +3017,49 @@ router.post('/batches/bulk-delete', requireAnyPermission(['master:delete', 'mast
     });
   } catch (error: any) {
     res.status(500).json({ error: error.message || 'Failed to perform bulk delete of optical batches' });
+  }
+});
+
+router.post('/batches/bulk-status', requireAnyPermission(['master:edit', 'master.edit', 'master:manage']), async (req: Request, res: Response): Promise<void> => {
+  try {
+    const bizId = req.user!.currentBusinessId;
+    const { ids, status } = req.body;
+    if (!Array.isArray(ids) || ids.length === 0) {
+      res.status(400).json({ error: 'Please provide an array of Optical Batch IDs.' });
+      return;
+    }
+    if (status !== 'ACTIVE' && status !== 'INACTIVE') {
+      res.status(400).json({ error: 'Status must be ACTIVE or INACTIVE.' });
+      return;
+    }
+    await db
+      .update(opticalBatches)
+      .set({
+        status,
+        updatedAt: new Date(),
+        updatedBy: req.user!.id,
+      })
+      .where(and(inArray(opticalBatches.id, ids), eq(opticalBatches.businessId, bizId)));
+
+    await recordAuditLog({
+      businessId: bizId,
+      userId: req.user!.id,
+      action: status === 'ACTIVE' ? 'ENABLE' : 'DISABLE',
+      module: 'INVENTORY',
+      entityType: 'OpticalBatch',
+      entityId: ids[0],
+      newValue: { ids, status, count: ids.length },
+      req,
+    });
+
+    res.json({
+      success: true,
+      updatedCount: ids.length,
+      status,
+      message: `Updated status to ${status} for ${ids.length} optical batch(es).`
+    });
+  } catch (error: any) {
+    res.status(500).json({ error: error.message || 'Failed to update batch status in bulk' });
   }
 });
 

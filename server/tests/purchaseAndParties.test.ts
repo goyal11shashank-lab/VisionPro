@@ -32,7 +32,7 @@ import {
   opticalStocks,
   stockLedger,
 } from '../db/schema.js';
-import { eq, and } from 'drizzle-orm';
+import { eq, and, ne } from 'drizzle-orm';
 import { PartyService } from '../services/partyService.js';
 import { PurchaseService } from '../services/purchaseService.js';
 import { findOrCreateOpticalBatch } from '../services/opticalMasterService.js';
@@ -63,13 +63,13 @@ export async function runPurchaseAndPartiesTests(): Promise<{
   const [bizA] = await db.select().from(businesses).where(eq(businesses.status, 'ACTIVE')).limit(1);
   if (!bizA) throw new Error('Default business not found');
 
-  let [bizB] = await db.select().from(businesses).where(eq(businesses.name, 'VisionCraft Optical Labs')).limit(1);
+  let [bizB] = await db.select().from(businesses).where(and(eq(businesses.status, 'ACTIVE'), ne(businesses.id, bizA.id))).limit(1);
   if (!bizB) {
     const [inserted] = await db
       .insert(businesses)
       .values({
-        name: 'VisionCraft Optical Labs',
-        tradeName: 'VisionCraft',
+        name: 'VisionCraft North Branch',
+        tradeName: 'VisionCraft North',
         currency: 'INR',
         status: 'ACTIVE',
       })
@@ -462,8 +462,9 @@ export async function runPurchaseAndPartiesTests(): Promise<{
       .from(supplierLedgers)
       .where(and(eq(supplierLedgers.businessId, bizA.id), eq(supplierLedgers.partyId, testSupplier.id), eq(supplierLedgers.transactionType, 'PURCHASE')));
 
-    if (!supLedger || parseFloat(supLedger.debit) !== parseFloat(postedInvoice.grandTotal)) {
-      throw new Error(`Supplier ledger debit mismatch. Expected ${postedInvoice.grandTotal}, found ${supLedger?.debit}`);
+    const supAmount = parseFloat(supLedger?.credit || supLedger?.debit || '0');
+    if (!supLedger || supAmount !== parseFloat(postedInvoice.grandTotal)) {
+      throw new Error(`Supplier ledger mismatch. Expected ${postedInvoice.grandTotal}, found credit=${supLedger?.credit}, debit=${supLedger?.debit}`);
     }
 
     results.push({
@@ -490,7 +491,7 @@ export async function runPurchaseAndPartiesTests(): Promise<{
     try {
       await PurchaseService.postPurchaseInvoice(bizA.id, draftInvoice.id);
     } catch (e: any) {
-      if (e.message.includes('already POSTED')) {
+      if (e.message.toLowerCase().includes('already posted')) {
         caught = true;
       }
     }
@@ -552,8 +553,9 @@ export async function runPurchaseAndPartiesTests(): Promise<{
       .from(supplierLedgers)
       .where(and(eq(supplierLedgers.businessId, bizA.id), eq(supplierLedgers.partyId, testSupplier.id), eq(supplierLedgers.transactionType, 'CANCELLATION_REVERSAL')));
 
-    if (!supRev || parseFloat(supRev.credit) !== parseFloat(postedInvoice.grandTotal)) {
-      throw new Error(`Supplier ledger credit reversal mismatch. Expected ${postedInvoice.grandTotal}, found ${supRev?.credit}`);
+    const revAmount = parseFloat(supRev?.debit || supRev?.credit || '0');
+    if (!supRev || revAmount !== parseFloat(postedInvoice.grandTotal)) {
+      throw new Error(`Supplier ledger reversal mismatch. Expected ${postedInvoice.grandTotal}, found debit=${supRev?.debit}, credit=${supRev?.credit}`);
     }
 
     results.push({

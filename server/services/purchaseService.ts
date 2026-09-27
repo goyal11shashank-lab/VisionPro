@@ -22,6 +22,8 @@ import { findOrCreateOpticalBatch, OpticalPowerInput } from './opticalMasterServ
 import { AuditService } from './auditService.js';
 import { PoolClient } from 'pg';
 import { BusinessSettingsService } from './businessSettingsService.js';
+import { assertValidQuantity } from '../utils/quantityValidator.js';
+import { DocumentSequenceService } from './documentSequenceService.js';
 
 const UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 function isValidUUID(id: string): boolean {
@@ -58,53 +60,35 @@ export interface CreatePurchaseOrderDTO {
   gstMode?: 'INTRA_STATE' | 'INTER_STATE';
   supplierReference?: string;
   notes?: string;
+  source?: 'MANUAL' | 'MAIN_WAREHOUSE' | 'DEALER_ORDER';
+  dealerOrderId?: string;
+  mainSalesOrderId?: string;
+  mainSalesInvoiceId?: string;
   lines: PurchaseLineInput[];
+  idempotencyKey?: string;
 }
 
 export interface CreatePurchaseInvoiceDTO {
   supplierPartyId: string;
   purchaseOrderId?: string;
   invoiceDate: string | Date;
+  invoiceNumber?: string;
+  dueDate?: string | Date;
   supplierInvoiceNumber?: string;
   supplierInvoiceDate?: string | Date;
   gstMode?: 'INTRA_STATE' | 'INTER_STATE';
+  status?: 'DRAFT' | 'POSTED';
   notes?: string;
   lines: PurchaseLineInput[];
+  idempotencyKey?: string;
 }
 
 export class PurchaseService {
   /**
    * Generates a sequential, business-scoped purchase invoice number (e.g. PUR-000001)
    */
-  static async generateInvoiceNumber(businessId: string): Promise<string> {
-    const prefixConfig = await BusinessSettingsService.getVoucherPrefix(businessId, 'purchaseInvoice').catch(() => ({
-      prefix: 'PUR-',
-      startNumber: 1,
-      method: 'AUTOMATIC',
-    }));
-    const prefix = prefixConfig.prefix || 'PUR-';
-    const startNumber = prefixConfig.startNumber || 1;
-
-    const res = await pool.query(
-      `SELECT invoice_number FROM purchase_invoices 
-       WHERE business_id = $1 AND invoice_number LIKE $2
-       ORDER BY created_at DESC 
-       LIMIT 50`,
-      [businessId, `${prefix}%`]
-    );
-
-    let maxNum = startNumber - 1;
-    for (const row of res.rows) {
-      const numStr = (row.invoice_number || '').replace(prefix, '');
-      const num = parseInt(numStr, 10);
-      if (!isNaN(num) && num > maxNum) {
-        maxNum = num;
-      }
-    }
-
-    const nextSeq = Math.max(maxNum + 1, startNumber);
-    const padded = String(nextSeq).padStart(6, '0');
-    return `${prefix}${padded}`;
+  static async generateInvoiceNumber(businessId: string, client?: PoolClient, options?: any): Promise<string> {
+    return await DocumentSequenceService.getNextVoucherNumber(client || pool, businessId, 'PURCHASE_INVOICE', options);
   }
 
   /**
@@ -160,6 +144,13 @@ export class PurchaseService {
     if (!data.supplierPartyId) throw new Error('Supplier party ID is required');
     if (!data.lines || data.lines.length === 0) throw new Error('At least one purchase line is required');
 
+    if (data.idempotencyKey) {
+      const existingId = await DocumentSequenceService.checkIdempotency(pool, businessId, 'PURCHASE_INVOICE', data.idempotencyKey);
+      if (existingId) {
+        return await this.getPurchaseInvoiceById(businessId, existingId);
+      }
+    }
+
     // 1. Verify supplier party
     const [supplier] = await db
       .select()
@@ -176,9 +167,13 @@ export class PurchaseService {
     }
 
     const invoiceDate = new Date(data.invoiceDate || new Date());
+    const creditDaysSnapshot = parseInt(String((supplier as any)?.creditDays || (supplier as any)?.credit_days || 0), 10) || 0;
+    const dueDate = data.dueDate
+      ? new Date(data.dueDate)
+      : new Date(invoiceDate.getTime() + creditDaysSnapshot * 24 * 60 * 60 * 1000);
+
     const supplierInvoiceDate = data.supplierInvoiceDate ? new Date(data.supplierInvoiceDate) : null;
     const gstMode = data.gstMode || 'INTRA_STATE';
-    const invoiceNumber = await this.generateInvoiceNumber(businessId);
 
     // 2. Validate Unique Items and calculate line values
     const processedLines = [];
@@ -204,11 +199,8 @@ export class PurchaseService {
         throw new Error(`Line ${i + 1}: Unique Item not found in this business`);
       }
 
-      const qty = round2(line.quantity);
-      if (qty <= 0) throw new Error(`Line ${i + 1}: Quantity must be greater than 0`);
-      if (Math.abs(Math.round(qty * 2) - qty * 2) > 0.0001) {
-        throw new Error(`Line ${i + 1}: Quantity must be a positive value in steps of 0.5 (e.g. 0.5, 1.0, 1.5, 2.0)`);
-      }
+      const itemUnit = uItem.uniqueItem.unit || 'PRS';
+      const qty = assertValidQuantity(line.quantity, itemUnit, { fieldName: `Line ${i + 1} quantity` });
       const rate = round2(line.rate);
       if (rate < 0) throw new Error(`Line ${i + 1}: Rate cannot be negative`);
 
@@ -229,11 +221,7 @@ export class PurchaseService {
       if (batches.length > 0) {
         let totalBatchQty = 0;
         for (const b of batches) {
-          const bQty = round2(b.quantity);
-          if (bQty <= 0) throw new Error(`Line ${i + 1}: Batch allocation quantity must be positive`);
-          if (Math.abs(Math.round(bQty * 2) - bQty * 2) > 0.0001) {
-            throw new Error(`Line ${i + 1}: Batch allocation quantity must be a positive value in steps of 0.5 (e.g. 0.5, 1.0, 1.5, 2.0)`);
-          }
+          const bQty = assertValidQuantity(b.quantity, itemUnit, { fieldName: `Line ${i + 1} batch allocation quantity` });
           totalBatchQty = round2(totalBatchQty + bQty);
 
           let batchId = b.batchId;
@@ -294,7 +282,7 @@ export class PurchaseService {
         uniqueItemId: line.uniqueItemId,
         taxRes,
         resolvedBatches,
-        categoryCode: uItem.category.code,
+        categoryCode: uItem.category?.code || uItem.uniqueItem?.opticalCategory || '',
       });
     }
 
@@ -309,22 +297,37 @@ export class PurchaseService {
     try {
       await client.query('BEGIN');
 
+      const invoiceNumber =
+        data.invoiceNumber ||
+        (await DocumentSequenceService.getNextVoucherNumber(client, businessId, 'PURCHASE_INVOICE', {
+          voucherDate: invoiceDate,
+        }));
+
       const invRes = await client.query(
         `INSERT INTO purchase_invoices (
           business_id, supplier_party_id, purchase_order_id, invoice_number, invoice_date,
+          due_date, credit_days_snapshot,
           supplier_invoice_number, supplier_invoice_date, gst_mode,
           subtotal, discount_total, taxable_amount,
           igst_rate, igst_amount, cgst_rate, cgst_amount, sgst_rate, sgst_amount,
           round_off, grand_total, payment_status, status, notes,
           created_by, updated_by
-        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, 'UNPAID', 'DRAFT', $20, $21, $21)
-        RETURNING *`,
+        ) VALUES (
+          $1, $2, $3, $4, $5,
+          $6, $7,
+          $8, $9, $10,
+          $11, $12, $13, $14, $15, $16,
+          $17, $18, $19, $20, $21, 'UNPAID', 'DRAFT', $22,
+          $23, $23
+        ) RETURNING *`,
         [
           businessId,
           data.supplierPartyId,
           data.purchaseOrderId || null,
           invoiceNumber,
           invoiceDate.toISOString(),
+          dueDate.toISOString(),
+          creditDaysSnapshot,
           data.supplierInvoiceNumber || null,
           supplierInvoiceDate ? supplierInvoiceDate.toISOString() : null,
           gstMode,
@@ -345,6 +348,16 @@ export class PurchaseService {
       );
 
       const invoice = invRes.rows[0];
+
+      if (data.idempotencyKey) {
+        await DocumentSequenceService.recordIdempotency(
+          client,
+          businessId,
+          'PURCHASE_INVOICE',
+          data.idempotencyKey,
+          invoice.id
+        );
+      }
 
       // Insert lines
       for (const pLine of processedLines) {
@@ -389,14 +402,68 @@ export class PurchaseService {
         }
       }
 
-      // If linked to a purchase order, mark it as CONVERTED
+      // If linked to a purchase order, validate and update its status
       if (data.purchaseOrderId) {
+        // Lock the purchase order FOR UPDATE to prevent concurrent race conditions
+        const poRes = await client.query(
+          `SELECT * FROM purchase_orders WHERE id = $1 AND business_id = $2 FOR UPDATE`,
+          [data.purchaseOrderId, businessId]
+        );
+        if (poRes.rows.length === 0) {
+          throw new Error(`Linked purchase order ${data.purchaseOrderId} not found in this business`);
+        }
+        const poRow = poRes.rows[0];
+
+        if (poRow.status === 'CONVERTED') {
+          throw new Error(`Cannot convert Purchase Order ${poRow.order_number}: already fully converted`);
+        }
+        if (poRow.status === 'CANCELLED') {
+          throw new Error(`Cannot convert cancelled Purchase Order ${poRow.order_number}`);
+        }
+        if (poRow.source === 'DEALER_ORDER' || poRow.dealer_order_id) {
+          throw new Error(
+            `Dealer-linked purchase orders must be processed via the Dealer GRN lifecycle and cannot be directly converted to a Purchase Invoice.`
+          );
+        }
+
+        // Calculate total ordered quantity on the Purchase Order
+        const poLinesRes = await client.query(
+          `SELECT COALESCE(SUM(quantity), 0) as total_ordered FROM purchase_order_lines WHERE purchase_order_id = $1`,
+          [data.purchaseOrderId]
+        );
+        const totalOrdered = parseFloat(poLinesRes.rows[0]?.total_ordered || '0');
+
+        // Calculate total invoiced quantity against this PO across all active purchase invoices (including this new one)
+        const piLinesRes = await client.query(
+          `SELECT COALESCE(SUM(pil.quantity), 0) as total_invoiced
+           FROM purchase_invoice_lines pil
+           JOIN purchase_invoices pi ON pil.purchase_invoice_id = pi.id
+           WHERE pi.purchase_order_id = $1 AND pi.status != 'CANCELLED'`,
+          [data.purchaseOrderId]
+        );
+        const totalInvoiced = parseFloat(piLinesRes.rows[0]?.total_invoiced || '0');
+
+        if (totalInvoiced > totalOrdered + 0.001) {
+          throw new Error(
+            `Over-conversion detected: Total invoiced quantity (${totalInvoiced.toFixed(2)}) would exceed ordered quantity (${totalOrdered.toFixed(2)}) for Purchase Order ${poRow.order_number}`
+          );
+        }
+
+        const poStatus = (totalOrdered > 0 && totalInvoiced >= (totalOrdered - 0.001))
+          ? 'CONVERTED'
+          : 'PARTIALLY_CONVERTED';
+
         await client.query(
           `UPDATE purchase_orders 
-           SET status = 'CONVERTED', converted_invoice_id = $1, updated_at = NOW(), updated_by = $2 
-           WHERE id = $3 AND business_id = $4`,
-          [invoice.id, userId || null, data.purchaseOrderId, businessId]
+           SET status = $1, converted_invoice_id = $2, updated_at = NOW(), updated_by = $3 
+           WHERE id = $4 AND business_id = $5`,
+          [poStatus, invoice.id, userId || null, data.purchaseOrderId, businessId]
         );
+      }
+
+      // If immediate posting requested (e.g. during conversion)
+      if (data.status === 'POSTED') {
+        await this._postPurchaseInvoiceInternal(client, businessId, invoice.id, userId);
       }
 
       await client.query('COMMIT');
@@ -655,7 +722,7 @@ export class PurchaseService {
           uniqueItemId: line.uniqueItemId,
           taxRes,
           resolvedBatches,
-          categoryCode: uItem.category.code,
+          categoryCode: uItem.category?.code || uItem.uniqueItem?.opticalCategory || '',
         });
       }
 
@@ -862,9 +929,9 @@ export class PurchaseService {
 
         await client.query(
           `INSERT INTO supplier_ledgers (
-            business_id, party_id, transaction_date, reference_type, reference_id,
+            business_id, party_id, transaction_type, transaction_date, reference_type, reference_id,
             credit, debit, balance, notes, created_by
-          ) VALUES ($1, $2, $3, 'PURCHASE_INVOICE', $4, $5, '0.00', $6, $7, $8)`,
+          ) VALUES ($1, $2, 'PURCHASE', $3, 'PURCHASE_INVOICE', $4, $5, '0.00', $6, $7, $8)`,
           [
             businessId,
             data.supplierPartyId,
@@ -1257,7 +1324,7 @@ export class PurchaseService {
       `INSERT INTO supplier_ledgers (
         business_id, party_id, transaction_type, reference_type, reference_id,
         debit, credit, balance, transaction_date, notes, created_by, created_at
-      ) VALUES ($1, $2, 'PURCHASE', 'PURCHASE_INVOICE', $3, $4, '0.00', $5, $6, $7, $8, NOW())`,
+      ) VALUES ($1, $2, 'PURCHASE', 'PURCHASE_INVOICE', $3, '0.00', $4, $5, $6, $7, $8, NOW())`,
       [
         businessId,
         inv.supplier_party_id,
@@ -1451,7 +1518,7 @@ export class PurchaseService {
         `INSERT INTO supplier_ledgers (
           business_id, party_id, transaction_type, reference_type, reference_id,
           debit, credit, balance, transaction_date, notes, created_by, created_at
-        ) VALUES ($1, $2, 'CANCELLATION_REVERSAL', 'PURCHASE_INVOICE_CANCEL', $3, '0.00', $4, $5, NOW(), $6, $7, NOW())`,
+        ) VALUES ($1, $2, 'CANCELLATION_REVERSAL', 'PURCHASE_INVOICE_CANCEL', $3, $4, '0.00', $5, NOW(), $6, $7, NOW())`,
         [
           businessId,
           inv.supplier_party_id,
@@ -1470,6 +1537,37 @@ export class PurchaseService {
          WHERE id = $3`,
         [`[CANCELLED: ${reason || 'User cancelled'}]`, userId || null, inv.id]
       );
+
+      // If linked to a purchase order, recalculate PO status
+      if (inv.purchase_order_id) {
+        const poLinesRes = await client.query(
+          `SELECT COALESCE(SUM(quantity), 0) as total_ordered FROM purchase_order_lines WHERE purchase_order_id = $1`,
+          [inv.purchase_order_id]
+        );
+        const totalOrdered = parseFloat(poLinesRes.rows[0]?.total_ordered || '0');
+
+        const piLinesRes = await client.query(
+          `SELECT COALESCE(SUM(pil.quantity), 0) as total_invoiced
+           FROM purchase_invoice_lines pil
+           JOIN purchase_invoices pi ON pil.purchase_invoice_id = pi.id
+           WHERE pi.purchase_order_id = $1 AND pi.status != 'CANCELLED' AND pi.id != $2`,
+          [inv.purchase_order_id, inv.id]
+        );
+        const totalInvoiced = parseFloat(piLinesRes.rows[0]?.total_invoiced || '0');
+
+        const poStatus = (totalOrdered > 0 && totalInvoiced >= (totalOrdered - 0.001))
+          ? 'CONVERTED'
+          : totalInvoiced > 0
+          ? 'PARTIALLY_CONVERTED'
+          : 'OPEN';
+
+        await client.query(
+          `UPDATE purchase_orders 
+           SET status = $1, updated_at = NOW(), updated_by = $2 
+           WHERE id = $3 AND business_id = $4`,
+          [poStatus, userId || null, inv.purchase_order_id, businessId]
+        );
+      }
 
       await client.query('COMMIT');
 
@@ -1738,34 +1836,8 @@ export class PurchaseService {
   /**
    * Generates a sequential, business-scoped purchase order number (e.g. PO-000001)
    */
-  static async generatePurchaseOrderNumber(businessId: string): Promise<string> {
-    const prefixConfig = await BusinessSettingsService.getVoucherPrefix(businessId, 'purchaseOrder').catch(() => ({
-      prefix: 'PO-',
-      startNumber: 1,
-      method: 'AUTOMATIC',
-    }));
-    const prefix = prefixConfig.prefix || 'PO-';
-    const startNumber = prefixConfig.startNumber || 1;
-
-    const res = await pool.query(
-      `SELECT order_number FROM purchase_orders 
-       WHERE business_id = $1 AND order_number LIKE $2
-       ORDER BY created_at DESC 
-       LIMIT 50`,
-      [businessId, `${prefix}%`]
-    );
-
-    let maxNum = startNumber - 1;
-    for (const r of res.rows) {
-      const numStr = (r.order_number || '').replace(prefix, '');
-      const num = parseInt(numStr, 10);
-      if (!isNaN(num) && num > maxNum) {
-        maxNum = num;
-      }
-    }
-
-    const nextNum = Math.max(maxNum + 1, startNumber);
-    return `${prefix}${nextNum.toString().padStart(6, '0')}`;
+  static async generatePurchaseOrderNumber(businessId: string, client?: PoolClient, options?: any): Promise<string> {
+    return await DocumentSequenceService.getNextVoucherNumber(client || pool, businessId, 'PURCHASE_ORDER', options);
   }
 
   /**
@@ -1781,6 +1853,13 @@ export class PurchaseService {
     if (!data.supplierPartyId) throw new Error('Supplier party ID is required');
     if (!data.lines || data.lines.length === 0) throw new Error('At least one order line is required');
 
+    if (data.idempotencyKey) {
+      const existingId = await DocumentSequenceService.checkIdempotency(pool, businessId, 'PURCHASE_ORDER', data.idempotencyKey);
+      if (existingId) {
+        return await this.getPurchaseOrderById(businessId, existingId);
+      }
+    }
+
     const [supplier] = await db
       .select()
       .from(parties)
@@ -1794,7 +1873,6 @@ export class PurchaseService {
     const orderDate = new Date(data.orderDate || new Date());
     const expectedDeliveryDate = data.expectedDeliveryDate ? new Date(data.expectedDeliveryDate) : null;
     const gstMode = data.gstMode || 'INTRA_STATE';
-    const orderNumber = data.orderNumber || (await this.generatePurchaseOrderNumber(businessId));
 
     const processedLines = [];
     const calculatedLineTaxResults = [];
@@ -1819,13 +1897,8 @@ export class PurchaseService {
         throw new Error(`Line ${i + 1}: Unique Item not found in this business`);
       }
 
-      const qty = Number(line.quantity);
-      if (isNaN(qty) || qty <= 0) {
-        throw new Error(`Line ${i + 1}: Quantity must be greater than zero`);
-      }
-      if (Math.abs(Math.round(qty * 2) - qty * 2) > 0.0001) {
-        throw new Error(`Line ${i + 1}: Quantity must be a positive value in steps of 0.5 (e.g. 0.5, 1.0, 1.5, 2.0)`);
-      }
+      const itemUnit = uItem.uniqueItem.unit || 'PRS';
+      const qty = assertValidQuantity(line.quantity, itemUnit, { fieldName: `Line ${i + 1} quantity` });
 
       const rate = Number(line.rate);
       if (isNaN(rate) || rate < 0) {
@@ -1852,8 +1925,7 @@ export class PurchaseService {
       if (batches.length > 0) {
         let totalBatchQty = 0;
         for (const b of batches) {
-          const bQty = round2(b.quantity);
-          if (bQty <= 0) throw new Error(`Line ${i + 1}: Batch allocation quantity must be positive`);
+          const bQty = assertValidQuantity(b.quantity, itemUnit, { fieldName: `Line ${i + 1} batch allocation quantity` });
           totalBatchQty = round2(totalBatchQty + bQty);
 
           let batchId = b.batchId;
@@ -1903,14 +1975,21 @@ export class PurchaseService {
     try {
       await client.query('BEGIN');
 
+      const orderNumber =
+        data.orderNumber ||
+        (await DocumentSequenceService.getNextVoucherNumber(client, businessId, 'PURCHASE_ORDER', {
+          voucherDate: orderDate,
+        }));
+
       const poRes = await client.query(
         `INSERT INTO purchase_orders (
           business_id, supplier_party_id, order_number, order_date,
           expected_delivery_date, gst_mode, subtotal, discount_total, taxable_amount,
           igst_rate, igst_amount, cgst_rate, cgst_amount, sgst_rate, sgst_amount,
-          round_off, grand_total, status, supplier_reference, notes,
+          round_off, grand_total, status, source, supplier_reference, notes,
+          dealer_order_id, main_sales_order_id, main_sales_invoice_id,
           created_by, updated_by
-        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, 'OPEN', $18, $19, $20, $20)
+        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, 'OPEN', $18, $19, $20, $21, $22, $23, $24, $24)
         RETURNING *`,
         [
           businessId,
@@ -1930,8 +2009,12 @@ export class PurchaseService {
           totals.sgstAmount.toFixed(2),
           totals.roundOff.toFixed(2),
           totals.grandTotal.toFixed(2),
+          data.source || 'MANUAL',
           data.supplierReference || null,
           data.notes || null,
+          data.dealerOrderId || null,
+          data.mainSalesOrderId || null,
+          data.mainSalesInvoiceId || null,
           userId || null,
         ]
       );
@@ -1979,6 +2062,16 @@ export class PurchaseService {
         }
       }
 
+      if (data.idempotencyKey) {
+        await DocumentSequenceService.recordIdempotency(
+          client,
+          businessId,
+          'PURCHASE_ORDER',
+          data.idempotencyKey,
+          order.id
+        );
+      }
+
       await client.query('COMMIT');
 
       await AuditService.log({
@@ -2013,6 +2106,7 @@ export class PurchaseService {
     options?: {
       supplierPartyId?: string;
       status?: string;
+      source?: string;
       search?: string;
       limit?: number;
       offset?: number;
@@ -2028,6 +2122,9 @@ export class PurchaseService {
     }
     if (options?.status) {
       conditions.push(eq(purchaseOrders.status, options.status as any));
+    }
+    if (options?.source) {
+      conditions.push(eq(purchaseOrders.source, options.source));
     }
     if (options?.search && options.search.trim() !== '') {
       const term = `%${options.search.trim()}%`;
@@ -2118,6 +2215,34 @@ export class PurchaseService {
       .leftJoin(categories, eq(primaryItems.categoryId, categories.id))
       .where(eq(purchaseOrderLines.purchaseOrderId, orderId));
 
+    // Query invoiced quantity by item and by batch from active linked purchase invoices
+    const invoicedLinesRes = await pool.query(
+      `SELECT pil.unique_item_id, COALESCE(SUM(pil.quantity), 0) as total_invoiced
+       FROM purchase_invoice_lines pil
+       JOIN purchase_invoices pi ON pil.purchase_invoice_id = pi.id
+       WHERE pi.business_id = $1 AND pi.purchase_order_id = $2 AND pi.status != 'CANCELLED'
+       GROUP BY pil.unique_item_id`,
+      [businessId, orderId]
+    );
+    const invoicedQtyByItem = new Map<string, number>();
+    for (const r of invoicedLinesRes.rows) {
+      invoicedQtyByItem.set(r.unique_item_id, parseFloat(r.total_invoiced || '0'));
+    }
+
+    const invoicedBatchesRes = await pool.query(
+      `SELECT pilb.batch_id, COALESCE(SUM(pilb.quantity), 0) as total_invoiced
+       FROM purchase_invoice_line_batches pilb
+       JOIN purchase_invoice_lines pil ON pilb.purchase_invoice_line_id = pil.id
+       JOIN purchase_invoices pi ON pil.purchase_invoice_id = pi.id
+       WHERE pi.business_id = $1 AND pi.purchase_order_id = $2 AND pi.status != 'CANCELLED'
+       GROUP BY pilb.batch_id`,
+      [businessId, orderId]
+    );
+    const invoicedQtyByBatch = new Map<string, number>();
+    for (const r of invoicedBatchesRes.rows) {
+      invoicedQtyByBatch.set(r.batch_id, parseFloat(r.total_invoiced || '0'));
+    }
+
     const populatedLines = await Promise.all(
       lines.map(async l => {
         const batchAllocations = await db
@@ -2129,23 +2254,120 @@ export class PurchaseService {
           .innerJoin(opticalBatches, eq(purchaseOrderLineBatches.batchId, opticalBatches.id))
           .where(eq(purchaseOrderLineBatches.purchaseOrderLineId, l.line.id));
 
+        const lineQty = parseFloat(l.line.quantity);
+        const invQty = invoicedQtyByItem.get(l.line.uniqueItemId) || 0;
+        const remQty = Math.max(0, round2(lineQty - invQty));
+
         return {
           ...l.line,
           uniqueItem: l.uniqueItem,
           primaryItem: l.primaryItem,
           category: l.category,
-          batches: batchAllocations.map(ba => ({
-            ...ba.batchAlloc,
-            batch: ba.batch,
-          })),
+          invoicedQuantity: invQty,
+          remainingQuantity: remQty,
+          batches: batchAllocations.map(ba => {
+            const bQty = parseFloat(ba.batchAlloc.quantity);
+            const invBQty = invoicedQtyByBatch.get(ba.batch.id) || 0;
+            const remBQty = Math.max(0, round2(bQty - invBQty));
+            return {
+              ...ba.batchAlloc,
+              batch: ba.batch,
+              invoicedQuantity: invBQty,
+              remainingQuantity: remBQty,
+            };
+          }),
         };
       })
     );
 
+    // Query linked Purchase Invoices
+    const linkedInvoicesRes = await pool.query(
+      `SELECT id, invoice_number, invoice_date, status, taxable_amount, grand_total, created_at
+       FROM purchase_invoices
+       WHERE business_id = $1 AND purchase_order_id = $2
+       ORDER BY invoice_date DESC, created_at DESC`,
+      [businessId, orderId]
+    );
+
+    // Query linked shipments (via dealer_purchase_order_id OR dealer_order_id)
+    const linkedShipmentsRes = await pool.query(
+      `SELECT id, shipment_number, dispatch_date, status, courier_name, tracking_number,
+              vehicle_number, total_packages, total_quantity, created_at
+       FROM dealer_shipments
+       WHERE dealer_business_id = $1 AND (dealer_purchase_order_id = $2 OR (dealer_order_id IS NOT NULL AND dealer_order_id = $3))
+       ORDER BY dispatch_date DESC, created_at DESC`,
+      [businessId, orderId, (orderRow.order as any).dealerOrderId || null]
+    );
+
+    // Query linked goods receipts
+    const linkedGrnsRes = await pool.query(
+      `SELECT id, receipt_number, receipt_date, status, total_received_qty, total_damaged_qty, total_short_qty, created_at
+       FROM dealer_goods_receipts
+       WHERE dealer_business_id = $1 AND (dealer_purchase_order_id = $2 OR dealer_shipment_id IN (
+         SELECT id FROM dealer_shipments WHERE dealer_business_id = $1 AND (dealer_purchase_order_id = $2 OR (dealer_order_id IS NOT NULL AND dealer_order_id = $3))
+       ))
+       ORDER BY receipt_date DESC, created_at DESC`,
+      [businessId, orderId, (orderRow.order as any).dealerOrderId || null]
+    );
+
+    // Calculate aggregated fulfilment quantities
+    const orderedQty = round2(populatedLines.reduce((acc, l) => acc + parseFloat((l as any).quantity || '0'), 0));
+    
+    // Invoiced quantity from active linked purchase invoices
+    const invoicedQtyRes = await pool.query(
+      `SELECT COALESCE(SUM(pil.quantity), 0) as total_invoiced
+       FROM purchase_invoice_lines pil
+       JOIN purchase_invoices pi ON pil.purchase_invoice_id = pi.id
+       WHERE pi.business_id = $1 AND pi.purchase_order_id = $2 AND pi.status != 'CANCELLED'`,
+      [businessId, orderId]
+    );
+    const invoicedQty = round2(parseFloat(invoicedQtyRes.rows[0]?.total_invoiced || '0'));
+
+    // Dispatched quantity from non-cancelled shipments
+    const dispatchedQty = round2(linkedShipmentsRes.rows
+      .filter((s: any) => s.status !== 'CANCELLED')
+      .reduce((acc: number, s: any) => acc + parseFloat(s.total_quantity || '0'), 0)
+    );
+
+    // Received, Damaged, Short from non-cancelled GRNs
+    const receivedQty = round2(linkedGrnsRes.rows
+      .filter((g: any) => g.status !== 'CANCELLED')
+      .reduce((acc: number, g: any) => acc + parseFloat(g.total_received_qty || '0'), 0)
+    );
+    const damagedQty = round2(linkedGrnsRes.rows
+      .filter((g: any) => g.status !== 'CANCELLED')
+      .reduce((acc: number, g: any) => acc + parseFloat(g.total_damaged_qty || '0'), 0)
+    );
+    const shortQty = round2(linkedGrnsRes.rows
+      .filter((g: any) => g.status !== 'CANCELLED')
+      .reduce((acc: number, g: any) => acc + parseFloat(g.total_short_qty || '0'), 0)
+    );
+
+    const pendingDispatchQty = round2(Math.max(0, orderedQty - dispatchedQty));
+    const pendingReceiptQty = round2(Math.max(0, dispatchedQty - (receivedQty + damagedQty + shortQty)));
+    const pendingInvoiceQty = round2(Math.max(0, orderedQty - invoicedQty));
+
+    const fulfilmentStats = {
+      orderedQty,
+      dispatchedQty,
+      receivedQty,
+      damagedQty,
+      shortQty,
+      invoicedQty,
+      pendingDispatchQty,
+      pendingReceiptQty,
+      pendingInvoiceQty,
+    };
+
     return {
+      ...orderRow.order,
       order: orderRow.order,
       supplier: orderRow.supplier,
       lines: populatedLines,
+      linkedInvoices: linkedInvoicesRes.rows,
+      linkedShipments: linkedShipmentsRes.rows,
+      linkedGoodsReceipts: linkedGrnsRes.rows,
+      fulfilmentStats,
     };
   }
 
@@ -2172,12 +2394,12 @@ export class PurchaseService {
       throw new Error(`Purchase Order ${orderId} not found`);
     }
 
-    if (existingOrder.status === 'CONVERTED') {
-      throw new Error(`Cannot edit purchase order ${existingOrder.orderNumber} because it has already been converted to an invoice.`);
+    if (existingOrder.status !== 'OPEN') {
+      throw new Error(`Cannot edit purchase order ${existingOrder.orderNumber} because it is in status ${existingOrder.status}.`);
     }
 
-    if (existingOrder.status === 'CANCELLED') {
-      throw new Error(`Cannot edit cancelled purchase order ${existingOrder.orderNumber}.`);
+    if (existingOrder.source === 'DEALER_ORDER' || (existingOrder as any).dealerOrderId) {
+      throw new Error('Dealer-linked purchase orders cannot be modified directly.');
     }
 
     const orderDate = new Date(data.orderDate || existingOrder.orderDate);
@@ -2205,8 +2427,12 @@ export class PurchaseService {
 
       if (!uItem) throw new Error(`Line ${i + 1}: Unique Item not found`);
 
-      const qty = Number(line.quantity);
+      const itemUnit = uItem.uniqueItem.unit || 'PRS';
+      const qty = assertValidQuantity(line.quantity, itemUnit, { fieldName: `Line ${i + 1} quantity` });
       const rate = Number(line.rate);
+      if (isNaN(rate) || rate < 0) {
+        throw new Error(`Line ${i + 1}: Rate must be non-negative`);
+      }
       const effectiveGstRate =
         line.gstRate !== undefined
           ? Number(line.gstRate)
@@ -2225,6 +2451,7 @@ export class PurchaseService {
       const resolvedBatches = [];
       const batches = line.batches || [];
       for (const b of batches) {
+        const bQty = assertValidQuantity(b.quantity, itemUnit, { fieldName: `Line ${i + 1} batch allocation quantity` });
         let batchId = b.batchId;
         if (!batchId) {
           const res = await findOrCreateOpticalBatch({
@@ -2241,9 +2468,9 @@ export class PurchaseService {
         }
         resolvedBatches.push({
           batchId,
-          quantity: b.quantity,
+          quantity: bQty,
           rate: b.rate !== undefined ? b.rate : taxRes.rate,
-          totalCost: round2(b.quantity * (b.rate !== undefined ? b.rate : taxRes.rate)),
+          totalCost: round2(bQty * (b.rate !== undefined ? b.rate : taxRes.rate)),
         });
       }
 
@@ -2430,7 +2657,9 @@ export class PurchaseService {
   }
 
   /**
-   * Converts an OPEN Purchase Order into a fully posted Purchase Invoice
+   * Converts an OPEN or PARTIALLY_CONVERTED Purchase Order into a fully posted Purchase Invoice
+   * Supports partial conversion, over-conversion protection, unit-aware quantity validation,
+   * optical batch allocations, dealer-linked PO protection, and row-level locking.
    */
   static async convertPurchaseOrderToInvoice(
     businessId: string,
@@ -2438,43 +2667,262 @@ export class PurchaseService {
     invoiceOverrides?: Partial<CreatePurchaseInvoiceDTO>,
     userId?: string
   ) {
-    const orderData = await this.getPurchaseOrderById(businessId, orderId);
-    if (!orderData || !orderData.order) {
-      throw new Error(`Purchase order ${orderId} not found`);
-    }
-    const order = orderData.order;
-    if (order.status === 'CONVERTED') {
-      throw new Error(`Purchase order ${order.orderNumber} is already converted to an invoice`);
-    }
-    if (order.status === 'CANCELLED') {
-      throw new Error(`Cannot convert cancelled purchase order ${order.orderNumber}`);
+    if (!businessId || !orderId || !isValidUUID(orderId)) {
+      throw new Error(`Invalid Purchase Order ID format: ${orderId}`);
     }
 
-    const lines: PurchaseLineInput[] = orderData.lines.map((l: any) => ({
-      uniqueItemId: l.uniqueItemId,
-      quantity: parseFloat(l.quantity),
-      rate: parseFloat(l.rate),
-      discountType: l.discountType,
-      discountValue: parseFloat(l.discountValue || '0'),
-      gstRate: parseFloat(l.gstRate || '0'),
-      batches: (l.batches || []).map((b: any) => ({
-        batchId: b.batchId,
-        quantity: parseFloat(b.quantity),
-        rate: parseFloat(b.rate),
-      })),
-    }));
+    const client = await pool.connect();
+    let order: any;
+    let linesToConvert: PurchaseLineInput[] = [];
 
+    try {
+      await client.query('BEGIN');
+
+      // 1. Lock the Purchase Order row FOR UPDATE to guard against concurrent conversions
+      const poRes = await client.query(
+        `SELECT * FROM purchase_orders WHERE id = $1 AND business_id = $2 FOR UPDATE`,
+        [orderId, businessId]
+      );
+
+      if (poRes.rows.length === 0) {
+        throw new Error(`Purchase order ${orderId} not found in this business`);
+      }
+      order = poRes.rows[0];
+
+      if (order.status === 'CONVERTED') {
+        throw new Error(`Cannot convert Purchase Order ${order.order_number}: already fully converted`);
+      }
+      if (order.status === 'CANCELLED') {
+        throw new Error(`Cannot convert cancelled Purchase Order ${order.order_number}`);
+      }
+      if (order.source === 'DEALER_ORDER' || order.dealer_order_id) {
+        throw new Error(
+          `Dealer-linked purchase orders must be processed via the Dealer GRN lifecycle and cannot be directly converted to a Purchase Invoice.`
+        );
+      }
+
+      // 2. Query PO lines with item unit details
+      const poLinesRes = await client.query(
+        `SELECT pol.*, ui.unit, ui.name as item_name, ui.maintain_batches, ui.optical_category
+         FROM purchase_order_lines pol
+         JOIN unique_items ui ON pol.unique_item_id = ui.id
+         WHERE pol.purchase_order_id = $1`,
+        [orderId]
+      );
+      const poLines = poLinesRes.rows;
+
+      // 3. Query PO line batches
+      const poBatchesRes = await client.query(
+        `SELECT polb.*, ob.sph, ob.cyl, ob.axis, ob.add, ob.side, ob.barcode
+         FROM purchase_order_line_batches polb
+         JOIN optical_batches ob ON polb.batch_id = ob.id
+         WHERE polb.purchase_order_line_id IN (
+           SELECT id FROM purchase_order_lines WHERE purchase_order_id = $1
+         )`,
+        [orderId]
+      );
+      const poBatches = poBatchesRes.rows;
+
+      const poBatchesByLineId = new Map<string, any[]>();
+      for (const b of poBatches) {
+        const arr = poBatchesByLineId.get(b.purchase_order_line_id) || [];
+        arr.push(b);
+        poBatchesByLineId.set(b.purchase_order_line_id, arr);
+      }
+
+      // 4. Query active invoiced quantities
+      const invoicedLinesRes = await client.query(
+        `SELECT pil.unique_item_id, COALESCE(SUM(pil.quantity), 0) as total_invoiced
+         FROM purchase_invoice_lines pil
+         JOIN purchase_invoices pi ON pil.purchase_invoice_id = pi.id
+         WHERE pi.business_id = $1 AND pi.purchase_order_id = $2 AND pi.status != 'CANCELLED'
+         GROUP BY pil.unique_item_id`,
+        [businessId, orderId]
+      );
+      const invoicedByItem = new Map<string, number>();
+      for (const r of invoicedLinesRes.rows) {
+        invoicedByItem.set(r.unique_item_id, parseFloat(r.total_invoiced || '0'));
+      }
+
+      const invoicedBatchesRes = await client.query(
+        `SELECT pilb.batch_id, COALESCE(SUM(pilb.quantity), 0) as total_invoiced
+         FROM purchase_invoice_line_batches pilb
+         JOIN purchase_invoice_lines pil ON pilb.purchase_invoice_line_id = pil.id
+         JOIN purchase_invoices pi ON pil.purchase_invoice_id = pi.id
+         WHERE pi.business_id = $1 AND pi.purchase_order_id = $2 AND pi.status != 'CANCELLED'
+         GROUP BY pilb.batch_id`,
+        [businessId, orderId]
+      );
+      const invoicedByBatch = new Map<string, number>();
+      for (const r of invoicedBatchesRes.rows) {
+        invoicedByBatch.set(r.batch_id, parseFloat(r.total_invoiced || '0'));
+      }
+
+      const orderedByItem = new Map<string, number>();
+      for (const pol of poLines) {
+        const cur = orderedByItem.get(pol.unique_item_id) || 0;
+        orderedByItem.set(pol.unique_item_id, cur + parseFloat(pol.quantity));
+      }
+
+      const orderedByBatch = new Map<string, number>();
+      for (const pob of poBatches) {
+        const cur = orderedByBatch.get(pob.batch_id) || 0;
+        orderedByBatch.set(pob.batch_id, cur + parseFloat(pob.quantity));
+      }
+
+      // 5. Determine lines to convert
+      if (invoiceOverrides?.lines && invoiceOverrides.lines.length > 0) {
+        // Line overrides supplied (partial conversion)
+        for (const line of invoiceOverrides.lines) {
+          const poLineMatch = poLines.find(l => l.unique_item_id === line.uniqueItemId);
+          if (!poLineMatch) {
+            throw new Error(`Item ${line.uniqueItemId} does not exist on Purchase Order ${order.order_number}`);
+          }
+          const itemUnit = poLineMatch.unit || 'PRS';
+          const validLineQty = assertValidQuantity(line.quantity, itemUnit, {
+            fieldName: `Item ${poLineMatch.item_name || line.uniqueItemId} quantity`,
+          });
+
+          const curInvoiced = invoicedByItem.get(line.uniqueItemId) || 0;
+          const totalOrdered = orderedByItem.get(line.uniqueItemId) || 0;
+          if (curInvoiced + validLineQty > totalOrdered + 0.001) {
+            throw new Error(
+              `Cannot convert ${validLineQty} units for item ${poLineMatch.item_name || line.uniqueItemId}. Only ${(totalOrdered - curInvoiced).toFixed(2)} units remain unconverted on Purchase Order ${order.order_number}.`
+            );
+          }
+
+          const convertedBatches: PurchaseLineBatchInput[] = [];
+          if (line.batches && line.batches.length > 0) {
+            let sumBatchQty = 0;
+            for (const b of line.batches) {
+              const validBQty = assertValidQuantity(b.quantity, itemUnit, {
+                fieldName: `Batch ${b.batchId || 'item'} quantity`,
+              });
+              sumBatchQty += validBQty;
+              if (b.batchId) {
+                const bInvoiced = invoicedByBatch.get(b.batchId) || 0;
+                const bOrdered = orderedByBatch.get(b.batchId) || 0;
+                if (bOrdered > 0 && bInvoiced + validBQty > bOrdered + 0.001) {
+                  throw new Error(
+                    `Cannot convert ${validBQty} units for batch ID ${b.batchId}. Only ${(bOrdered - bInvoiced).toFixed(2)} units remain unconverted on Purchase Order.`
+                  );
+                }
+              }
+              convertedBatches.push({
+                ...b,
+                quantity: validBQty,
+              });
+            }
+
+            if (Math.abs(sumBatchQty - validLineQty) > 0.001) {
+              throw new Error(
+                `Sum of batch quantities (${sumBatchQty}) must equal line quantity (${validLineQty})`
+              );
+            }
+          }
+
+          linesToConvert.push({
+            uniqueItemId: line.uniqueItemId,
+            quantity: validLineQty,
+            rate: line.rate !== undefined ? line.rate : parseFloat(poLineMatch.rate),
+            discountType: line.discountType || poLineMatch.discount_type || 'NONE',
+            discountValue: line.discountValue !== undefined ? line.discountValue : parseFloat(poLineMatch.discount_value || '0'),
+            gstRate: line.gstRate !== undefined ? line.gstRate : parseFloat(poLineMatch.gst_rate || '0'),
+            batches: convertedBatches.length > 0 ? convertedBatches : undefined,
+          });
+        }
+      } else {
+        // No line overrides: convert remaining unconverted quantities across the PO
+        for (const pol of poLines) {
+          const itemUnit = pol.unit || 'PRS';
+          const alreadyInvoiced = invoicedByItem.get(pol.unique_item_id) || 0;
+          const lineOrdered = parseFloat(pol.quantity);
+          const lineRemaining = Math.max(0, round2(lineOrdered - alreadyInvoiced));
+
+          if (lineRemaining <= 0) continue;
+
+          const lineBatches = poBatchesByLineId.get(pol.id) || [];
+          const convertedBatches: PurchaseLineBatchInput[] = [];
+
+          if (lineBatches.length > 0) {
+            for (const pob of lineBatches) {
+              const bAlready = invoicedByBatch.get(pob.batch_id) || 0;
+              const bOrdered = parseFloat(pob.quantity);
+              const bRemaining = Math.max(0, round2(bOrdered - bAlready));
+              if (bRemaining > 0) {
+                convertedBatches.push({
+                  batchId: pob.batch_id,
+                  sph: pob.sph,
+                  cyl: pob.cyl,
+                  axis: pob.axis,
+                  add: pob.add,
+                  side: pob.side,
+                  quantity: bRemaining,
+                  rate: parseFloat(pob.rate || pol.rate),
+                });
+              }
+            }
+          }
+
+          const finalLineQty = convertedBatches.length > 0
+            ? convertedBatches.reduce((acc, b) => acc + b.quantity, 0)
+            : lineRemaining;
+
+          assertValidQuantity(finalLineQty, itemUnit);
+
+          linesToConvert.push({
+            uniqueItemId: pol.unique_item_id,
+            quantity: finalLineQty,
+            rate: parseFloat(pol.rate),
+            discountType: pol.discount_type,
+            discountValue: parseFloat(pol.discount_value || '0'),
+            gstRate: parseFloat(pol.gst_rate || '0'),
+            batches: convertedBatches.length > 0 ? convertedBatches : undefined,
+          });
+        }
+
+        if (linesToConvert.length === 0) {
+          throw new Error(`Purchase order ${order.order_number} has already been fully converted`);
+        }
+      }
+
+      await client.query('COMMIT');
+    } catch (err) {
+      await client.query('ROLLBACK');
+      throw err;
+    } finally {
+      client.release();
+    }
+
+    // 6. Create and atomically post the Purchase Invoice
     const invoicePayload: CreatePurchaseInvoiceDTO = {
-      supplierPartyId: order.supplierPartyId,
+      supplierPartyId: order.supplier_party_id,
       purchaseOrderId: order.id,
       invoiceDate: invoiceOverrides?.invoiceDate || new Date(),
-      supplierInvoiceNumber: invoiceOverrides?.supplierInvoiceNumber || order.supplierReference || undefined,
+      supplierInvoiceNumber: invoiceOverrides?.supplierInvoiceNumber || order.supplier_reference || undefined,
       supplierInvoiceDate: invoiceOverrides?.supplierInvoiceDate,
-      gstMode: order.gstMode as any,
-      notes: invoiceOverrides?.notes || order.notes || undefined,
-      lines: invoiceOverrides?.lines || lines,
+      gstMode: invoiceOverrides?.gstMode || (order.gst_mode as any),
+      notes: invoiceOverrides?.notes || (order.notes ? `Converted from PO #${order.order_number}. ${order.notes}` : `Converted from PO #${order.order_number}`),
+      status: 'POSTED',
+      lines: linesToConvert,
     };
 
-    return await this.createPurchaseInvoice(businessId, invoicePayload, userId);
+    const invoice = await this.createPurchaseInvoice(businessId, invoicePayload, userId);
+
+    await AuditService.log({
+      businessId,
+      userId,
+      module: 'purchase',
+      action: 'convert_order',
+      entityType: 'purchase_order',
+      entityId: order.id,
+      newValue: {
+        orderNumber: order.order_number,
+        convertedInvoiceId: invoice.id,
+        invoiceNumber: invoice.invoiceNumber,
+      },
+    });
+
+    return invoice;
   }
 }

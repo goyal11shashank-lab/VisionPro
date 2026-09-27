@@ -1,5 +1,5 @@
-import { pgTable, text, varchar, boolean, timestamp, uuid, jsonb, index, uniqueIndex, numeric } from 'drizzle-orm/pg-core';
-import { relations } from 'drizzle-orm';
+import { pgTable, text, varchar, boolean, timestamp, uuid, jsonb, index, uniqueIndex, numeric, integer } from 'drizzle-orm/pg-core';
+import { relations, sql } from 'drizzle-orm';
 
 /**
  * 1. Businesses / Companies Table
@@ -7,6 +7,7 @@ import { relations } from 'drizzle-orm';
  */
 export const businesses = pgTable('businesses', {
   id: uuid('id').defaultRandom().primaryKey(),
+  code: varchar('code', { length: 50 }),
   name: varchar('name', { length: 255 }).notNull(),
   tradeName: varchar('trade_name', { length: 255 }),
   gstin: varchar('gstin', { length: 15 }),
@@ -22,12 +23,18 @@ export const businesses = pgTable('businesses', {
   currency: varchar('currency', { length: 10 }).default('INR').notNull(),
   financialYearStart: varchar('financial_year_start', { length: 10 }).default('04-01').notNull(),
   status: varchar('status', { length: 20 }).default('ACTIVE').notNull(), // ACTIVE, SUSPENDED, ARCHIVED
+  businessType: varchar('business_type', { length: 20 }).default('MAIN').notNull(), // MAIN, DEALER
+  parentBusinessId: uuid('parent_business_id'),
+  settingsConfig: jsonb('settings_config').default({ dealer: {} }),
   createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
   updatedAt: timestamp('updated_at', { withTimezone: true }).defaultNow().notNull(),
   createdBy: uuid('created_by'),
 }, (table) => [
   index('businesses_status_idx').on(table.status),
   index('businesses_gstin_idx').on(table.gstin),
+  index('businesses_type_idx').on(table.businessType),
+  index('businesses_parent_idx').on(table.parentBusinessId),
+  index('businesses_code_idx').on(table.code),
 ]);
 
 /**
@@ -115,6 +122,7 @@ export const userBusinessAccess = pgTable('user_business_access', {
   createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
 }, (table) => [
   uniqueIndex('user_biz_access_user_biz_idx').on(table.userId, table.businessId),
+  uniqueIndex('user_biz_access_user_default_unique_idx').on(table.userId).where(sql`is_default = true`),
   index('user_biz_access_user_id_idx').on(table.userId),
   index('user_biz_access_business_id_idx').on(table.businessId),
 ]);
@@ -418,6 +426,7 @@ export const opticalBatches = pgTable('optical_batches', {
   index('optical_batches_category_idx').on(table.categoryId),
   index('optical_batches_status_idx').on(table.status),
   index('optical_batches_powers_idx').on(table.sph, table.cyl, table.axis, table.add, table.side),
+  index('optical_batches_biz_item_powers_idx').on(table.businessId, table.uniqueItemId, table.sph, table.cyl),
 ]);
 
 /**
@@ -464,6 +473,7 @@ export const stockLedger = pgTable('stock_ledger', {
   index('stock_ledger_batch_idx').on(table.batchId),
   index('stock_ledger_type_idx').on(table.transactionType),
   index('stock_ledger_created_at_idx').on(table.createdAt),
+  index('stock_ledger_biz_batch_date_idx').on(table.businessId, table.batchId, table.createdAt),
 ]);
 
 /**
@@ -490,6 +500,7 @@ export const stockReservations = pgTable('stock_reservations', {
   index('stock_reservations_batch_idx').on(table.batchId),
   index('stock_reservations_status_idx').on(table.status),
   index('stock_reservations_created_at_idx').on(table.createdAt),
+  index('stock_reservations_biz_batch_status_idx').on(table.businessId, table.batchId, table.status),
 ]);
 
 /**
@@ -657,9 +668,14 @@ export const purchaseOrders = pgTable('purchase_orders', {
   roundOff: numeric('round_off', { precision: 12, scale: 2 }).default('0.00').notNull(),
   grandTotal: numeric('grand_total', { precision: 12, scale: 2 }).default('0.00').notNull(),
   
-  status: varchar('status', { length: 50 }).default('OPEN').notNull(), // OPEN, CONVERTED, CANCELLED
+  status: varchar('status', { length: 50 }).default('OPEN').notNull(), // OPEN, PARTIALLY_CONVERTED, CONVERTED, CANCELLED
+  source: varchar('source', { length: 50 }).default('MANUAL').notNull(), // MANUAL, MAIN_WAREHOUSE
   notes: text('notes'),
+  cancellationReason: text('cancellation_reason'),
   supplierReference: varchar('supplier_reference', { length: 100 }),
+  dealerOrderId: uuid('dealer_order_id'),
+  mainSalesOrderId: uuid('main_sales_order_id'),
+  mainSalesInvoiceId: uuid('main_sales_invoice_id'),
   convertedInvoiceId: uuid('converted_invoice_id'),
   createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
   updatedAt: timestamp('updated_at', { withTimezone: true }).defaultNow().notNull(),
@@ -720,6 +736,8 @@ export const purchaseInvoices = pgTable('purchase_invoices', {
   invoiceDate: timestamp('invoice_date', { withTimezone: true }).notNull(),
   supplierInvoiceNumber: varchar('supplier_invoice_number', { length: 100 }), // Vendor external bill no.
   supplierInvoiceDate: timestamp('supplier_invoice_date', { withTimezone: true }),
+  dueDate: timestamp('due_date', { withTimezone: true }),
+  creditDaysSnapshot: integer('credit_days_snapshot').default(0),
   gstMode: varchar('gst_mode', { length: 20 }).default('INTRA_STATE').notNull(), // INTRA_STATE, INTER_STATE
   
   // Financial amounts
@@ -737,6 +755,7 @@ export const purchaseInvoices = pgTable('purchase_invoices', {
   
   paymentStatus: varchar('payment_status', { length: 20 }).default('UNPAID').notNull(), // UNPAID, PARTIAL, PAID
   status: varchar('status', { length: 20 }).default('POSTED').notNull(), // POSTED, CANCELLED
+  cancellationReason: text('cancellation_reason'),
   notes: text('notes'),
   createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
   updatedAt: timestamp('updated_at', { withTimezone: true }).defaultNow().notNull(),
@@ -989,6 +1008,7 @@ export const salesOrders = pgTable('sales_orders', {
   grandTotal: numeric('grand_total', { precision: 12, scale: 2 }).default('0.00').notNull(),
 
   status: varchar('status', { length: 50 }).default('DRAFT').notNull(), // DRAFT, CONFIRMED, CANCELLED, CONVERTED, PARTIALLY_CONVERTED
+  cancellationReason: text('cancellation_reason'),
   notes: text('notes'),
   createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
   updatedAt: timestamp('updated_at', { withTimezone: true }).defaultNow().notNull(),
@@ -1053,6 +1073,8 @@ export const salesInvoices = pgTable('sales_invoices', {
   salesOrderId: uuid('sales_order_id').references(() => salesOrders.id, { onDelete: 'set null' }),
   invoiceNumber: varchar('invoice_number', { length: 100 }).notNull(), // INV-000001
   invoiceDate: timestamp('invoice_date', { withTimezone: true }).defaultNow().notNull(),
+  dueDate: timestamp('due_date', { withTimezone: true }),
+  creditDaysSnapshot: integer('credit_days_snapshot').default(0),
   
   // Financial totals
   subtotal: numeric('subtotal', { precision: 12, scale: 2 }).default('0.00').notNull(),
@@ -1069,6 +1091,7 @@ export const salesInvoices = pgTable('sales_invoices', {
 
   status: varchar('status', { length: 50 }).default('DRAFT').notNull(), // DRAFT, POSTED, CANCELLED
   paymentStatus: varchar('payment_status', { length: 20 }).default('UNPAID').notNull(), // UNPAID, PARTIAL, PAID
+  cancellationReason: text('cancellation_reason'),
   notes: text('notes'),
   createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
   updatedAt: timestamp('updated_at', { withTimezone: true }).defaultNow().notNull(),
@@ -1263,6 +1286,7 @@ export const salesReturns = pgTable('sales_returns', {
 
   status: varchar('status', { length: 50 }).default('DRAFT').notNull(), // DRAFT, POSTED, CANCELLED
   reason: text('reason'),
+  cancellationReason: text('cancellation_reason'),
   notes: text('notes'),
   createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
   updatedAt: timestamp('updated_at', { withTimezone: true }).defaultNow().notNull(),
@@ -1345,6 +1369,7 @@ export const purchaseReturns = pgTable('purchase_returns', {
 
   status: varchar('status', { length: 50 }).default('DRAFT').notNull(), // DRAFT, POSTED, CANCELLED
   reason: text('reason'),
+  cancellationReason: text('cancellation_reason'),
   notes: text('notes'),
   createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
   updatedAt: timestamp('updated_at', { withTimezone: true }).defaultNow().notNull(),
@@ -1508,6 +1533,7 @@ export const payments = pgTable('payments', {
   bankName: varchar('bank_name', { length: 255 }),
   notes: text('notes'),
   status: varchar('status', { length: 20 }).default('DRAFT').notNull(), // DRAFT, POSTED, CANCELLED
+  cancellationReason: text('cancellation_reason'),
   createdBy: uuid('created_by').references(() => users.id, { onDelete: 'set null' }),
   updatedBy: uuid('updated_by').references(() => users.id, { onDelete: 'set null' }),
   createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
@@ -1633,3 +1659,313 @@ export const businessSettingsRelations = relations(businessSettings, ({ one }) =
     references: [businesses.id],
   }),
 }));
+
+/**
+ * 43. Dealer Orders Linkage Table
+ * Secure mapping between a Dealer Business, its Parent Main Warehouse,
+ * and the created Main Warehouse Sales Order record.
+ */
+export const dealerOrders = pgTable('dealer_orders', {
+  id: uuid('id').defaultRandom().primaryKey(),
+  dealerBusinessId: uuid('dealer_business_id').references(() => businesses.id, { onDelete: 'cascade' }).notNull(),
+  mainBusinessId: uuid('main_business_id').references(() => businesses.id, { onDelete: 'cascade' }).notNull(),
+  mainSalesOrderId: uuid('main_sales_order_id').references(() => salesOrders.id, { onDelete: 'cascade' }).notNull(),
+  dealerPurchaseOrderId: uuid('dealer_purchase_order_id').references(() => purchaseOrders.id, { onDelete: 'set null' }),
+  dealerPartyIdInMain: uuid('dealer_party_id_in_main').references(() => parties.id, { onDelete: 'restrict' }).notNull(),
+  orderNumber: varchar('order_number', { length: 100 }).notNull(),
+  status: varchar('status', { length: 50 }).default('CONFIRMED').notNull(),
+  itemCount: numeric('item_count', { precision: 12, scale: 2 }).default('0.00').notNull(),
+  totalQuantity: numeric('total_quantity', { precision: 12, scale: 2 }).default('0.00').notNull(),
+  taxableAmount: numeric('taxable_amount', { precision: 12, scale: 2 }).default('0.00').notNull(),
+  taxAmount: numeric('tax_amount', { precision: 12, scale: 2 }).default('0.00').notNull(),
+  grandTotal: numeric('grand_total', { precision: 12, scale: 2 }).default('0.00').notNull(),
+  notes: text('notes'),
+  idempotencyKey: varchar('idempotency_key', { length: 255 }),
+  createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
+  updatedAt: timestamp('updated_at', { withTimezone: true }).defaultNow().notNull(),
+  createdBy: uuid('created_by').references(() => users.id, { onDelete: 'set null' }),
+}, (table) => [
+  uniqueIndex('dealer_orders_idempotency_idx').on(table.dealerBusinessId, table.idempotencyKey),
+  index('dealer_orders_dealer_biz_idx').on(table.dealerBusinessId),
+  index('dealer_orders_main_biz_idx').on(table.mainBusinessId),
+  index('dealer_orders_sales_order_idx').on(table.mainSalesOrderId),
+  index('dealer_orders_status_idx').on(table.status),
+  index('dealer_orders_created_at_idx').on(table.createdAt),
+]);
+
+export const dealerOrdersRelations = relations(dealerOrders, ({ one }) => ({
+  dealerBusiness: one(businesses, {
+    fields: [dealerOrders.dealerBusinessId],
+    references: [businesses.id],
+  }),
+  mainBusiness: one(businesses, {
+    fields: [dealerOrders.mainBusinessId],
+    references: [businesses.id],
+  }),
+  salesOrder: one(salesOrders, {
+    fields: [dealerOrders.mainSalesOrderId],
+    references: [salesOrders.id],
+  }),
+  dealerParty: one(parties, {
+    fields: [dealerOrders.dealerPartyIdInMain],
+    references: [parties.id],
+  }),
+}));
+
+/**
+ * 44. Dealer Shipments Table
+ * Logistics tracking for goods dispatched from Main Warehouse to Dealer Business.
+ * Created against a Main Sales Invoice (or Sales Order).
+ */
+export const dealerShipments = pgTable('dealer_shipments', {
+  id: uuid('id').defaultRandom().primaryKey(),
+  shipmentNumber: varchar('shipment_number', { length: 100 }).notNull(),
+  mainBusinessId: uuid('main_business_id').references(() => businesses.id, { onDelete: 'cascade' }).notNull(),
+  dealerBusinessId: uuid('dealer_business_id').references(() => businesses.id, { onDelete: 'cascade' }).notNull(),
+  dealerOrderId: uuid('dealer_order_id').references(() => dealerOrders.id, { onDelete: 'set null' }),
+  dealerPurchaseOrderId: uuid('dealer_purchase_order_id').references(() => purchaseOrders.id, { onDelete: 'set null' }),
+  mainSalesOrderId: uuid('main_sales_order_id').references(() => salesOrders.id, { onDelete: 'set null' }),
+  mainSalesInvoiceId: uuid('main_sales_invoice_id').references(() => salesInvoices.id, { onDelete: 'set null' }),
+  dispatchDate: timestamp('dispatch_date', { withTimezone: true }).defaultNow().notNull(),
+  courierName: varchar('courier_name', { length: 100 }),
+  trackingNumber: varchar('tracking_number', { length: 100 }),
+  vehicleNumber: varchar('vehicle_number', { length: 100 }),
+  ewayBillNumber: varchar('eway_bill_number', { length: 100 }),
+  totalPackages: numeric('total_packages', { precision: 8, scale: 0 }).default('1').notNull(),
+  totalQuantity: numeric('total_quantity', { precision: 12, scale: 2 }).default('0.00').notNull(),
+  status: varchar('status', { length: 50 }).default('DISPATCHED').notNull(),
+  notes: text('notes'),
+  createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
+  updatedAt: timestamp('updated_at', { withTimezone: true }).defaultNow().notNull(),
+  createdBy: uuid('created_by').references(() => users.id, { onDelete: 'set null' }),
+}, (table) => [
+  uniqueIndex('dealer_shipments_main_num_idx').on(table.mainBusinessId, table.shipmentNumber),
+  index('dealer_shipments_main_biz_idx').on(table.mainBusinessId),
+  index('dealer_shipments_dealer_biz_idx').on(table.dealerBusinessId),
+  index('dealer_shipments_invoice_idx').on(table.mainSalesInvoiceId),
+  index('dealer_shipments_order_idx').on(table.dealerOrderId),
+  index('dealer_shipments_status_idx').on(table.status),
+  index('dealer_shipments_dispatch_date_idx').on(table.dispatchDate),
+]);
+
+/**
+ * 45. Dealer Shipment Lines Table
+ */
+export const dealerShipmentLines = pgTable('dealer_shipment_lines', {
+  id: uuid('id').defaultRandom().primaryKey(),
+  dealerShipmentId: uuid('dealer_shipment_id').references(() => dealerShipments.id, { onDelete: 'cascade' }).notNull(),
+  salesInvoiceLineId: uuid('sales_invoice_line_id').references(() => salesInvoiceLines.id, { onDelete: 'set null' }),
+  mainUniqueItemId: uuid('main_unique_item_id').references(() => uniqueItems.id, { onDelete: 'restrict' }).notNull(),
+  mainBatchId: uuid('main_batch_id').references(() => opticalBatches.id, { onDelete: 'restrict' }).notNull(),
+  dispatchedQuantity: numeric('dispatched_quantity', { precision: 12, scale: 2 }).notNull(),
+  receivedQuantity: numeric('received_quantity', { precision: 12, scale: 2 }).default('0.00').notNull(),
+  damagedQuantity: numeric('damaged_quantity', { precision: 12, scale: 2 }).default('0.00').notNull(),
+  shortQuantity: numeric('short_quantity', { precision: 12, scale: 2 }).default('0.00').notNull(),
+  rate: numeric('rate', { precision: 12, scale: 2 }).default('0.00').notNull(),
+  gstRate: numeric('gst_rate', { precision: 5, scale: 2 }).default('0.00').notNull(),
+  createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
+}, (table) => [
+  index('dealer_shipment_lines_shipment_idx').on(table.dealerShipmentId),
+  index('dealer_shipment_lines_batch_idx').on(table.mainBatchId),
+  index('dealer_shipment_lines_item_idx').on(table.mainUniqueItemId),
+]);
+
+/**
+ * 46. Dealer Goods Receipts Table (GRN)
+ * Represents physical intake and inspection at Dealer Business.
+ */
+export const dealerGoodsReceipts = pgTable('dealer_goods_receipts', {
+  id: uuid('id').defaultRandom().primaryKey(),
+  receiptNumber: varchar('receipt_number', { length: 100 }).notNull(),
+  dealerShipmentId: uuid('dealer_shipment_id').references(() => dealerShipments.id, { onDelete: 'restrict' }).notNull(),
+  dealerBusinessId: uuid('dealer_business_id').references(() => businesses.id, { onDelete: 'cascade' }).notNull(),
+  mainBusinessId: uuid('main_business_id').references(() => businesses.id, { onDelete: 'cascade' }).notNull(),
+  dealerPurchaseOrderId: uuid('dealer_purchase_order_id').references(() => purchaseOrders.id, { onDelete: 'set null' }),
+  dealerPurchaseInvoiceId: uuid('dealer_purchase_invoice_id').references(() => purchaseInvoices.id, { onDelete: 'set null' }),
+  receiptDate: timestamp('receipt_date', { withTimezone: true }).defaultNow().notNull(),
+  status: varchar('status', { length: 50 }).default('CONFIRMED').notNull(),
+  totalReceivedQty: numeric('total_received_qty', { precision: 12, scale: 2 }).default('0.00').notNull(),
+  totalDamagedQty: numeric('total_damaged_qty', { precision: 12, scale: 2 }).default('0.00').notNull(),
+  totalShortQty: numeric('total_short_qty', { precision: 12, scale: 2 }).default('0.00').notNull(),
+  remarks: text('remarks'),
+  createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
+  updatedAt: timestamp('updated_at', { withTimezone: true }).defaultNow().notNull(),
+  createdBy: uuid('created_by').references(() => users.id, { onDelete: 'set null' }),
+}, (table) => [
+  uniqueIndex('dealer_grn_dealer_num_idx').on(table.dealerBusinessId, table.receiptNumber),
+  index('dealer_grn_dealer_biz_idx').on(table.dealerBusinessId),
+  index('dealer_grn_main_biz_idx').on(table.mainBusinessId),
+  index('dealer_grn_shipment_idx').on(table.dealerShipmentId),
+  index('dealer_grn_status_idx').on(table.status),
+  index('dealer_grn_date_idx').on(table.receiptDate),
+]);
+
+/**
+ * 47. Dealer Goods Receipt Lines Table
+ */
+export const dealerGoodsReceiptLines = pgTable('dealer_goods_receipt_lines', {
+  id: uuid('id').defaultRandom().primaryKey(),
+  goodsReceiptId: uuid('goods_receipt_id').references(() => dealerGoodsReceipts.id, { onDelete: 'cascade' }).notNull(),
+  shipmentLineId: uuid('shipment_line_id').references(() => dealerShipmentLines.id, { onDelete: 'restrict' }).notNull(),
+  mainUniqueItemId: uuid('main_unique_item_id').references(() => uniqueItems.id, { onDelete: 'restrict' }).notNull(),
+  mainBatchId: uuid('main_batch_id').references(() => opticalBatches.id, { onDelete: 'restrict' }).notNull(),
+  dealerUniqueItemId: uuid('dealer_unique_item_id').references(() => uniqueItems.id, { onDelete: 'restrict' }).notNull(),
+  dealerBatchId: uuid('dealer_batch_id').references(() => opticalBatches.id, { onDelete: 'restrict' }).notNull(),
+  dispatchedQuantity: numeric('dispatched_quantity', { precision: 12, scale: 2 }).notNull(),
+  receivedQuantity: numeric('received_quantity', { precision: 12, scale: 2 }).default('0.00').notNull(),
+  damagedQuantity: numeric('damaged_quantity', { precision: 12, scale: 2 }).default('0.00').notNull(),
+  shortQuantity: numeric('short_quantity', { precision: 12, scale: 2 }).default('0.00').notNull(),
+  rate: numeric('rate', { precision: 12, scale: 2 }).default('0.00').notNull(),
+  createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
+}, (table) => [
+  index('dealer_grn_lines_grn_idx').on(table.goodsReceiptId),
+  index('dealer_grn_lines_ship_line_idx').on(table.shipmentLineId),
+  index('dealer_grn_lines_dealer_batch_idx').on(table.dealerBatchId),
+]);
+
+/**
+ * 48. Dealer Returns Table
+ * Tracks inter-business returns from Dealer back to Main Warehouse.
+ */
+export const dealerReturns = pgTable('dealer_returns', {
+  id: uuid('id').defaultRandom().primaryKey(),
+  returnNumber: varchar('return_number', { length: 100 }).notNull(),
+  dealerBusinessId: uuid('dealer_business_id').references(() => businesses.id, { onDelete: 'cascade' }).notNull(),
+  mainBusinessId: uuid('main_business_id').references(() => businesses.id, { onDelete: 'cascade' }).notNull(),
+  dealerPurchaseInvoiceId: uuid('dealer_purchase_invoice_id').references(() => purchaseInvoices.id, { onDelete: 'restrict' }).notNull(),
+  mainSalesInvoiceId: uuid('main_sales_invoice_id').references(() => salesInvoices.id, { onDelete: 'set null' }),
+  dealerPurchaseReturnId: uuid('dealer_purchase_return_id').references(() => purchaseReturns.id, { onDelete: 'set null' }),
+  mainSalesReturnId: uuid('main_sales_return_id').references(() => salesReturns.id, { onDelete: 'set null' }),
+  status: varchar('status', { length: 50 }).default('REQUESTED').notNull(), // REQUESTED, APPROVED, IN_TRANSIT, PARTIALLY_RECEIVED, RECEIVED, REJECTED, CANCELLED
+  returnReason: varchar('return_reason', { length: 100 }).notNull(), // Wrong Power, Wrong Item, Damaged, Quality Issue, Excess Stock, Customer Return, Other
+  dealerReference: varchar('dealer_reference', { length: 100 }),
+  notes: text('notes'),
+  rejectionReason: text('rejection_reason'),
+  dispatchDate: timestamp('dispatch_date', { withTimezone: true }),
+  courierName: varchar('courier_name', { length: 100 }),
+  trackingNumber: varchar('tracking_number', { length: 100 }),
+  totalRequestedQty: numeric('total_requested_qty', { precision: 12, scale: 2 }).default('0.00').notNull(),
+  totalApprovedQty: numeric('total_approved_qty', { precision: 12, scale: 2 }).default('0.00').notNull(),
+  totalSentQty: numeric('total_sent_qty', { precision: 12, scale: 2 }).default('0.00').notNull(),
+  totalReceivedQty: numeric('total_received_qty', { precision: 12, scale: 2 }).default('0.00').notNull(),
+  totalAcceptedQty: numeric('total_accepted_qty', { precision: 12, scale: 2 }).default('0.00').notNull(),
+  totalDamagedQty: numeric('total_damaged_qty', { precision: 12, scale: 2 }).default('0.00').notNull(),
+  approvedBy: uuid('approved_by').references(() => users.id, { onDelete: 'set null' }),
+  approvedAt: timestamp('approved_at', { withTimezone: true }),
+  createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
+  updatedAt: timestamp('updated_at', { withTimezone: true }).defaultNow().notNull(),
+  createdBy: uuid('created_by').references(() => users.id, { onDelete: 'set null' }),
+}, (table) => [
+  uniqueIndex('dealer_returns_dealer_num_idx').on(table.dealerBusinessId, table.returnNumber),
+  index('dealer_returns_dealer_biz_idx').on(table.dealerBusinessId),
+  index('dealer_returns_main_biz_idx').on(table.mainBusinessId),
+  index('dealer_returns_status_idx').on(table.status),
+  index('dealer_returns_pi_idx').on(table.dealerPurchaseInvoiceId),
+  index('dealer_returns_si_idx').on(table.mainSalesInvoiceId),
+]);
+
+/**
+ * 49. Dealer Return Lines Table
+ * Tracks optical batch return lines with quantities through the return lifecycle.
+ */
+export const dealerReturnLines = pgTable('dealer_return_lines', {
+  id: uuid('id').defaultRandom().primaryKey(),
+  dealerReturnId: uuid('dealer_return_id').references(() => dealerReturns.id, { onDelete: 'cascade' }).notNull(),
+  dealerPurchaseInvoiceLineId: uuid('dealer_purchase_invoice_line_id').references(() => purchaseInvoiceLines.id, { onDelete: 'restrict' }).notNull(),
+  mainSalesInvoiceLineId: uuid('main_sales_invoice_line_id').references(() => salesInvoiceLines.id, { onDelete: 'set null' }),
+  dealerUniqueItemId: uuid('dealer_unique_item_id').references(() => uniqueItems.id, { onDelete: 'restrict' }).notNull(),
+  dealerBatchId: uuid('dealer_batch_id').references(() => opticalBatches.id, { onDelete: 'restrict' }).notNull(),
+  mainUniqueItemId: uuid('main_unique_item_id').references(() => uniqueItems.id, { onDelete: 'restrict' }),
+  mainBatchId: uuid('main_batch_id').references(() => opticalBatches.id, { onDelete: 'restrict' }),
+  rate: numeric('rate', { precision: 12, scale: 2 }).default('0.00').notNull(),
+  gstRate: numeric('gst_rate', { precision: 5, scale: 2 }).default('0.00').notNull(),
+  requestedQuantity: numeric('requested_quantity', { precision: 12, scale: 2 }).default('0.00').notNull(),
+  approvedQuantity: numeric('approved_quantity', { precision: 12, scale: 2 }).default('0.00').notNull(),
+  sentQuantity: numeric('sent_quantity', { precision: 12, scale: 2 }).default('0.00').notNull(),
+  receivedQuantity: numeric('received_quantity', { precision: 12, scale: 2 }).default('0.00').notNull(),
+  acceptedQuantity: numeric('accepted_quantity', { precision: 12, scale: 2 }).default('0.00').notNull(),
+  damagedQuantity: numeric('damaged_quantity', { precision: 12, scale: 2 }).default('0.00').notNull(),
+  reason: varchar('reason', { length: 100 }),
+  notes: text('notes'),
+  createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
+}, (table) => [
+  index('dealer_return_lines_return_idx').on(table.dealerReturnId),
+  index('dealer_return_lines_dealer_batch_idx').on(table.dealerBatchId),
+  index('dealer_return_lines_main_batch_idx').on(table.mainBatchId),
+]);
+
+/**
+ * 50. Dealer Payment Advices Table
+ * Cross-business payment linkage & verification record between Dealer and Main Warehouse.
+ * Dealer records a Supplier Payment to Main -> Creates Payment Advice -> Main verifies & posts Customer Receipt.
+ */
+export const dealerPaymentAdvices = pgTable('dealer_payment_advices', {
+  id: uuid('id').defaultRandom().primaryKey(),
+  adviceNumber: varchar('advice_number', { length: 100 }).notNull(),
+  dealerBusinessId: uuid('dealer_business_id').references(() => businesses.id, { onDelete: 'cascade' }).notNull(),
+  mainBusinessId: uuid('main_business_id').references(() => businesses.id, { onDelete: 'cascade' }).notNull(),
+  dealerSupplierPaymentId: uuid('dealer_supplier_payment_id').references(() => payments.id, { onDelete: 'restrict' }).notNull(),
+  mainCustomerReceiptId: uuid('main_customer_receipt_id').references(() => payments.id, { onDelete: 'set null' }),
+  amount: numeric('amount', { precision: 12, scale: 2 }).notNull(),
+  paymentDate: timestamp('payment_date', { withTimezone: true }).defaultNow().notNull(),
+  paymentMode: varchar('payment_mode', { length: 50 }).notNull(), // BANK_TRANSFER, UPI, CHEQUE, CASH, OTHER
+  referenceNumber: varchar('reference_number', { length: 100 }), // UTR / Transaction / Cheque Ref
+  bankName: varchar('bank_name', { length: 255 }),
+  chequeNumber: varchar('cheque_number', { length: 100 }),
+  chequeDate: timestamp('cheque_date', { withTimezone: true }),
+  notes: text('notes'),
+  proposedAllocations: jsonb('proposed_allocations').default(sql`'[]'::jsonb`).notNull(),
+  status: varchar('status', { length: 50 }).default('SUBMITTED').notNull(), // SUBMITTED, VERIFIED, REJECTED, CANCELLED
+  submittedBy: uuid('submitted_by').references(() => users.id, { onDelete: 'set null' }),
+  submittedAt: timestamp('submitted_at', { withTimezone: true }).defaultNow().notNull(),
+  verifiedBy: uuid('verified_by').references(() => users.id, { onDelete: 'set null' }),
+  verifiedAt: timestamp('verified_at', { withTimezone: true }),
+  rejectedBy: uuid('rejected_by').references(() => users.id, { onDelete: 'set null' }),
+  rejectedAt: timestamp('rejected_at', { withTimezone: true }),
+  rejectionReason: text('rejection_reason'),
+  createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
+  updatedAt: timestamp('updated_at', { withTimezone: true }).defaultNow().notNull(),
+}, (table) => [
+  uniqueIndex('dealer_payment_advices_dealer_num_idx').on(table.dealerBusinessId, table.adviceNumber),
+  index('dealer_payment_advices_dealer_biz_idx').on(table.dealerBusinessId),
+  index('dealer_payment_advices_main_biz_idx').on(table.mainBusinessId),
+  index('dealer_payment_advices_status_idx').on(table.status),
+  index('dealer_payment_advices_pay_idx').on(table.dealerSupplierPaymentId),
+  index('dealer_payment_advices_rec_idx').on(table.mainCustomerReceiptId),
+  index('dealer_payment_advices_ref_idx').on(table.referenceNumber),
+  index('dealer_payment_advices_date_idx').on(table.paymentDate),
+]);
+
+/**
+ * 49. Document Sequences
+ * Atomic, business-scoped and FY-aware document sequence tracker.
+ */
+export const documentSequences = pgTable('document_sequences', {
+  id: uuid('id').defaultRandom().primaryKey(),
+  businessId: uuid('business_id').references(() => businesses.id, { onDelete: 'cascade' }).notNull(),
+  documentType: varchar('document_type', { length: 50 }).notNull(),
+  financialYear: varchar('financial_year', { length: 20 }).default('ALL').notNull(),
+  currentNumber: integer('current_number').default(0).notNull(),
+  prefix: varchar('prefix', { length: 50 }).default('').notNull(),
+  updatedAt: timestamp('updated_at', { withTimezone: true }).defaultNow().notNull(),
+}, (table) => [
+  uniqueIndex('document_sequences_biz_type_fy_idx').on(table.businessId, table.documentType, table.financialYear),
+  index('document_sequences_biz_idx').on(table.businessId),
+]);
+
+/**
+ * 50. Idempotency Records
+ * Prevents double-submission and duplicate vouchers on network retries.
+ */
+export const idempotencyRecords = pgTable('idempotency_records', {
+  id: uuid('id').defaultRandom().primaryKey(),
+  businessId: uuid('business_id').references(() => businesses.id, { onDelete: 'cascade' }).notNull(),
+  resourceType: varchar('resource_type', { length: 50 }).notNull(),
+  idempotencyKey: varchar('idempotency_key', { length: 255 }).notNull(),
+  resourceId: varchar('resource_id', { length: 100 }).notNull(),
+  createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
+}, (table) => [
+  uniqueIndex('idempotency_records_biz_type_key_idx').on(table.businessId, table.resourceType, table.idempotencyKey),
+  index('idempotency_records_biz_idx').on(table.businessId),
+]);
+

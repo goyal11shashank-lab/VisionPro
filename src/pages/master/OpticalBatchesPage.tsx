@@ -15,7 +15,11 @@ import { BatchLedgerView } from '../../components/inventory/BatchLedgerView.js';
 
 type ViewMode = 'STOCK_ITEMS' | 'BATCHES' | 'BATCH_LEDGER';
 
-export const OpticalBatchesPage: React.FC = () => {
+interface OpticalBatchesPageProps {
+  onNavigate?: (path: string) => void;
+}
+
+export const OpticalBatchesPage: React.FC<OpticalBatchesPageProps> = ({ onNavigate }) => {
   const { hasPermission } = useAuth();
 
   // Navigation / Drill-down state
@@ -404,7 +408,7 @@ export const OpticalBatchesPage: React.FC = () => {
   const currentCategoryCode = (selectedItemObj?.opticalCategory || selectedItemObj?.categoryCode || 'SV').toUpperCase();
 
   return (
-    <div className="p-4 sm:p-6 lg:p-8 max-w-7xl mx-auto space-y-6">
+    <div className="w-full space-y-3.5">
       {/* Global Feedback Banner */}
       {feedbackMessage && (
         <div 
@@ -486,6 +490,7 @@ export const OpticalBatchesPage: React.FC = () => {
           onDeleteBatch={setBatchToDelete}
           onInspectBatch={handleInspectDependencies}
           onOpenImportModal={() => setShowImportModal(true)}
+          onBatchesUpdated={fetchStockItems}
         />
       )}
 
@@ -494,6 +499,7 @@ export const OpticalBatchesPage: React.FC = () => {
           batchId={selectedBatch.id}
           onBackToBatches={handleBackToBatches}
           onBackToItems={handleBackToItems}
+          onNavigate={onNavigate}
         />
       )}
 

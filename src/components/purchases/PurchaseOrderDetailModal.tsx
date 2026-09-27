@@ -44,6 +44,10 @@ export const PurchaseOrderDetailModal: React.FC<PurchaseOrderDetailModalProps> =
   const [cancelReason, setCancelReason] = useState<string>('');
   const [isPrintPreviewOpen, setIsPrintPreviewOpen] = useState<boolean>(false);
 
+  const isDealerOrder = order.source === 'DEALER_ORDER' || !!(order as any).dealerOrderId;
+  const canConvert = (order.status === 'OPEN' || order.status === 'PARTIALLY_CONVERTED') && !isDealerOrder;
+  const canCancel = (order.status === 'OPEN' || order.status === 'PARTIALLY_CONVERTED') && !isDealerOrder;
+
   const handleCancelOrder = async () => {
     if (!cancelReason.trim()) {
       setActionError('Please provide a reason for cancellation.');
@@ -259,7 +263,17 @@ export const PurchaseOrderDetailModal: React.FC<PurchaseOrderDetailModalProps> =
                             </span>
                           </td>
                           <td className="py-2.5 px-3 text-right font-semibold text-slate-900">
-                            {parseFloat(String(l.quantity)).toFixed(2)}
+                            <div>{parseFloat(String(l.quantity)).toFixed(2)}</div>
+                            {(l as any).invoicedQuantity !== undefined && parseFloat(String((l as any).invoicedQuantity)) > 0 && (
+                              <div className="text-[10px] text-slate-500 font-normal">
+                                Inv: {parseFloat(String((l as any).invoicedQuantity)).toFixed(2)}
+                                {(l as any).remainingQuantity !== undefined && (
+                                  <span className="text-emerald-700 font-medium ml-1">
+                                    (Rem: {parseFloat(String((l as any).remainingQuantity)).toFixed(2)})
+                                  </span>
+                                )}
+                              </div>
+                            )}
                           </td>
                           <td className="py-2.5 px-3 text-right font-mono">
                             ₹{parseFloat(String(l.rate)).toFixed(2)}
@@ -420,7 +434,7 @@ export const PurchaseOrderDetailModal: React.FC<PurchaseOrderDetailModalProps> =
         {/* Footer Actions */}
         <div className="px-6 py-4 border-t border-slate-200 bg-slate-50/70 flex items-center justify-between">
           <div className="flex items-center gap-2">
-            {order.status === 'OPEN' && (
+            {canCancel && (
               <button
                 type="button"
                 onClick={() => setCancelModalOpen(true)}
@@ -431,10 +445,15 @@ export const PurchaseOrderDetailModal: React.FC<PurchaseOrderDetailModalProps> =
                 <span>Cancel Order</span>
               </button>
             )}
+            {isDealerOrder && (
+              <span className="text-xs text-amber-700 bg-amber-50 border border-amber-200 px-2.5 py-1 rounded-lg">
+                Dealer Order (fulfilled via Dispatches &amp; GRN)
+              </span>
+            )}
           </div>
 
           <div className="flex items-center gap-3">
-            {order.status === 'OPEN' && onConvert && (
+            {canConvert && onConvert && (
               <button
                 type="button"
                 onClick={() => onConvert(order.id)}

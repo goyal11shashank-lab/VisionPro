@@ -432,6 +432,10 @@ export const PurchaseOrdersPage: React.FC<PurchaseOrdersPageProps> = ({ onNaviga
                   const isCancel = order.status === 'CANCELLED';
                   const isConverted = order.status === 'CONVERTED';
                   const isOpen = order.status === 'OPEN';
+                  const isDealerOrder = order.source === 'DEALER_ORDER' || !!order.dealerOrderId;
+                  const canConvert = (order.status === 'OPEN' || order.status === 'PARTIALLY_CONVERTED') && !isDealerOrder;
+                  const canEdit = order.status === 'OPEN' && !isDealerOrder;
+                  const canCancel = (order.status === 'OPEN' || order.status === 'PARTIALLY_CONVERTED') && !isDealerOrder;
 
                   return (
                     <tr
@@ -495,31 +499,38 @@ export const PurchaseOrdersPage: React.FC<PurchaseOrdersPageProps> = ({ onNaviga
                             <Printer className="w-4 h-4" />
                           </button>
 
-                          {isOpen && (
-                            <>
-                              <button
-                                onClick={() => handleEditOrder(order.id)}
-                                className="p-1 text-slate-500 hover:text-indigo-600 hover:bg-indigo-50 rounded"
-                                title="Edit Purchase Order"
-                              >
-                                <Pencil className="w-4 h-4" />
-                              </button>
-                              <button
-                                onClick={() => handleConvertToInvoice(order.id)}
-                                className="flex items-center gap-1 px-2 py-1 bg-emerald-50 text-emerald-700 hover:bg-emerald-100 border border-emerald-200 rounded font-semibold text-[11px]"
-                                title="Convert Order to Actual Purchase Invoice"
-                              >
-                                <span>Inward</span>
-                                <ArrowRight className="w-3 h-3" />
-                              </button>
-                              <button
-                                onClick={() => handleCancelClick(order.id, order.orderNumber)}
-                                className="p-1 text-slate-400 hover:text-red-600 hover:bg-red-50 rounded"
-                                title="Cancel Order"
-                              >
-                                <XCircle className="w-4 h-4" />
-                              </button>
-                            </>
+                          {canEdit && (
+                            <button
+                              onClick={() => handleEditOrder(order.id)}
+                              className="p-1 text-slate-500 hover:text-indigo-600 hover:bg-indigo-50 rounded"
+                              title="Edit Purchase Order"
+                            >
+                              <Pencil className="w-4 h-4" />
+                            </button>
+                          )}
+                          {canConvert && (
+                            <button
+                              onClick={() => handleConvertToInvoice(order.id)}
+                              className="flex items-center gap-1 px-2 py-1 bg-emerald-50 text-emerald-700 hover:bg-emerald-100 border border-emerald-200 rounded font-semibold text-[11px]"
+                              title="Convert Order to Actual Purchase Invoice"
+                            >
+                              <span>Inward</span>
+                              <ArrowRight className="w-3 h-3" />
+                            </button>
+                          )}
+                          {canCancel && (
+                            <button
+                              onClick={() => handleCancelClick(order.id, order.orderNumber)}
+                              className="p-1 text-slate-400 hover:text-red-600 hover:bg-red-50 rounded"
+                              title="Cancel Order"
+                            >
+                              <XCircle className="w-4 h-4" />
+                            </button>
+                          )}
+                          {isDealerOrder && (
+                            <span className="text-[10px] text-amber-700 bg-amber-50 border border-amber-200 px-1.5 py-0.5 rounded font-medium" title="Fulfilled via Dealer Shipments & GRN">
+                              GRN
+                            </span>
                           )}
                         </div>
                       </td>

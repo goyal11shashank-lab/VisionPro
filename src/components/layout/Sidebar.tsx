@@ -29,6 +29,8 @@ import {
   Eye,
   LogOut,
   Sparkles,
+  Store,
+  ShoppingBag,
 } from 'lucide-react';
 import { useAuth } from '../../context/AuthContext.js';
 
@@ -81,15 +83,16 @@ export const Sidebar: React.FC<SidebarProps> = ({
     setOpenSubNav(prev => (prev === itemId ? null : itemId));
   };
 
-  const sections: NavSection[] = [
+  const isDealer = currentBusiness?.businessType === 'DEALER';
+
+  const defaultSections: NavSection[] = [
     {
       title: 'Master Data',
       icon: Layers,
       items: [
-        { id: 'master-categories', label: 'Categories', icon: Layers, path: '/master/categories', permission: 'master:view' },
-        { id: 'master-bases', label: 'Bases & Compatibility', icon: Boxes, path: '/master/bases', permission: 'master:view' },
-        { id: 'master-coatings', label: 'Coatings', icon: Sparkles, path: '/master/coatings', permission: 'master:view' },
-        { id: 'master-primary-items', label: 'Primary Items', icon: BookOpen, path: '/master/primary-items', permission: 'master:view' },
+        { id: 'dealer-dashboard', label: 'Dealer Dashboard', icon: LayoutDashboard, path: '/dealer/dashboard', permission: 'inventory:view' },
+        { id: 'dealer-warehouse-availability', label: 'Main Warehouse Stock', icon: Store, path: '/inventory/dealer-availability', permission: 'master:view' },
+        { id: 'dealer-orders-list', label: 'My Warehouse Orders', icon: ShoppingBag, path: '/dealer/orders', permission: 'sales:view' },
         { id: 'master-stock-items', label: 'Stock Items', icon: QrCode, path: '/master/stock-items', permission: 'master:view' },
         { id: 'master-batches', label: 'Optical Batches & Powers', icon: Barcode, path: '/master/batches', permission: 'master:view' },
       ],
@@ -98,6 +101,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
       title: 'Sales',
       icon: ShoppingCart,
       items: [
+        { id: 'dealer-control-center', label: 'Dealer Control Center', icon: Store, path: '/dealers', permission: 'sales:view' },
         {
           id: 'sales-create-invoice',
           label: 'Create Sales Invoice',
@@ -163,6 +167,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
       title: 'Administration',
       icon: ShieldCheck,
       items: [
+        { id: 'admin-businesses', label: 'Businesses', icon: Building2, path: '/admin/businesses', permission: 'admin:manage_settings' },
         { id: 'admin-users', label: 'Users', icon: Users, path: '/admin/users', permission: 'admin:manage_users' },
         { id: 'admin-roles', label: 'Roles & Permissions', icon: KeyRound, path: '/admin/roles', permission: 'admin:manage_roles' },
         { id: 'admin-business', label: 'Business Settings', icon: Settings, path: '/admin/business-settings', permission: 'admin:manage_settings' },
@@ -172,6 +177,60 @@ export const Sidebar: React.FC<SidebarProps> = ({
       ],
     },
   ];
+
+  const dealerSections: NavSection[] = [
+    {
+      title: 'Inventory',
+      icon: Boxes,
+      items: [
+        { id: 'dealer-my-stock', label: 'My Stock Items', icon: QrCode, path: '/master/stock-items', permission: 'master:view' },
+        { id: 'dealer-main-stock', label: 'Main Warehouse Stock', icon: Store, path: '/inventory/dealer-availability', permission: 'master:view' },
+        { id: 'dealer-batches', label: 'Optical Batches & Powers', icon: Barcode, path: '/master/batches', permission: 'master:view' },
+      ],
+    },
+    {
+      title: 'Purchases',
+      icon: Truck,
+      items: [
+        { id: 'dealer-po', label: 'Warehouse Orders', icon: ShoppingCart, path: '/dealer/orders', permission: 'sales:view' },
+        { id: 'dealer-shipments', label: 'Incoming Shipments', icon: Truck, path: '/dealer/shipments', permission: 'purchase:view' },
+        { id: 'dealer-invoices', label: 'Purchase Invoices', icon: Receipt, path: '/purchase/invoices', permission: 'purchase:view' },
+        { id: 'dealer-returns', label: 'Purchase Returns', icon: RotateCcw, path: '/dealer/returns', permission: 'purchase:view' },
+        { id: 'dealer-payments', label: 'Supplier Payments', icon: CreditCard, path: '/accounts/payments', permission: 'payment.supplier.view' },
+      ],
+    },
+    {
+      title: 'Sales',
+      icon: ShoppingCart,
+      items: [
+        { id: 'dealer-sales-pos', label: 'POS Billing', icon: Sparkles, path: '/sales/pos', permission: 'sales:view' },
+        { id: 'dealer-sales-invoices', label: 'Sales Invoices', icon: Receipt, path: '/sales/invoices', permission: 'sales:view' },
+        { id: 'dealer-sales-orders', label: 'Sales Orders', icon: ShoppingCart, path: '/sales/orders', permission: 'sales:view' },
+        { id: 'dealer-sales-returns', label: 'Sales Returns', icon: RotateCcw, path: '/sales/returns', permission: 'sales:view' },
+        { id: 'dealer-customer-receipts', label: 'Customer Receipts', icon: ArrowDownLeft, path: '/accounts/receipts', permission: 'payment.receipt.view' },
+      ],
+    },
+    {
+      title: 'Reports',
+      icon: BarChart3,
+      items: [
+        { id: 'dealer-rep-stock', label: 'Stock Matrix Report', icon: Boxes, path: '/reports/inventory', permission: 'reports:view' },
+        { id: 'dealer-rep-cust', label: 'Customer Ledger', icon: BookOpen, path: '/sales/customer-ledger', permission: 'reports:view' },
+        { id: 'dealer-rep-supp', label: 'Supplier Ledger', icon: BookOpen, path: '/parties/ledger', permission: 'reports:view' },
+        { id: 'dealer-rep-aging', label: 'Outstanding Aging', icon: Clock, path: '/accounts/outstanding', permission: 'reports:view' },
+      ],
+    },
+    {
+      title: 'Settings',
+      icon: Settings,
+      items: [
+        { id: 'dealer-biz-settings', label: 'Business Settings', icon: Settings, path: '/admin/business-settings', permission: 'admin:manage_settings' },
+        { id: 'dealer-onboarding-restart', label: 'Setup Wizard', icon: Sparkles, path: '/dealer/onboarding', permission: 'admin:manage_settings' },
+      ],
+    },
+  ];
+
+  const sections = isDealer ? dealerSections : defaultSections;
 
   const handleItemClick = (path: string) => {
     onNavigate(path);
@@ -356,23 +415,13 @@ export const Sidebar: React.FC<SidebarProps> = ({
 
         {/* System Info Box & User Footer */}
         <div className="border-t border-white/10 bg-slate-950/60">
-          {/* Live System Info Status Bar */}
-          <div className="p-3 bg-white/[0.02] border-b border-white/5 text-[11px] text-white/50 space-y-1 font-mono">
-            <div className="flex items-center justify-between">
-              <span className="text-white/40">Status</span>
-              <span className="text-emerald-400 font-sans flex items-center gap-1.5">
-                <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse"></span>
-                Online
-              </span>
-            </div>
-            <div className="flex items-center justify-between">
-              <span className="text-white/40">Instance</span>
-              <span className="text-slate-300">Production-01</span>
-            </div>
-            <div className="flex items-center justify-between">
-              <span className="text-white/40">Database</span>
-              <span className="text-slate-300">Neon PostgreSQL</span>
-            </div>
+          {/* System Operational Status */}
+          <div className="px-3 py-2 bg-white/[0.02] border-b border-white/5 text-[11px] flex items-center justify-between">
+            <span className="text-white/40 text-[10px] uppercase font-semibold tracking-wider">System</span>
+            <span className="text-emerald-400 text-xs flex items-center gap-1.5 font-medium">
+              <span className="w-1.5 h-1.5 rounded-full bg-emerald-500"></span>
+              Operational
+            </span>
           </div>
 
           {/* User Account Bar */}

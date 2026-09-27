@@ -6,7 +6,7 @@ import { generateAuthToken } from '../auth/jwt.js';
 import { authenticateToken } from '../middleware/auth.js';
 import { recordAuditLog } from '../services/auditService.js';
 import { ensureMigrationsRun } from '../db/migrate.js';
-import { eq, or, and } from 'drizzle-orm';
+import { eq, or, and, inArray } from 'drizzle-orm';
 import { z } from 'zod';
 
 const router = Router();
@@ -29,9 +29,13 @@ function safeError(error: any) {
 }
 
 const loginSchema = z.object({
-  identifier: z.string().min(1, 'Username, Email or Mobile is required'),
+  identifier: z.string().optional(),
+  username: z.string().optional(),
   password: z.string().min(1, 'Password is required'),
   businessId: z.string().optional(),
+}).refine(data => Boolean(data.identifier || data.username), {
+  message: 'Username, Email or Mobile is required',
+  path: ['identifier'],
 });
 
 const bootstrapSchema = z.object({
@@ -317,7 +321,9 @@ router.post('/login', async (req: Request, res: Response): Promise<void> => {
       return;
     }
 
-    const { identifier, password, businessId } = parseResult.data;
+    const password = parseResult.data.password;
+    const businessId = parseResult.data.businessId;
+    const identifier = (parseResult.data.identifier || parseResult.data.username)!.trim();
 
     // 2. Database User Lookup
     let userRecord: typeof users.$inferSelect | undefined;
@@ -507,7 +513,12 @@ router.post('/login', async (req: Request, res: Response): Promise<void> => {
           .select({ role: roles })
           .from(userRoles)
           .innerJoin(roles, eq(userRoles.roleId, roles.id))
-          .where(eq(userRoles.userId, userRecord.id));
+          .where(
+            and(
+              eq(userRoles.userId, userRecord.id),
+              eq(userRoles.businessId, currentBusinessId)
+            )
+          );
 
         rolesList = userRoleRecs.map(r => ({ id: r.role.id, name: r.role.name, code: r.role.code }));
 
@@ -515,11 +526,12 @@ router.post('/login', async (req: Request, res: Response): Promise<void> => {
           const allPerms = await db.select().from(permissions);
           permsList = allPerms.map(p => p.code);
         } else if (rolesList.length > 0) {
+          const roleIds = rolesList.map(r => r.id);
           const rolePerms = await db
             .select({ code: permissions.code })
             .from(rolePermissions)
             .innerJoin(permissions, eq(rolePermissions.permissionId, permissions.id))
-            .where(eq(rolePermissions.roleId, rolesList[0].id));
+            .where(inArray(rolePermissions.roleId, roleIds));
           permsList = Array.from(new Set(rolePerms.map(p => p.code)));
         }
       }
@@ -600,12 +612,18 @@ router.post('/login', async (req: Request, res: Response): Promise<void> => {
         gstin: selectedBusiness.gstin,
         currency: selectedBusiness.currency,
         status: selectedBusiness.status,
+        businessType: selectedBusiness.businessType || 'MAIN',
+        parentBusinessId: selectedBusiness.parentBusinessId || null,
+        onboardingCompleted: Boolean((selectedBusiness.settingsConfig as any)?.dealer?.onboardingCompleted ?? false),
       } : null,
       accessibleBusinesses: accessibleBiz.map(b => ({
         id: b.business.id,
         name: b.business.name,
         tradeName: b.business.tradeName,
         gstin: b.business.gstin,
+        businessType: b.business.businessType || 'MAIN',
+        parentBusinessId: b.business.parentBusinessId || null,
+        onboardingCompleted: Boolean((b.business.settingsConfig as any)?.dealer?.onboardingCompleted ?? false),
         isDefault: b.isDefault,
       })),
       roles: rolesList,
@@ -633,16 +651,30 @@ router.get('/me', authenticateToken, async (req: Request, res: Response): Promis
     return;
   }
 
-  // Fetch all accessible businesses
-  const accessibleBiz = await db
-    .select({
-      businessId: userBusinessAccess.businessId,
-      isDefault: userBusinessAccess.isDefault,
-      business: businesses,
-    })
-    .from(userBusinessAccess)
-    .innerJoin(businesses, eq(userBusinessAccess.businessId, businesses.id))
-    .where(eq(userBusinessAccess.userId, req.user.id));
+  // Fetch all accessible businesses (all active for super admin, explicit for normal users)
+  let accessibleBiz: any[] = [];
+  if (req.user.isSuperAdmin) {
+    const allActive = await db
+      .select()
+      .from(businesses)
+      .where(eq(businesses.status, 'ACTIVE'))
+      .orderBy(businesses.name);
+    accessibleBiz = allActive.map(b => ({
+      businessId: b.id,
+      isDefault: b.id === req.user!.currentBusinessId,
+      business: b,
+    }));
+  } else {
+    accessibleBiz = await db
+      .select({
+        businessId: userBusinessAccess.businessId,
+        isDefault: userBusinessAccess.isDefault,
+        business: businesses,
+      })
+      .from(userBusinessAccess)
+      .innerJoin(businesses, eq(userBusinessAccess.businessId, businesses.id))
+      .where(eq(userBusinessAccess.userId, req.user.id));
+  }
 
   res.json({
     user: {
@@ -723,6 +755,33 @@ router.post('/switch-business', authenticateToken, async (req: Request, res: Res
       req,
     });
 
+    // Query roles and permissions for target business
+    const userRoleRecs = await db
+      .select({ role: roles })
+      .from(userRoles)
+      .innerJoin(roles, eq(userRoles.roleId, roles.id))
+      .where(
+        and(
+          eq(userRoles.userId, req.user!.id),
+          eq(userRoles.businessId, targetBusinessId)
+        )
+      );
+
+    const rolesList = userRoleRecs.map(r => ({ id: r.role.id, name: r.role.name, code: r.role.code }));
+    let permsList: string[] = [];
+    if (req.user!.isSuperAdmin) {
+      const allPerms = await db.select({ code: permissions.code }).from(permissions);
+      permsList = allPerms.map(p => p.code);
+    } else if (rolesList.length > 0) {
+      const roleIds = rolesList.map(r => r.id);
+      const perms = await db
+        .select({ code: permissions.code })
+        .from(rolePermissions)
+        .innerJoin(permissions, eq(rolePermissions.permissionId, permissions.id))
+        .where(inArray(rolePermissions.roleId, roleIds));
+      permsList = Array.from(new Set(perms.map(p => p.code)));
+    }
+
     res.json({
       success: true,
       token: newToken,
@@ -733,7 +792,12 @@ router.post('/switch-business', authenticateToken, async (req: Request, res: Res
         gstin: targetBiz.gstin,
         currency: targetBiz.currency,
         status: targetBiz.status,
+        businessType: targetBiz.businessType || 'MAIN',
+        parentBusinessId: targetBiz.parentBusinessId || null,
+        onboardingCompleted: Boolean((targetBiz.settingsConfig as any)?.dealer?.onboardingCompleted ?? false),
       },
+      roles: rolesList,
+      permissions: permsList,
     });
   } catch (error: any) {
     res.status(500).json({ error: error.message || 'Failed to switch business context' });

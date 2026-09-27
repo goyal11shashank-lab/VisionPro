@@ -2,10 +2,12 @@ import React, { useState, useEffect, useMemo, useCallback } from 'react';
 import { 
   ArrowLeft, Calendar, FileText, Search, RefreshCw, Barcode, Copy, Check,
   ArrowDownLeft, ArrowUpRight, Clock, ExternalLink, Filter, Download,
-  Layers, AlertTriangle, ChevronRight, CheckCircle2
+  Layers, AlertTriangle, ChevronRight, ChevronDown, CheckCircle2, Printer
 } from 'lucide-react';
 import { apiRequest } from '../../api/client.js';
 import { VoucherDetailModal } from '../voucher/VoucherDetailModal.js';
+import { formatQuantity, formatCurrency } from '../../utils/numberFormatting.js';
+import { QuickPeriodKey, getDateRangeForPeriod } from '../../utils/datePeriods.js';
 
 interface BatchLedgerViewProps {
   batchId: string;
@@ -29,9 +31,15 @@ export const BatchLedgerView: React.FC<BatchLedgerViewProps> = ({
   const [monthlySummaries, setMonthlySummaries] = useState<any[]>([]);
   const [transactions, setTransactions] = useState<any[]>([]);
 
+  // Date Filtering & Quick Periods
+  const [quickPeriod, setQuickPeriod] = useState<QuickPeriodKey>('ALL');
+  const [fromDate, setFromDate] = useState<string>('');
+  const [toDate, setToDate] = useState<string>('');
+
   // View state: 'MONTH_SUMMARY' or 'TRANSACTIONS'
   const [selectedMonth, setSelectedMonth] = useState<string | null>(null);
   const [selectedMonthLabel, setSelectedMonthLabel] = useState<string>('');
+  const [expandedMonths, setExpandedMonths] = useState<Record<string, boolean>>({});
 
   // Transaction Filters
   const [txSearch, setTxSearch] = useState('');
@@ -51,6 +59,11 @@ export const BatchLedgerView: React.FC<BatchLedgerViewProps> = ({
       setLoading(true);
       setError(null);
 
+      const params = new URLSearchParams();
+      if (fromDate) params.append('from', fromDate);
+      if (toDate) params.append('to', toDate);
+
+      const queryStr = params.toString() ? `?${params.toString()}` : '';
       const res = await apiRequest<{
         success: boolean;
         batch: any;
@@ -58,7 +71,7 @@ export const BatchLedgerView: React.FC<BatchLedgerViewProps> = ({
         stockSummary: any;
         monthlySummaries: any[];
         transactions: any[];
-      }>(`/api/batches/${batchId}/ledger`);
+      }>(`/api/batches/${batchId}/ledger${queryStr}`);
 
       setBatchData(res.batch);
       setStockItemData(res.stockItem);
@@ -71,11 +84,31 @@ export const BatchLedgerView: React.FC<BatchLedgerViewProps> = ({
     } finally {
       setLoading(false);
     }
-  }, [batchId]);
+  }, [batchId, fromDate, toDate]);
 
   useEffect(() => {
     fetchLedger();
   }, [fetchLedger]);
+
+  const handleSelectQuickPeriod = (period: QuickPeriodKey) => {
+    setQuickPeriod(period);
+    if (period === 'ALL') {
+      setFromDate('');
+      setToDate('');
+    } else if (period !== 'CUSTOM') {
+      const range = getDateRangeForPeriod(period);
+      setFromDate(range.from || '');
+      setToDate(range.to || '');
+    }
+  };
+
+  const toggleMonthExpand = (mKey: string, e: React.MouseEvent) => {
+    e.stopPropagation();
+    setExpandedMonths(prev => ({
+      ...prev,
+      [mKey]: !prev[mKey],
+    }));
+  };
 
   const handleCopyBarcode = () => {
     if (!batchData?.barcode) return;
@@ -151,10 +184,14 @@ export const BatchLedgerView: React.FC<BatchLedgerViewProps> = ({
     document.body.removeChild(link);
   };
 
+  const handlePrint = () => {
+    window.print();
+  };
+
   return (
-    <div className="space-y-4">
+    <div className="space-y-4 print:space-y-2">
       {/* Breadcrumb Navigation */}
-      <div className="flex items-center justify-between">
+      <div className="flex items-center justify-between print:hidden">
         <nav className="flex items-center gap-1.5 text-xs text-slate-500">
           <button
             onClick={onBackToItems}
@@ -224,10 +261,19 @@ export const BatchLedgerView: React.FC<BatchLedgerViewProps> = ({
             </p>
           </div>
 
-          <div className="flex items-center gap-2">
+          <div className="flex items-center gap-2 print:hidden">
+            <button
+              onClick={handlePrint}
+              className="inline-flex items-center gap-1.5 px-3 py-2 text-xs font-semibold text-slate-700 bg-white hover:bg-slate-100 border border-slate-200 rounded-xl transition-colors shadow-sm cursor-pointer"
+              title="Print ledger report"
+            >
+              <Printer className="h-4 w-4 text-slate-500" />
+              <span>Print</span>
+            </button>
+
             <button
               onClick={handleExportCSV}
-              className="inline-flex items-center gap-1.5 px-3 py-2 text-xs font-semibold text-slate-700 bg-white hover:bg-slate-100 border border-slate-200 rounded-xl transition-colors shadow-sm"
+              className="inline-flex items-center gap-1.5 px-3 py-2 text-xs font-semibold text-slate-700 bg-white hover:bg-slate-100 border border-slate-200 rounded-xl transition-colors shadow-sm cursor-pointer"
               title="Export ledger as CSV"
             >
               <Download className="h-4 w-4 text-slate-500" />
@@ -237,7 +283,7 @@ export const BatchLedgerView: React.FC<BatchLedgerViewProps> = ({
             <button
               onClick={fetchLedger}
               disabled={loading}
-              className="p-2 text-slate-600 hover:text-slate-900 bg-slate-100 hover:bg-slate-200 rounded-xl transition-colors"
+              className="p-2 text-slate-600 hover:text-slate-900 bg-slate-100 hover:bg-slate-200 rounded-xl transition-colors cursor-pointer"
               title="Refresh ledger"
             >
               <RefreshCw className={`h-4 w-4 ${loading ? 'animate-spin text-blue-600' : ''}`} />
@@ -252,14 +298,14 @@ export const BatchLedgerView: React.FC<BatchLedgerViewProps> = ({
             <span className={`text-lg font-mono font-bold ${
               (batchData?.stock ?? 0) < 0 ? 'text-rose-600' : 'text-slate-900'
             }`}>
-              {batchData?.stock ?? 0} {stockItemData?.unit || 'PRS'}
+              {formatQuantity(batchData?.stock)} {stockItemData?.unit || 'PRS'}
             </span>
           </div>
 
           <div className="p-3 bg-slate-50 rounded-xl border border-slate-100">
             <span className="text-[11px] font-medium text-slate-500 uppercase tracking-wider block">Reserved</span>
             <span className="text-lg font-mono font-bold text-amber-700">
-              {batchData?.reserved ?? 0} {stockItemData?.unit || 'PRS'}
+              {formatQuantity(batchData?.reserved)} {stockItemData?.unit || 'PRS'}
             </span>
           </div>
 
@@ -268,14 +314,14 @@ export const BatchLedgerView: React.FC<BatchLedgerViewProps> = ({
             <span className={`text-lg font-mono font-bold ${
               (batchData?.available ?? 0) < 0 ? 'text-rose-600' : 'text-emerald-700'
             }`}>
-              {batchData?.available ?? 0} {stockItemData?.unit || 'PRS'}
+              {formatQuantity(batchData?.available)} {stockItemData?.unit || 'PRS'}
             </span>
           </div>
 
           <div className="p-3 bg-slate-50 rounded-xl border border-slate-100">
             <span className="text-[11px] font-medium text-slate-500 uppercase tracking-wider block">Purchases</span>
             <div className="flex items-baseline gap-1.5 mt-0.5">
-              <span className="text-sm font-mono font-bold text-blue-800">{stockSummary?.totalPurchasedQty || 0}</span>
+              <span className="text-sm font-mono font-bold text-blue-800">{formatQuantity(stockSummary?.totalPurchasedQty)}</span>
               <span className="text-[11px] font-mono text-slate-500">
                 (₹{Number(stockSummary?.totalPurchasedValue || 0).toFixed(0)})
               </span>
@@ -285,11 +331,105 @@ export const BatchLedgerView: React.FC<BatchLedgerViewProps> = ({
           <div className="p-3 bg-slate-50 rounded-xl border border-slate-100 col-span-2 sm:col-span-1">
             <span className="text-[11px] font-medium text-slate-500 uppercase tracking-wider block">Sales</span>
             <div className="flex items-baseline gap-1.5 mt-0.5">
-              <span className="text-sm font-mono font-bold text-emerald-800">{stockSummary?.totalSoldQty || 0}</span>
+              <span className="text-sm font-mono font-bold text-emerald-800">{formatQuantity(stockSummary?.totalSoldQty)}</span>
               <span className="text-[11px] font-mono text-slate-500">
                 (₹{Number(stockSummary?.totalSoldValue || 0).toFixed(0)})
               </span>
             </div>
+          </div>
+        </div>
+
+        {/* Date Filter & Quick Periods Toolbar */}
+        <div className="flex flex-wrap items-center justify-between gap-3 mt-4 pt-4 border-t border-slate-100 print:hidden">
+          <div className="flex items-center gap-1.5 flex-wrap">
+            <span className="text-xs font-semibold text-slate-500 mr-1 flex items-center gap-1">
+              <Clock className="h-3.5 w-3.5" />
+              <span>Period:</span>
+            </span>
+            <button
+              type="button"
+              onClick={() => handleSelectQuickPeriod('THIS_MONTH')}
+              className={`px-2.5 py-1 text-xs rounded-lg font-semibold transition-colors cursor-pointer ${
+                quickPeriod === 'THIS_MONTH'
+                  ? 'bg-blue-600 text-white shadow-2xs'
+                  : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
+              }`}
+            >
+              This Month
+            </button>
+            <button
+              type="button"
+              onClick={() => handleSelectQuickPeriod('LAST_MONTH')}
+              className={`px-2.5 py-1 text-xs rounded-lg font-semibold transition-colors cursor-pointer ${
+                quickPeriod === 'LAST_MONTH'
+                  ? 'bg-blue-600 text-white shadow-2xs'
+                  : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
+              }`}
+            >
+              Last Month
+            </button>
+            <button
+              type="button"
+              onClick={() => handleSelectQuickPeriod('THIS_FY')}
+              className={`px-2.5 py-1 text-xs rounded-lg font-semibold transition-colors cursor-pointer ${
+                quickPeriod === 'THIS_FY'
+                  ? 'bg-blue-600 text-white shadow-2xs'
+                  : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
+              }`}
+            >
+              This Financial Year
+            </button>
+            <button
+              type="button"
+              onClick={() => handleSelectQuickPeriod('ALL')}
+              className={`px-2.5 py-1 text-xs rounded-lg font-semibold transition-colors cursor-pointer ${
+                quickPeriod === 'ALL' && !fromDate && !toDate
+                  ? 'bg-blue-600 text-white shadow-2xs'
+                  : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
+              }`}
+            >
+              All Time
+            </button>
+          </div>
+
+          <div className="flex items-center gap-2 flex-wrap">
+            <div className="flex items-center gap-1.5 text-xs">
+              <span className="text-slate-500 font-medium">From:</span>
+              <input
+                type="date"
+                value={fromDate}
+                onChange={e => {
+                  setFromDate(e.target.value);
+                  setQuickPeriod('CUSTOM');
+                }}
+                className="px-2 py-1 text-xs bg-slate-50 border border-slate-200 rounded-lg text-slate-700 focus:outline-none focus:ring-1 focus:ring-blue-500"
+              />
+            </div>
+            <div className="flex items-center gap-1.5 text-xs">
+              <span className="text-slate-500 font-medium">To:</span>
+              <input
+                type="date"
+                value={toDate}
+                onChange={e => {
+                  setToDate(e.target.value);
+                  setQuickPeriod('CUSTOM');
+                }}
+                className="px-2 py-1 text-xs bg-slate-50 border border-slate-200 rounded-lg text-slate-700 focus:outline-none focus:ring-1 focus:ring-blue-500"
+              />
+            </div>
+            {(fromDate || toDate) && (
+              <button
+                type="button"
+                onClick={() => {
+                  setFromDate('');
+                  setToDate('');
+                  setQuickPeriod('ALL');
+                }}
+                className="text-xs text-rose-600 hover:text-rose-800 font-medium px-1 cursor-pointer"
+              >
+                Clear
+              </button>
+            )}
           </div>
         </div>
       </div>
@@ -362,74 +502,186 @@ export const BatchLedgerView: React.FC<BatchLedgerViewProps> = ({
                     (monthlySummaries || []).map((m: any) => {
                       const closing = Number(m.closingQty ?? 0);
                       const opening = Number(m.openingQty ?? 0);
-                      const isClickable = true;
+                      const isExpanded = !!expandedMonths[m.month];
+                      const monthTransactions = (transactions || []).filter(t => {
+                        const d = new Date(t.date);
+                        const y = d.getFullYear();
+                        const mo = String(d.getMonth() + 1).padStart(2, '0');
+                        return `${y}-${mo}` === m.month;
+                      });
 
                       return (
-                        <tr
-                          key={m.month}
-                          onClick={() => {
-                            setSelectedMonth(m.month);
-                            setSelectedMonthLabel(m.monthLabel);
-                          }}
-                          className="hover:bg-blue-50/50 transition-colors cursor-pointer group"
-                        >
-                          {/* Month */}
-                          <td className="py-3 px-4">
-                            <div className="font-semibold text-slate-900 group-hover:text-blue-700 flex items-center gap-1.5">
-                              <span>{m.monthLabel}</span>
-                              <span className="text-[10px] text-slate-400 font-mono">
-                                ({m.transactionCount} vouchers)
-                              </span>
-                            </div>
-                          </td>
+                        <React.Fragment key={m.month}>
+                          <tr
+                            onClick={() => {
+                              setSelectedMonth(m.month);
+                              setSelectedMonthLabel(m.monthLabel);
+                            }}
+                            className="hover:bg-blue-50/50 transition-colors cursor-pointer group"
+                          >
+                            {/* Month with Expand Toggle */}
+                            <td className="py-3 px-4">
+                              <div className="font-semibold text-slate-900 group-hover:text-blue-700 flex items-center gap-1.5">
+                                <button
+                                  type="button"
+                                  onClick={(e) => toggleMonthExpand(m.month, e)}
+                                  className="p-1 -ml-1 text-slate-400 hover:text-slate-700 rounded hover:bg-slate-200/60 transition-colors"
+                                  title={isExpanded ? 'Collapse month transactions' : 'Expand month transactions'}
+                                >
+                                  {isExpanded ? (
+                                    <ChevronDown className="h-3.5 w-3.5 text-blue-600" />
+                                  ) : (
+                                    <ChevronRight className="h-3.5 w-3.5" />
+                                  )}
+                                </button>
+                                <span>{m.monthLabel}</span>
+                                <span className="text-[10px] text-slate-400 font-mono">
+                                  ({m.transactionCount} vouchers)
+                                </span>
+                              </div>
+                            </td>
 
-                          {/* Opening Stock */}
-                          <td className="py-3 px-3 text-right font-mono font-medium text-slate-600">
-                            {opening}
-                          </td>
+                            {/* Opening Stock */}
+                            <td className="py-3 px-3 text-right font-mono font-medium text-slate-600">
+                              {formatQuantity(opening)}
+                            </td>
 
-                          {/* Purchase Qty */}
-                          <td className="py-3 px-3 text-right font-mono font-semibold text-blue-700">
-                            {m.purchaseQty > 0 ? `+${m.purchaseQty}` : '—'}
-                          </td>
+                            {/* Purchase Qty */}
+                            <td className="py-3 px-3 text-right font-mono font-semibold text-blue-700">
+                              {m.purchaseQty > 0 ? `+${formatQuantity(m.purchaseQty)}` : '—'}
+                            </td>
 
-                          {/* Purchase Return */}
-                          <td className="py-3 px-3 text-right font-mono font-semibold text-indigo-700">
-                            {m.returnOut > 0 ? `-${m.returnOut}` : '—'}
-                          </td>
+                            {/* Purchase Return */}
+                            <td className="py-3 px-3 text-right font-mono font-semibold text-indigo-700">
+                              {m.returnOut > 0 ? `-${formatQuantity(m.returnOut)}` : '—'}
+                            </td>
 
-                          {/* Sales Qty */}
-                          <td className="py-3 px-3 text-right font-mono font-semibold text-rose-700">
-                            {m.salesQty > 0 ? `-${m.salesQty}` : '—'}
-                          </td>
+                            {/* Sales Qty */}
+                            <td className="py-3 px-3 text-right font-mono font-semibold text-rose-700">
+                              {m.salesQty > 0 ? `-${formatQuantity(m.salesQty)}` : '—'}
+                            </td>
 
-                          {/* Sales Return */}
-                          <td className="py-3 px-3 text-right font-mono font-semibold text-emerald-700">
-                            {m.returnIn > 0 ? `+${m.returnIn}` : '—'}
-                          </td>
+                            {/* Sales Return */}
+                            <td className="py-3 px-3 text-right font-mono font-semibold text-emerald-700">
+                              {m.returnIn > 0 ? `+${formatQuantity(m.returnIn)}` : '—'}
+                            </td>
 
-                          {/* Adjustment */}
-                          <td className="py-3 px-3 text-right font-mono text-slate-600">
-                            {m.adjustment !== 0 ? (m.adjustment > 0 ? `+${m.adjustment}` : m.adjustment) : '—'}
-                          </td>
+                            {/* Adjustment */}
+                            <td className="py-3 px-3 text-right font-mono text-slate-600">
+                              {m.adjustment !== 0 ? (m.adjustment > 0 ? `+${formatQuantity(m.adjustment)}` : formatQuantity(m.adjustment)) : '—'}
+                            </td>
 
-                          {/* Closing Stock */}
-                          <td className={`py-3 px-3 text-right font-mono font-bold ${
-                            closing < 0 ? 'text-rose-600 bg-rose-50/30' : 'text-slate-900 bg-slate-50/50'
-                          }`}>
-                            {closing}
-                          </td>
+                            {/* Closing Stock */}
+                            <td className={`py-3 px-3 text-right font-mono font-bold ${
+                              closing < 0 ? 'text-rose-600 bg-rose-50/30' : 'text-slate-900 bg-slate-50/50'
+                            }`}>
+                              {formatQuantity(closing)}
+                            </td>
 
-                          {/* Purchase Value */}
-                          <td className="py-3 px-3 text-right font-mono text-slate-700">
-                            {m.purchaseValue > 0 ? `₹${Number(m.purchaseValue).toFixed(2)}` : '—'}
-                          </td>
+                            {/* Purchase Value */}
+                            <td className="py-3 px-3 text-right font-mono text-slate-700">
+                              {m.purchaseValue > 0 ? `₹${formatCurrency(m.purchaseValue)}` : '—'}
+                            </td>
 
-                          {/* Sales Value */}
-                          <td className="py-3 px-4 text-right font-mono font-semibold text-emerald-800">
-                            {m.salesValue > 0 ? `₹${Number(m.salesValue).toFixed(2)}` : '—'}
-                          </td>
-                        </tr>
+                            {/* Sales Value */}
+                            <td className="py-3 px-4 text-right font-mono font-semibold text-emerald-800">
+                              {m.salesValue > 0 ? `₹${formatCurrency(m.salesValue)}` : '—'}
+                            </td>
+                          </tr>
+
+                          {/* Inline Expanded Vouchers for this Month */}
+                          {isExpanded && (
+                            <tr>
+                              <td colSpan={10} className="p-0 bg-slate-50/90 border-y border-blue-100">
+                                <div className="p-3.5 space-y-2">
+                                  <div className="flex items-center justify-between">
+                                    <span className="text-xs font-bold text-slate-800 uppercase tracking-wider flex items-center gap-1.5">
+                                      <FileText className="h-3.5 w-3.5 text-blue-600" />
+                                      <span>Vouchers in {m.monthLabel} ({monthTransactions.length})</span>
+                                    </span>
+                                    <button
+                                      type="button"
+                                      onClick={() => {
+                                        setSelectedMonth(m.month);
+                                        setSelectedMonthLabel(m.monthLabel);
+                                      }}
+                                      className="text-xs font-semibold text-blue-600 hover:text-blue-800 inline-flex items-center gap-1"
+                                    >
+                                      <span>Open Month Detail View</span>
+                                      <ChevronRight className="h-3 w-3" />
+                                    </button>
+                                  </div>
+
+                                  {monthTransactions.length === 0 ? (
+                                    <p className="text-xs text-slate-400 py-2">No individual vouchers recorded for this month.</p>
+                                  ) : (
+                                    <div className="overflow-x-auto rounded-lg border border-slate-200 bg-white">
+                                      <table className="w-full text-left text-xs">
+                                        <thead className="bg-slate-100/70 border-b border-slate-200 text-slate-600 text-[10px] uppercase font-semibold">
+                                          <tr>
+                                            <th className="py-2 px-3">Date</th>
+                                            <th className="py-2 px-2.5">Type</th>
+                                            <th className="py-2 px-2.5">Voucher No.</th>
+                                            <th className="py-2 px-3">Party</th>
+                                            <th className="py-2 px-2.5 text-right">In</th>
+                                            <th className="py-2 px-2.5 text-right">Out</th>
+                                            <th className="py-2 px-2.5 text-right">Balance</th>
+                                          </tr>
+                                        </thead>
+                                        <tbody className="divide-y divide-slate-100 text-[11px]">
+                                          {monthTransactions.map(tx => (
+                                            <tr key={tx.id} className="hover:bg-blue-50/30">
+                                              <td className="py-1.5 px-3 font-mono text-slate-600 whitespace-nowrap">
+                                                {new Date(tx.date).toLocaleDateString()}
+                                              </td>
+                                              <td className="py-1.5 px-2.5 whitespace-nowrap">
+                                                <span className="text-[10px] font-medium text-slate-700">
+                                                  {tx.transactionLabel || tx.transactionType}
+                                                </span>
+                                              </td>
+                                              <td className="py-1.5 px-2.5 whitespace-nowrap font-mono font-bold text-blue-700">
+                                                <button
+                                                  type="button"
+                                                  onClick={(e) => {
+                                                    e.stopPropagation();
+                                                    setSelectedVoucher({
+                                                      voucherId: tx.voucherId,
+                                                      voucherNo: tx.voucherNo,
+                                                      transactionType: tx.transactionType,
+                                                      referenceType: tx.referenceType,
+                                                    });
+                                                  }}
+                                                  className="hover:underline inline-flex items-center gap-1"
+                                                >
+                                                  <span>{tx.voucherNo}</span>
+                                                  <ExternalLink className="h-2.5 w-2.5" />
+                                                </button>
+                                              </td>
+                                              <td className="py-1.5 px-3 truncate max-w-[160px] text-slate-800">
+                                                {tx.partyName || '—'}
+                                              </td>
+                                              <td className="py-1.5 px-2.5 text-right font-mono font-bold text-blue-700">
+                                                {tx.quantityIn > 0 ? `+${formatQuantity(tx.quantityIn)}` : '—'}
+                                              </td>
+                                              <td className="py-1.5 px-2.5 text-right font-mono font-bold text-rose-700">
+                                                {tx.quantityOut > 0 ? `-${formatQuantity(tx.quantityOut)}` : '—'}
+                                              </td>
+                                              <td className={`py-1.5 px-2.5 text-right font-mono font-bold ${
+                                                Number(tx.runningBalance) < 0 ? 'text-rose-600' : 'text-slate-900'
+                                              }`}>
+                                                {formatQuantity(tx.runningBalance)}
+                                              </td>
+                                            </tr>
+                                          ))}
+                                        </tbody>
+                                      </table>
+                                    </div>
+                                  )}
+                                </div>
+                              </td>
+                            </tr>
+                          )}
+                        </React.Fragment>
                       );
                     })
                   )}
@@ -583,34 +835,34 @@ export const BatchLedgerView: React.FC<BatchLedgerViewProps> = ({
 
                           {/* In Qty */}
                           <td className="py-2.5 px-3 text-right font-mono font-bold text-blue-700 bg-blue-50/20">
-                            {isIn ? `+${tx.quantityIn}` : '—'}
+                            {isIn ? `+${formatQuantity(tx.quantityIn)}` : '—'}
                           </td>
 
                           {/* Out Qty */}
                           <td className="py-2.5 px-3 text-right font-mono font-bold text-rose-700 bg-rose-50/20">
-                            {isOut ? `-${tx.quantityOut}` : '—'}
+                            {isOut ? `-${formatQuantity(tx.quantityOut)}` : '—'}
                           </td>
 
                           {/* Rate */}
                           <td className="py-2.5 px-3 text-right font-mono text-slate-600">
-                            {tx.rate > 0 ? `₹${Number(tx.rate).toFixed(2)}` : '—'}
+                            {tx.rate > 0 ? `₹${formatCurrency(tx.rate)}` : '—'}
                           </td>
 
                           {/* Value */}
                           <td className="py-2.5 px-3 text-right font-mono font-medium text-slate-900">
-                            {tx.value > 0 ? `₹${Number(tx.value).toFixed(2)}` : '—'}
+                            {tx.value > 0 ? `₹${formatCurrency(tx.value)}` : '—'}
                           </td>
 
                           {/* Running Stock */}
                           <td className={`py-2.5 px-3 text-right font-mono font-bold ${
                             running < 0 ? 'text-rose-600 bg-rose-50/40' : 'text-slate-900 bg-slate-50/60'
                           }`}>
-                            {running}
+                            {formatQuantity(running)}
                           </td>
 
                           {/* Reserved Delta */}
                           <td className="py-2.5 px-3 text-right font-mono text-amber-700">
-                            {tx.reservedIn > 0 ? `+${tx.reservedIn}` : tx.reservedOut > 0 ? `-${tx.reservedOut}` : '—'}
+                            {tx.reservedIn > 0 ? `+${formatQuantity(tx.reservedIn)}` : tx.reservedOut > 0 ? `-${formatQuantity(tx.reservedOut)}` : '—'}
                           </td>
 
                           {/* Notes */}

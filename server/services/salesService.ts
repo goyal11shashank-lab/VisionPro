@@ -24,6 +24,8 @@ import { PoolClient } from 'pg';
 import { StockService } from './stockService.js';
 import { findOrCreateOpticalBatch } from './opticalMasterService.js';
 import { BusinessSettingsService } from './businessSettingsService.js';
+import { validateQuantity, assertValidQuantity } from '../utils/quantityValidator.js';
+import { DocumentSequenceService } from './documentSequenceService.js';
 
 const UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 function isValidUUID(id: string): boolean {
@@ -55,6 +57,7 @@ export interface CreateSalesOrderDTO {
   notes?: string;
   lines: SalesLineInput[];
   status?: 'DRAFT' | 'CONFIRMED';
+  idempotencyKey?: string;
 }
 
 export interface CreateSalesInvoiceDTO {
@@ -62,18 +65,22 @@ export interface CreateSalesInvoiceDTO {
   salesOrderId?: string;
   invoiceDate?: string | Date;
   invoiceNumber?: string;
+  dueDate?: string | Date;
   gstMode?: 'INTRA_STATE' | 'INTER_STATE';
   paymentTerms?: string;
   notes?: string;
   lines: SalesLineInput[];
   status?: 'DRAFT' | 'POSTED';
+  idempotencyKey?: string;
 }
 
 export interface ConvertOrderToInvoiceDTO {
   invoiceDate?: string | Date;
   invoiceNumber?: string;
+  dueDate?: string | Date;
   paymentTerms?: string;
   notes?: string;
+  idempotencyKey?: string;
   lines?: {
     salesOrderLineId?: string;
     uniqueItemId: string;
@@ -91,69 +98,15 @@ export class SalesService {
   /**
    * Generates a sequential, business-scoped sales order number (e.g. SO-000001)
    */
-  static async generateOrderNumber(businessId: string): Promise<string> {
-    const prefixConfig = await BusinessSettingsService.getVoucherPrefix(businessId, 'salesOrder').catch(() => ({
-      prefix: 'SO-',
-      startNumber: 1,
-      method: 'AUTOMATIC',
-    }));
-    const prefix = prefixConfig.prefix || 'SO-';
-    const startNumber = prefixConfig.startNumber || 1;
-
-    const res = await pool.query(
-      `SELECT order_number FROM sales_orders 
-       WHERE business_id = $1 AND order_number LIKE $2
-       ORDER BY created_at DESC 
-       LIMIT 50`,
-      [businessId, `${prefix}%`]
-    );
-
-    let maxNum = startNumber - 1;
-    for (const row of res.rows) {
-      const numStr = (row.order_number || '').replace(prefix, '');
-      const num = parseInt(numStr, 10);
-      if (!isNaN(num) && num > maxNum) {
-        maxNum = num;
-      }
-    }
-
-    const nextSeq = Math.max(maxNum + 1, startNumber);
-    const padded = String(nextSeq).padStart(6, '0');
-    return `${prefix}${padded}`;
+  static async generateOrderNumber(businessId: string, client?: PoolClient, options?: any): Promise<string> {
+    return await DocumentSequenceService.getNextVoucherNumber(client || pool, businessId, 'SALES_ORDER', options);
   }
 
   /**
    * Generates a sequential, business-scoped sales invoice number (e.g. INV-000001)
    */
-  static async generateInvoiceNumber(businessId: string): Promise<string> {
-    const prefixConfig = await BusinessSettingsService.getVoucherPrefix(businessId, 'salesInvoice').catch(() => ({
-      prefix: 'INV-',
-      startNumber: 1,
-      method: 'AUTOMATIC',
-    }));
-    const prefix = prefixConfig.prefix || 'INV-';
-    const startNumber = prefixConfig.startNumber || 1;
-
-    const res = await pool.query(
-      `SELECT invoice_number FROM sales_invoices 
-       WHERE business_id = $1 AND invoice_number LIKE $2
-       ORDER BY created_at DESC 
-       LIMIT 50`,
-      [businessId, `${prefix}%`]
-    );
-
-    let maxNum = startNumber - 1;
-    for (const row of res.rows) {
-      const numStr = (row.invoice_number || '').replace(prefix, '');
-      const num = parseInt(numStr, 10);
-      if (!isNaN(num) && num > maxNum) {
-        maxNum = num;
-      }
-    }
-
-    const nextSeq = Math.max(maxNum + 1, startNumber);
-    const padded = String(nextSeq).padStart(6, '0');
-    return `${prefix}${padded}`;
+  static async generateInvoiceNumber(businessId: string, client?: PoolClient, options?: any): Promise<string> {
+    return await DocumentSequenceService.getNextVoucherNumber(client || pool, businessId, 'SALES_INVOICE', options);
   }
 
   /**
@@ -414,6 +367,14 @@ export class SalesService {
    */
   static async createSalesOrder(businessId: string, data: CreateSalesOrderDTO, userId?: string) {
     if (!businessId) throw new Error('Business ID is required');
+
+    if (data.idempotencyKey) {
+      const existingId = await DocumentSequenceService.checkIdempotency(pool, businessId, 'SALES_ORDER', data.idempotencyKey);
+      if (existingId) {
+        return await this.getSalesOrderById(businessId, existingId);
+      }
+    }
+
     const party = await this.validateCustomerParty(businessId, data.partyId);
 
     if (!data.lines || data.lines.length === 0) {
@@ -426,14 +387,26 @@ export class SalesService {
     const gstMode = data.gstMode || (isInterState ? 'INTER_STATE' : 'INTRA_STATE');
 
     const orderDate = new Date(data.orderDate || new Date());
-    const orderNumber = data.orderNumber || (await this.generateOrderNumber(businessId));
     const targetStatus = data.status || 'DRAFT';
+
+    // Fetch units of line items for unit-aware quantity validation
+    const lineItemIds = data.lines.map(l => l.uniqueItemId);
+    const lineItems = lineItemIds.length > 0
+      ? await db.select({ id: uniqueItems.id, unit: uniqueItems.unit }).from(uniqueItems).where(inArray(uniqueItems.id, lineItemIds))
+      : [];
+    const itemUnitMap = new Map<string, string>();
+    for (const it of lineItems) {
+      itemUnitMap.set(it.id, it.unit || 'PRS');
+    }
 
     // Calculate line items tax and invoice totals
     const computedLines = data.lines.map(line => {
-      if (line.quantity <= 0) throw new Error('Line quantity must be greater than zero');
-      if (Math.abs(Math.round(line.quantity * 2) - line.quantity * 2) > 0.0001) {
-        throw new Error('Line quantity must be a positive value in steps of 0.5 (e.g. 0.5, 1.0, 1.5, 2.0)');
+      const u = itemUnitMap.get(line.uniqueItemId) || 'PRS';
+      assertValidQuantity(line.quantity, u);
+      if (line.batches && line.batches.length > 0) {
+        for (const b of line.batches) {
+          assertValidQuantity(b.quantity, u);
+        }
       }
       if (line.rate < 0) throw new Error('Line rate cannot be negative');
 
@@ -463,6 +436,12 @@ export class SalesService {
     const client = await pool.connect();
     try {
       await client.query('BEGIN');
+
+      const orderNumber =
+        data.orderNumber ||
+        (await DocumentSequenceService.getNextVoucherNumber(client, businessId, 'SALES_ORDER', {
+          voucherDate: orderDate,
+        }));
 
       // 1. Insert Sales Order
       const insertOrderRes = await client.query(
@@ -501,6 +480,16 @@ export class SalesService {
       );
 
       const orderId = insertOrderRes.rows[0].id;
+
+      if (data.idempotencyKey) {
+        await DocumentSequenceService.recordIdempotency(
+          client,
+          businessId,
+          'SALES_ORDER',
+          data.idempotencyKey,
+          orderId
+        );
+      }
 
       // 2. Insert Lines & Batches
       for (const line of computedLines) {
@@ -805,10 +794,23 @@ export class SalesService {
       // If new lines are provided, recompute totals and replace lines
       if (data.lines && data.lines.length > 0) {
         const gstMode = data.gstMode || 'INTRA_STATE';
+
+        const lineItemIds = data.lines.map(l => l.uniqueItemId);
+        const lineItemsRes = lineItemIds.length > 0
+          ? await client.query(`SELECT id, unit FROM unique_items WHERE id = ANY($1)`, [lineItemIds])
+          : { rows: [] };
+        const itemUnitMap = new Map<string, string>();
+        for (const it of lineItemsRes.rows) {
+          itemUnitMap.set(it.id, it.unit || 'PRS');
+        }
+
         const computedLines = data.lines.map(line => {
-          if (line.quantity <= 0) throw new Error('Line quantity must be greater than zero');
-          if (Math.abs(Math.round(line.quantity * 2) - line.quantity * 2) > 0.0001) {
-            throw new Error('Line quantity must be a positive value in steps of 0.5 (e.g. 0.5, 1.0, 1.5, 2.0)');
+          const u = itemUnitMap.get(line.uniqueItemId) || 'PRS';
+          assertValidQuantity(line.quantity, u);
+          if (line.batches && line.batches.length > 0) {
+            for (const b of line.batches) {
+              assertValidQuantity(b.quantity, u);
+            }
           }
           if (line.rate < 0) throw new Error('Line rate cannot be negative');
 
@@ -1071,6 +1073,24 @@ export class SalesService {
         [userId || null, orderId]
       );
 
+      // Also cascade cancellation to linked dealer_orders and dealer purchase_orders
+      const doRes = await client.query(
+        `SELECT id, dealer_business_id, dealer_purchase_order_id FROM dealer_orders WHERE main_sales_order_id = $1`,
+        [orderId]
+      );
+      for (const dRow of doRes.rows) {
+        await client.query(
+          `UPDATE dealer_orders SET status = 'CANCELLED', updated_at = NOW() WHERE id = $1`,
+          [dRow.id]
+        );
+        if (dRow.dealer_purchase_order_id) {
+          await client.query(
+            `UPDATE purchase_orders SET status = 'CANCELLED', updated_at = NOW() WHERE id = $1`,
+            [dRow.dealer_purchase_order_id]
+          );
+        }
+      }
+
       await client.query('COMMIT');
 
       await AuditService.log({
@@ -1241,6 +1261,27 @@ export class SalesService {
       });
     }
 
+    // Query active stock reservations to determine remaining convertible quantity per batch
+    const activeReservations = await db
+      .select({
+        batchId: stockReservations.batchId,
+        quantity: stockReservations.quantity,
+      })
+      .from(stockReservations)
+      .where(
+        and(
+          eq(stockReservations.businessId, businessId),
+          eq(stockReservations.referenceType, 'SALES_ORDER'),
+          eq(stockReservations.referenceId, orderId),
+          eq(stockReservations.status, 'ACTIVE')
+        )
+      );
+
+    const activeResMap = new Map<string, number>();
+    for (const r of activeReservations) {
+      activeResMap.set(r.batchId, (activeResMap.get(r.batchId) || 0) + parseFloat(r.quantity));
+    }
+
     return {
       ...order.order,
       party: order.party,
@@ -1253,18 +1294,23 @@ export class SalesService {
           uniqueItemName: l.uniqueItem?.name || l.uniqueItem?.code || 'Optical Item',
           uniqueItemCode: l.uniqueItem?.code || '',
           unit: l.uniqueItem?.unit || 'PRS',
-          batches: rawBatches.map(b => ({
-            ...b,
-            batchId: b.batchId || b.batch?.id,
-            sph: b.batch?.sph ?? b.sph ?? '0.00',
-            cyl: b.batch?.cyl ?? b.cyl ?? '0.00',
-            axis: b.batch?.axis ?? b.axis ?? '',
-            add: b.batch?.add ?? b.add ?? '',
-            side: b.batch?.side || b.side || 'NONE',
-            barcode: b.batch?.barcode || b.barcode || '',
-            powerDescription: b.batch?.powerDescription || '',
-            batch: b.batch,
-          })),
+          batches: rawBatches.map(b => {
+            const bId = b.batchId || b.batch?.id;
+            const remainingReserved = activeResMap.has(bId) ? activeResMap.get(bId)! : parseFloat(b.quantity || '0');
+            return {
+              ...b,
+              batchId: bId,
+              remainingReservedQty: remainingReserved,
+              sph: b.batch?.sph ?? b.sph ?? '0.00',
+              cyl: b.batch?.cyl ?? b.cyl ?? '0.00',
+              axis: b.batch?.axis ?? b.axis ?? '',
+              add: b.batch?.add ?? b.add ?? '',
+              side: b.batch?.side || b.side || 'NONE',
+              barcode: b.batch?.barcode || b.barcode || '',
+              powerDescription: b.batch?.powerDescription || '',
+              batch: b.batch,
+            };
+          }),
         };
       }),
     };
@@ -1402,6 +1448,19 @@ export class SalesService {
    */
   static async createSalesInvoice(businessId: string, data: CreateSalesInvoiceDTO, userId?: string) {
     if (!businessId) throw new Error('Business ID is required');
+
+    if (data.idempotencyKey) {
+      const existingId = await DocumentSequenceService.checkIdempotency(pool, businessId, 'SALES_INVOICE', data.idempotencyKey);
+      if (existingId) {
+        return await this.getSalesInvoiceById(businessId, existingId);
+      }
+    }
+
+    // If converting from an existing Sales Order, delegate directly to the reservation conversion flow
+    if (data.salesOrderId) {
+      return await this.convertOrderToInvoice(businessId, data.salesOrderId, data as any, userId);
+    }
+
     const customer = await this.validateCustomerParty(businessId, data.partyId);
 
     if (!data.lines || data.lines.length === 0) {
@@ -1414,13 +1473,30 @@ export class SalesService {
     const gstMode = data.gstMode || (isInterState ? 'INTER_STATE' : 'INTRA_STATE');
 
     const invoiceDate = new Date(data.invoiceDate || new Date());
-    const invoiceNumber = data.invoiceNumber || (await this.generateInvoiceNumber(businessId));
+    const creditDaysSnapshot = parseInt(String(customer?.creditDays || (customer as any)?.credit_days || 0), 10) || 0;
+    const dueDate = data.dueDate
+      ? new Date(data.dueDate)
+      : new Date(invoiceDate.getTime() + creditDaysSnapshot * 24 * 60 * 60 * 1000);
     const targetStatus = data.status || 'DRAFT';
 
+    const lineItemIds = data.lines.map(l => l.uniqueItemId);
+    const lineItems = lineItemIds.length > 0
+      ? await db.select({ id: uniqueItems.id, unit: uniqueItems.unit }).from(uniqueItems).where(inArray(uniqueItems.id, lineItemIds))
+      : [];
+    const itemUnitMap = new Map<string, string>();
+    for (const it of lineItems) {
+      itemUnitMap.set(it.id, it.unit || 'PRS');
+    }
+
     const computedLines = data.lines.map(line => {
-      if (line.quantity <= 0) throw new Error('Line quantity must be greater than zero');
-      if (Math.abs(Math.round(line.quantity * 2) - line.quantity * 2) > 0.0001) {
-        throw new Error('Line quantity must be a positive value in steps of 0.5 (e.g. 0.5, 1.0, 1.5, 2.0)');
+      const u = itemUnitMap.get(line.uniqueItemId) || 'PRS';
+      assertValidQuantity(line.quantity, u);
+      if (line.batches && line.batches.length > 0) {
+        for (const b of line.batches) {
+          if (b.quantity !== 0) {
+            assertValidQuantity(b.quantity, u);
+          }
+        }
       }
       if (line.rate < 0) throw new Error('Line rate cannot be negative');
 
@@ -1451,18 +1527,26 @@ export class SalesService {
     try {
       await client.query('BEGIN');
 
+      const invoiceNumber =
+        data.invoiceNumber ||
+        (await DocumentSequenceService.getNextVoucherNumber(client, businessId, 'SALES_INVOICE', {
+          voucherDate: invoiceDate,
+        }));
+
       // 1. Insert Sales Invoice
       const insertInvRes = await client.query(
         `INSERT INTO sales_invoices (
           business_id, party_id, sales_order_id, invoice_number, invoice_date,
+          due_date, credit_days_snapshot,
           subtotal, discount_total, taxable_amount,
           igst_rate, igst_amount, cgst_rate, cgst_amount, sgst_rate, sgst_amount,
           round_off, grand_total, status, notes, created_by, updated_by
         ) VALUES (
           $1, $2, $3, $4, $5,
-          $6, $7, $8,
-          $9, $10, $11, $12, $13, $14,
-          $15, $16, $17, $18, $19, $20
+          $6, $7,
+          $8, $9, $10,
+          $11, $12, $13, $14, $15, $16,
+          $17, $18, $19, $20, $21, $22
         ) RETURNING id`,
         [
           businessId,
@@ -1470,6 +1554,8 @@ export class SalesService {
           data.salesOrderId || null,
           invoiceNumber,
           invoiceDate,
+          dueDate,
+          creditDaysSnapshot,
           totals.subtotal.toFixed(2),
           totals.discountTotal.toFixed(2),
           totals.taxableAmount.toFixed(2),
@@ -1489,6 +1575,16 @@ export class SalesService {
       );
 
       const invoiceId = insertInvRes.rows[0].id;
+
+      if (data.idempotencyKey) {
+        await DocumentSequenceService.recordIdempotency(
+          client,
+          businessId,
+          'SALES_INVOICE',
+          data.idempotencyKey,
+          invoiceId
+        );
+      }
 
       // 2. Insert Lines and Batches
       for (const line of computedLines) {
@@ -2113,17 +2209,42 @@ export class SalesService {
         [orderId]
       );
 
-      const invoiceNumber = data.invoiceNumber || (await this.generateInvoiceNumber(businessId));
       const invoiceDate = new Date(data.invoiceDate || new Date());
+      const invoiceNumber =
+        data.invoiceNumber ||
+        (await DocumentSequenceService.getNextVoucherNumber(client, businessId, 'SALES_INVOICE', {
+          voucherDate: invoiceDate,
+        }));
+
+      const partyRes = await client.query(`SELECT credit_days FROM parties WHERE id = $1`, [order.party_id]);
+      const creditDaysSnapshot = parseInt(String(partyRes.rows[0]?.credit_days || 0), 10) || 0;
+      const dueDate = data.dueDate
+        ? new Date(data.dueDate)
+        : new Date(invoiceDate.getTime() + creditDaysSnapshot * 24 * 60 * 60 * 1000);
 
       // Prepare conversion lines
       let linesToConvert: SalesLineInput[] = [];
 
+      const uItemIds = (data.lines && data.lines.length > 0)
+        ? data.lines.map(l => l.uniqueItemId)
+        : orderLinesRes.rows.map(r => r.unique_item_id);
+      
+      const uItemRows = uItemIds.length > 0
+        ? await client.query(`SELECT id, unit FROM unique_items WHERE id = ANY($1)`, [uItemIds])
+        : { rows: [] };
+      const uItemUnitMap = new Map<string, string>();
+      for (const r of uItemRows.rows) {
+        uItemUnitMap.set(r.id, r.unit || 'PRS');
+      }
+
       if (data.lines && data.lines.length > 0) {
         linesToConvert = data.lines.map(l => {
-          if (l.quantity <= 0) throw new Error('Line quantity must be greater than zero');
-          if (Math.abs(Math.round(l.quantity * 2) - l.quantity * 2) > 0.0001) {
-            throw new Error('Line quantity must be a positive value in steps of 0.5 (e.g. 0.5, 1.0, 1.5, 2.0)');
+          const itemUnit = uItemUnitMap.get(l.uniqueItemId) || 'PRS';
+          assertValidQuantity(l.quantity, itemUnit);
+          if (l.batches && l.batches.length > 0) {
+            for (const b of l.batches) {
+              assertValidQuantity(b.quantity, itemUnit);
+            }
           }
           const discType =
             l.discountType || (l.discountPercent !== undefined && l.discountPercent > 0 ? 'PERCENTAGE' : 'NONE');
@@ -2182,14 +2303,16 @@ export class SalesService {
       const insertInvRes = await client.query(
         `INSERT INTO sales_invoices (
           business_id, party_id, sales_order_id, invoice_number, invoice_date,
+          due_date, credit_days_snapshot,
           subtotal, discount_total, taxable_amount,
           igst_rate, igst_amount, cgst_rate, cgst_amount, sgst_rate, sgst_amount,
           round_off, grand_total, status, notes, created_by, updated_by
         ) VALUES (
           $1, $2, $3, $4, $5,
-          $6, $7, $8,
-          $9, $10, $11, $12, $13, $14,
-          $15, $16, 'POSTED', $17, $18, $19
+          $6, $7,
+          $8, $9, $10,
+          $11, $12, $13, $14, $15, $16,
+          $17, $18, 'POSTED', $19, $20, $21
         ) RETURNING id`,
         [
           businessId,
@@ -2197,6 +2320,8 @@ export class SalesService {
           orderId,
           invoiceNumber,
           invoiceDate,
+          dueDate,
+          creditDaysSnapshot,
           totals.subtotal.toFixed(2),
           totals.discountTotal.toFixed(2),
           totals.taxableAmount.toFixed(2),
@@ -2215,6 +2340,16 @@ export class SalesService {
       );
 
       const invoiceId = insertInvRes.rows[0].id;
+
+      if (data.idempotencyKey) {
+        await DocumentSequenceService.recordIdempotency(
+          client,
+          businessId,
+          'SALES_INVOICE',
+          data.idempotencyKey,
+          invoiceId
+        );
+      }
 
       // Insert Invoice Lines & deduct converted reservations
       for (const line of computedLines) {
@@ -2286,17 +2421,23 @@ export class SalesService {
             [newPhys.toFixed(2), newRes.toFixed(2), newAvail.toFixed(2), stock.stockId]
           );
 
-            // Update reservation record
+            // Update reservation record with FOR UPDATE lock to prevent race conditions
             const resRec = await client.query(
               `SELECT id, quantity FROM stock_reservations 
                WHERE business_id = $1 AND reference_type = 'SALES_ORDER' AND reference_id = $2 AND batch_id = $3 AND status = 'ACTIVE'
-               LIMIT 1`,
+               LIMIT 1
+               FOR UPDATE`,
               [businessId, orderId, batchId]
             );
 
             if (resRec.rows.length > 0) {
               const resRow = resRec.rows[0];
               const curResQty = parseFloat(resRow.quantity);
+              if (convQty > curResQty + 0.0001) {
+                throw new Error(
+                  `Cannot convert ${convQty} units for batch ID ${batchId}. Only ${curResQty} units remain actively reserved on this Sales Order.`
+                );
+              }
               if (curResQty <= convQty) {
                 await client.query(
                   `UPDATE stock_reservations SET status = 'CONVERTED', converted_at = NOW() WHERE id = $1`,
@@ -2553,8 +2694,10 @@ export class SalesService {
       }
 
       await client.query(
-        `UPDATE sales_invoices SET status = 'CANCELLED', updated_at = NOW(), updated_by = $1 WHERE id = $2`,
-        [userId || null, invoiceId]
+        `UPDATE sales_invoices 
+         SET status = 'CANCELLED', cancellation_reason = $3, updated_at = NOW(), updated_by = $1 
+         WHERE id = $2`,
+        [userId || null, invoiceId, reason || 'User requested cancellation']
       );
 
       await client.query('COMMIT');

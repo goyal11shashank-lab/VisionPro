@@ -364,7 +364,7 @@ export class ExportService {
         pi.invoice_number AS "Invoice Number",
         COALESCE(pi.supplier_invoice_number, '') AS "Supplier Inv No",
         TO_CHAR(pi.invoice_date, 'YYYY-MM-DD') AS "Invoice Date",
-        TO_CHAR((pi.invoice_date + COALESCE(NULLIF(regexp_replace(p.credit_days, '[^0-9]', '', 'g'), '')::integer, 0) * INTERVAL '1 day'), 'YYYY-MM-DD') AS "Due Date",
+        TO_CHAR(COALESCE(pi.due_date, (pi.invoice_date + COALESCE(NULLIF(regexp_replace(p.credit_days, '[^0-9]', '', 'g'), '')::integer, 0) * INTERVAL '1 day')), 'YYYY-MM-DD') AS "Due Date",
         p.name AS "Supplier Name",
         p.party_code AS "Supplier Code",
         p.gstin AS "Supplier GSTIN",
@@ -653,7 +653,7 @@ export class ExportService {
         COALESCE((SELECT balance FROM customer_ledgers cl WHERE cl.party_id = p.id ORDER BY cl.created_at DESC LIMIT 1), '0.00') AS "Outstanding Balance",
         COALESCE((
           SELECT SUM(CASE
-            WHEN (inv.invoice_date + COALESCE(NULLIF(regexp_replace(p.credit_days, '[^0-9]', '', 'g'), '')::integer, 0) * INTERVAL '1 day') < CURRENT_DATE
+            WHEN COALESCE(inv.due_date, (inv.invoice_date + COALESCE(NULLIF(regexp_replace(p.credit_days, '[^0-9]', '', 'g'), '')::integer, 0) * INTERVAL '1 day')) < CURRENT_DATE
             THEN (inv.grand_total - COALESCE(pa_sub.paid_amount, 0))
             ELSE 0
           END)
@@ -685,7 +685,7 @@ export class ExportService {
         COALESCE((SELECT balance FROM supplier_ledgers sl WHERE sl.party_id = p.id ORDER BY sl.created_at DESC LIMIT 1), '0.00') AS "Outstanding Balance",
         COALESCE((
           SELECT SUM(CASE
-            WHEN (inv.invoice_date + COALESCE(NULLIF(regexp_replace(p.credit_days, '[^0-9]', '', 'g'), '')::integer, 0) * INTERVAL '1 day') < CURRENT_DATE
+            WHEN COALESCE(inv.due_date, (inv.invoice_date + COALESCE(NULLIF(regexp_replace(p.credit_days, '[^0-9]', '', 'g'), '')::integer, 0) * INTERVAL '1 day')) < CURRENT_DATE
             THEN (inv.grand_total - COALESCE(pa_sub.paid_amount, 0))
             ELSE 0
           END)

@@ -28,9 +28,10 @@ router.get(
   async (req: Request, res: Response) => {
     try {
       const businessId = req.user!.currentBusinessId;
-      const { search } = req.query;
+      const { search, asOfDate } = req.query;
       const result = await PaymentService.getCustomerOutstanding(businessId, {
         search: search as string,
+        asOfDate: asOfDate as string,
       });
       res.json({ success: true, customers: result, data: result });
     } catch (err: any) {
@@ -42,7 +43,7 @@ router.get(
 
 /**
  * GET /api/payments/outstanding/suppliers
- * Overview of supplier ledger outstandings and unpaid bills
+ * Overview of supplier ledger outstandings and unpaid bills with 6 aging buckets and asOfDate
  */
 router.get(
   '/outstanding/suppliers',
@@ -56,9 +57,10 @@ router.get(
   async (req: Request, res: Response) => {
     try {
       const businessId = req.user!.currentBusinessId;
-      const { search } = req.query;
+      const { search, asOfDate } = req.query;
       const result = await PaymentService.getSupplierOutstanding(businessId, {
         search: search as string,
+        asOfDate: asOfDate as string,
       });
       res.json({ success: true, suppliers: result, data: result });
     } catch (err: any) {
@@ -69,8 +71,143 @@ router.get(
 );
 
 /**
+ * GET /api/payments/outstanding/invoices/customers
+ * Line-by-line detailed Customer invoice outstanding with Due Date, Paid/Adjusted, Overdue Days
+ */
+router.get(
+  '/outstanding/invoices/customers',
+  requireAnyPermission([
+    'payment.receipt.view',
+    'payment:receipt:view',
+    'accounts:view',
+    'accounts.view',
+    'parties:view',
+  ]),
+  async (req: Request, res: Response) => {
+    try {
+      const businessId = req.user!.currentBusinessId;
+      const { partyId, search, asOfDate, status } = req.query;
+      const result = await PaymentService.getInvoiceWiseCustomerOutstanding(businessId, {
+        partyId: partyId as string,
+        search: search as string,
+        asOfDate: asOfDate as string,
+        status: status as any,
+      });
+      res.json({ success: true, invoices: result, data: result });
+    } catch (err: any) {
+      console.error('[GET /api/payments/outstanding/invoices/customers Error]', err);
+      res.status(400).json({ error: 'FETCH_CUSTOMER_INVOICES_OUTSTANDING_FAILED', message: err.message });
+    }
+  }
+);
+
+/**
+ * GET /api/payments/outstanding/invoices/suppliers
+ * Line-by-line detailed Supplier bills outstanding with Due Date, Paid/Adjusted, Overdue Days
+ */
+router.get(
+  '/outstanding/invoices/suppliers',
+  requireAnyPermission([
+    'payment.supplier.view',
+    'payment:supplier:view',
+    'accounts:view',
+    'accounts.view',
+    'parties:view',
+  ]),
+  async (req: Request, res: Response) => {
+    try {
+      const businessId = req.user!.currentBusinessId;
+      const { partyId, search, asOfDate, status } = req.query;
+      const result = await PaymentService.getInvoiceWiseSupplierOutstanding(businessId, {
+        partyId: partyId as string,
+        search: search as string,
+        asOfDate: asOfDate as string,
+        status: status as any,
+      });
+      res.json({ success: true, bills: result, data: result });
+    } catch (err: any) {
+      console.error('[GET /api/payments/outstanding/invoices/suppliers Error]', err);
+      res.status(400).json({ error: 'FETCH_SUPPLIER_INVOICES_OUTSTANDING_FAILED', message: err.message });
+    }
+  }
+);
+
+/**
+ * GET /api/payments/reconciliation
+ * Accounting Reconciliation Diagnostics (party ledgers, invoice status, payment over-allocation)
+ */
+router.get(
+  '/reconciliation',
+  requireAnyPermission([
+    'accounts:view',
+    'accounts.view',
+    'accounts:approve',
+    'reports:view',
+  ]),
+  async (req: Request, res: Response) => {
+    try {
+      const businessId = req.user!.currentBusinessId;
+      const result = await PaymentService.getAccountingReconciliation(businessId);
+      res.json(result);
+    } catch (err: any) {
+      console.error('[GET /api/payments/reconciliation Error]', err);
+      res.status(500).json({ error: 'RECONCILIATION_FAILED', message: err.message });
+    }
+  }
+);
+
+/**
+ * POST /api/payments/reconciliation/sync
+ * Automatically synchronizes invoice payment statuses to resolve return-adjustment discrepancies
+ */
+router.post(
+  '/reconciliation/sync',
+  requireAnyPermission([
+    'accounts:approve',
+    'accounts.approve',
+    'accounts:manage',
+    'admin:manage',
+  ]),
+  async (req: Request, res: Response) => {
+    try {
+      const businessId = req.user!.currentBusinessId;
+      await PaymentService.syncAllInvoicePaymentStatuses(businessId);
+      const result = await PaymentService.getAccountingReconciliation(businessId);
+      res.json(result);
+    } catch (err: any) {
+      console.error('[POST /api/payments/reconciliation/sync Error]', err);
+      res.status(500).json({ error: 'RECONCILIATION_SYNC_FAILED', message: err.message });
+    }
+  }
+);
+
+/**
+ * GET /api/payments/reconciliation/:partyId
+ * Single party accounting reconciliation check
+ */
+router.get(
+  '/reconciliation/:partyId',
+  requireAnyPermission([
+    'accounts:view',
+    'accounts.view',
+    'parties:view',
+  ]),
+  async (req: Request, res: Response) => {
+    try {
+      const businessId = req.user!.currentBusinessId;
+      const { partyId } = req.params;
+      const result = await PaymentService.getAccountingReconciliation(businessId, partyId);
+      res.json(result);
+    } catch (err: any) {
+      console.error('[GET /api/payments/reconciliation/:partyId Error]', err);
+      res.status(500).json({ error: 'RECONCILIATION_PARTY_FAILED', message: err.message });
+    }
+  }
+);
+
+/**
  * GET /api/payments/statement/:partyId
- * Chronological party ledger statement with running balance
+ * Chronological party ledger statement with running balance and opening balance
  */
 router.get(
   '/statement/:partyId',
@@ -87,11 +224,12 @@ router.get(
     try {
       const businessId = req.user!.currentBusinessId;
       const { partyId } = req.params;
-      const { fromDate, toDate } = req.query;
+      const { fromDate, toDate, ledgerType } = req.query;
 
       const result = await PaymentService.getPartyStatement(businessId, partyId, {
         fromDate: fromDate as string,
         toDate: toDate as string,
+        ledgerType: ledgerType as any,
       });
       res.json(result);
     } catch (err: any) {

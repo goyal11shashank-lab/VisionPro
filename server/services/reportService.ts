@@ -466,7 +466,7 @@ export class ReportService {
          pi.invoice_number,
          pi.supplier_invoice_number,
          pi.invoice_date,
-         (pi.invoice_date + COALESCE(NULLIF(regexp_replace(p.credit_days, '[^0-9]', '', 'g'), '')::integer, 0) * INTERVAL '1 day') AS due_date,
+         COALESCE(pi.due_date, (pi.invoice_date + COALESCE(NULLIF(regexp_replace(p.credit_days, '[^0-9]', '', 'g'), '')::integer, 0) * INTERVAL '1 day')) AS due_date,
          pi.supplier_party_id AS party_id,
          p.name AS party_name,
          p.party_code,
@@ -875,7 +875,7 @@ export class ReportService {
          si.id,
          si.invoice_number,
          si.invoice_date,
-         (si.invoice_date + COALESCE(NULLIF(regexp_replace(p.credit_days, '[^0-9]', '', 'g'), '')::integer, 0) * INTERVAL '1 day') AS due_date,
+         COALESCE(si.due_date, (si.invoice_date + COALESCE(NULLIF(regexp_replace(p.credit_days, '[^0-9]', '', 'g'), '')::integer, 0) * INTERVAL '1 day')) AS due_date,
          si.party_id,
          p.name AS party_name,
          p.party_code,
@@ -1264,7 +1264,7 @@ export class ReportService {
          ), 0) AS total_returned,
          COALESCE((
            SELECT SUM(CASE
-             WHEN (inv.invoice_date + COALESCE(NULLIF(regexp_replace(p.credit_days, '[^0-9]', '', 'g'), '')::integer, 0) * INTERVAL '1 day') < CURRENT_DATE
+             WHEN COALESCE(inv.due_date, (inv.invoice_date + COALESCE(NULLIF(regexp_replace(p.credit_days, '[^0-9]', '', 'g'), '')::integer, 0) * INTERVAL '1 day')) < CURRENT_DATE
              THEN (inv.grand_total - COALESCE(pa_sub.paid_amount, 0))
              ELSE 0
            END)

@@ -54,14 +54,14 @@ export const MainLayout: React.FC<MainLayoutProps> = ({
           className={
             isVoucherPage
               ? 'flex-1 overflow-hidden p-1.5 md:p-2 flex flex-col min-h-0'
-              : 'flex-1 overflow-y-auto p-4 md:p-6 lg:p-7 custom-scrollbar'
+              : 'flex-1 overflow-y-auto px-3.5 py-3 sm:px-5 sm:py-3.5 lg:px-7 lg:py-4 custom-scrollbar'
           }
         >
           <div
             className={
               isVoucherPage
                 ? 'w-full h-full flex flex-col flex-1 min-h-0'
-                : 'max-w-7xl mx-auto space-y-6'
+                : 'w-full space-y-3.5'
             }
           >
             {children}

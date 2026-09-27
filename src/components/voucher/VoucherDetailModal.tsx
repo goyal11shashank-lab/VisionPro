@@ -57,17 +57,17 @@ export const VoucherDetailModal: React.FC<VoucherDetailModalProps> = ({
       const tType = (transactionType || '').toUpperCase();
       let url = '';
 
-      if (vNo.startsWith('SAL') || tType === 'SALE' || referenceType === 'INVOICE') {
+      if (vNo.startsWith('SAL') || vNo.startsWith('SI') || vNo.startsWith('INV') || tType === 'SALE' || referenceType === 'INVOICE' || referenceType === 'SALES_INVOICE') {
         url = `/api/sales/invoices/${voucherId}`;
-      } else if (vNo.startsWith('PUR') || tType === 'PURCHASE' || referenceType === 'BILL') {
+      } else if (vNo.startsWith('PUR') || vNo.startsWith('PI') || vNo.startsWith('BILL') || tType === 'PURCHASE' || referenceType === 'BILL' || referenceType === 'PURCHASE_INVOICE') {
         url = `/api/purchases/${voucherId}`;
-      } else if (vNo.startsWith('SO') || tType === 'RESERVATION' || referenceType === 'ORDER') {
+      } else if (vNo.startsWith('SO') || tType === 'RESERVATION' || referenceType === 'ORDER' || referenceType === 'SALES_ORDER') {
         url = `/api/sales/orders/${voucherId}`;
       } else if (vNo.startsWith('PO') || tType === 'PURCHASE_ORDER') {
         url = `/api/purchases/orders/${voucherId}`;
-      } else if (vNo.startsWith('SR') || tType === 'SALES_RETURN') {
+      } else if (vNo.startsWith('SR') || vNo.startsWith('CN') || tType === 'SALES_RETURN' || referenceType === 'SALES_RETURN') {
         url = `/api/sales/returns/${voucherId}`;
-      } else if (vNo.startsWith('PR') || tType === 'PURCHASE_RETURN') {
+      } else if (vNo.startsWith('PR') || vNo.startsWith('DN') || tType === 'PURCHASE_RETURN' || referenceType === 'PURCHASE_RETURN') {
         url = `/api/purchases/returns/${voucherId}`;
       } else {
         url = `/api/sales/invoices/${voucherId}`;

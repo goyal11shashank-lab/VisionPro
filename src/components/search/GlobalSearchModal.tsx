@@ -387,7 +387,7 @@ export const GlobalSearchModal: React.FC<GlobalSearchModalProps> = ({
                   {(results?.products || []).map(pr => (
                     <div
                       key={pr.id}
-                      onClick={() => handleSelect('/master/unique-items')}
+                      onClick={() => handleSelect('/master/stock-items')}
                       className="p-2.5 rounded-xl hover:bg-amber-50/70 border border-slate-100 hover:border-amber-200 transition-all cursor-pointer flex items-center justify-between group"
                     >
                       <div className="flex items-center gap-3 min-w-0">

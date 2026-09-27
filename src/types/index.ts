@@ -1,3 +1,16 @@
+export interface UserBusinessAssignment {
+  businessId: string;
+  businessName: string;
+  tradeName?: string | null;
+  status: string;
+  isDefault: boolean;
+  role?: {
+    id: string;
+    name: string;
+    code: string;
+  } | null;
+}
+
 export interface User {
   id: string;
   username: string;
@@ -9,6 +22,9 @@ export interface User {
   lastLoginAt?: string | null;
   createdAt?: string;
   roles?: Array<{ id: string; name: string; code: string }>;
+  authorizedBusinesses?: UserBusinessAssignment[];
+  defaultBusinessId?: string | null;
+  defaultBusinessName?: string | null;
 }
 
 export interface Business {
@@ -28,7 +44,126 @@ export interface Business {
   currency: string;
   financialYearStart: string;
   status: string;
+  businessType?: 'MAIN' | 'DEALER';
+  parentBusinessId?: string | null;
+  parentBusinessName?: string | null;
   isDefault?: boolean;
+  onboardingCompleted?: boolean;
+  onboardingCompletedAt?: string | null;
+  onboardingCompletedBy?: string | null;
+  userCount?: number;
+}
+
+export interface MainWarehouseStockItem {
+  batchId: string;
+  barcode: string;
+  identityKey: string;
+  sph: number | null;
+  cyl: number | null;
+  axis: number | null;
+  add: number | null;
+  side: string;
+  formattedPower: string;
+  uniqueItemId: string;
+  uniqueItemName: string;
+  uniqueItemCode: string;
+  primaryItemName: string;
+  categoryId: string;
+  categoryName: string;
+  categoryCode: string;
+  mainWarehouseAvailable: number;
+  mainWarehousePhysical: number;
+  dealerAvailable: number;
+  dealerPhysical: number;
+}
+
+export interface MainWarehouseAvailabilityResponse {
+  success: boolean;
+  mainWarehouse: {
+    id: string;
+    name: string;
+    tradeName?: string | null;
+    city?: string | null;
+    state?: string | null;
+    phone?: string | null;
+    email?: string | null;
+  };
+  dealerBusiness: {
+    id: string;
+    name: string;
+    businessType?: string;
+  };
+  pagination: {
+    page: number;
+    limit: number;
+    totalItems: number;
+    totalPages: number;
+  };
+  items: MainWarehouseStockItem[];
+}
+
+export interface MainWarehouseSummaryResponse {
+  success: boolean;
+  mainWarehouse: {
+    id: string;
+    name: string;
+    tradeName?: string | null;
+    city?: string | null;
+    state?: string | null;
+  };
+  dealerBusiness: {
+    id: string;
+    name: string;
+  };
+  metrics: {
+    totalBatches: number;
+    totalUniqueItems: number;
+    inStockBatches: number;
+    totalUnitsAvailable: number;
+  };
+  categories: Array<{
+    id: string;
+    name: string;
+    code: string;
+    totalBatches: number;
+    inStockBatches: number;
+    availableUnits: number;
+  }>;
+}
+
+export interface DealerOrderItem {
+  batchId: string;
+  uniqueItemId: string;
+  uniqueItemName: string;
+  uniqueItemCode: string;
+  barcode: string;
+  formattedPower: string;
+  availableStock: number;
+  quantity: number;
+  rate?: number;
+}
+
+export interface DealerOrderRecord {
+  id: string;
+  orderNumber: string;
+  mainSalesOrderId: string;
+  status: 'DRAFT' | 'CONFIRMED' | 'PACKED' | 'DISPATCHED' | 'DELIVERED' | 'CANCELLED';
+  mainStatus?: string;
+  itemCount: number;
+  totalQuantity: number;
+  taxableAmount: number;
+  taxAmount: number;
+  grandTotal: number;
+  notes?: string | null;
+  dealerNotes?: string | null;
+  orderDate: string;
+  createdAt: string;
+  mainWarehouseName?: string;
+  mainWarehouseGstin?: string | null;
+  mainWarehouseCity?: string | null;
+  mainWarehouseState?: string | null;
+  fulfillmentStatus?: string | null;
+  convertedInvoiceId?: string | null;
 }
 
 export interface Role {
@@ -445,4 +580,5 @@ export interface PurchaseOrder {
   createdAt: string;
   updatedAt?: string;
 }
+
 

@@ -1,10 +1,12 @@
 import React, { useState, useMemo } from 'react';
 import { 
   Search, RefreshCw, Plus, FileSpreadsheet, BookOpen, Layers, 
-  ChevronRight, AlertTriangle, CheckCircle2, ArrowRight, Eye, Boxes
+  ChevronRight, AlertTriangle, CheckCircle2, ArrowRight, Eye, Boxes,
+  Download, Printer
 } from 'lucide-react';
 import { UniqueItem, Category } from '../../types/index.js';
 import { rankSearchMatch } from '../../utils/searchNormalization.js';
+import { formatQuantity } from '../../utils/numberFormatting.js';
 
 interface StockItemsListViewProps {
   items: UniqueItem[];
@@ -59,28 +61,74 @@ export const StockItemsListView: React.FC<StockItemsListViewProps> = ({
   const totalAvailable = useMemo(() => safeItems.reduce((sum, item) => sum + (Number(item.available) || 0), 0), [safeItems]);
   const totalBatches = useMemo(() => safeItems.reduce((sum, item) => sum + (Number(item.batchesCount) || 0), 0), [safeItems]);
 
+  const handleExportCSV = () => {
+    const headers = ['Stock Item Name', 'Code', 'Category', 'Unit', 'Maintain Batches', 'Batches Count', 'Stock', 'Reserved', 'Available'];
+    const rows = filteredItems.map(item => [
+      item.name,
+      item.code,
+      item.opticalCategory || item.categoryCode || 'SV',
+      item.unit || 'PRS',
+      item.maintainBatches !== false ? 'YES' : 'NO',
+      item.batchesCount || 0,
+      item.stock || 0,
+      item.reserved || 0,
+      item.available || 0,
+    ]);
+
+    const csvContent = 'data:text/csv;charset=utf-8,' + [headers.join(','), ...rows.map(r => r.map(c => `"${c}"`).join(','))].join('\n');
+    const encodedUri = encodeURI(csvContent);
+    const link = document.createElement('a');
+    link.setAttribute('href', encodedUri);
+    link.setAttribute('download', `Stock_Items_Report_${new Date().toISOString().slice(0, 10)}.csv`);
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+  };
+
+  const handlePrint = () => {
+    window.print();
+  };
+
   return (
-    <div className="space-y-4">
+    <div className="space-y-3.5 print:space-y-2">
       {/* Top Banner & Action Controls */}
-      <div className="bg-white rounded-2xl border border-slate-200 shadow-sm p-4 sm:p-5">
-        <div className="flex flex-col lg:flex-row lg:items-center lg:justify-between gap-4">
+      <div className="bg-white rounded-xl border border-slate-200 shadow-2xs p-3.5 sm:p-4 print:border-none print:shadow-none">
+        <div className="flex flex-col lg:flex-row lg:items-center lg:justify-between gap-3">
           <div>
             <div className="flex items-center gap-2">
-              <h1 className="text-xl font-bold text-slate-900">Stock Items & Batch Powers</h1>
-              <span className="px-2.5 py-0.5 rounded-full text-xs font-semibold bg-blue-50 text-blue-700 border border-blue-200">
+              <h1 className="text-lg font-bold text-slate-900">Stock Items & Batch Powers</h1>
+              <span className="px-2 py-0.5 rounded-full text-xs font-semibold bg-blue-50 text-blue-700 border border-blue-200">
                 {safeItems.length} Stock Items
               </span>
             </div>
-            <p className="text-xs text-slate-500 mt-1">
+            <p className="text-xs text-slate-500 mt-0.5">
               Hierarchical optical catalog. Select any Stock Item to view its specific power batches and transaction ledger.
             </p>
           </div>
 
-          <div className="flex flex-wrap items-center gap-2.5">
+          <div className="flex flex-wrap items-center gap-2 print:hidden">
+            <button
+              onClick={handlePrint}
+              className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold text-slate-700 bg-white hover:bg-slate-100 border border-slate-200 rounded-lg transition-colors shadow-2xs cursor-pointer"
+              title="Print Stock Items Report"
+            >
+              <Printer className="h-3.5 w-3.5" />
+              <span>Print</span>
+            </button>
+
+            <button
+              onClick={handleExportCSV}
+              className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold text-slate-700 bg-white hover:bg-slate-100 border border-slate-200 rounded-lg transition-colors shadow-2xs cursor-pointer"
+              title="Export Stock Items to CSV"
+            >
+              <Download className="h-3.5 w-3.5" />
+              <span>Export CSV</span>
+            </button>
+
             <button
               onClick={onRefresh}
               disabled={loading}
-              className="p-2 text-slate-600 hover:text-slate-900 bg-slate-100 hover:bg-slate-200 rounded-xl transition-colors"
+              className="p-1.5 text-slate-600 hover:text-slate-900 bg-slate-100 hover:bg-slate-200 rounded-lg transition-colors cursor-pointer"
               title="Refresh inventory"
             >
               <RefreshCw className={`h-4 w-4 ${loading ? 'animate-spin text-blue-600' : ''}`} />
@@ -88,62 +136,62 @@ export const StockItemsListView: React.FC<StockItemsListViewProps> = ({
 
             <button
               onClick={onOpenImportModal}
-              className="inline-flex items-center gap-1.5 px-3.5 py-2 text-xs font-semibold text-emerald-700 bg-emerald-50 hover:bg-emerald-100 border border-emerald-200 rounded-xl transition-colors shadow-sm"
+              className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold text-emerald-700 bg-emerald-50 hover:bg-emerald-100 border border-emerald-200 rounded-lg transition-colors shadow-2xs cursor-pointer"
             >
-              <FileSpreadsheet className="h-4 w-4" />
+              <FileSpreadsheet className="h-3.5 w-3.5" />
               <span>Bulk Import Batches</span>
             </button>
 
             <button
               onClick={onCreateBatch}
-              className="inline-flex items-center gap-1.5 px-3.5 py-2 text-xs font-semibold text-white bg-blue-600 hover:bg-blue-700 rounded-xl transition-colors shadow-sm"
+              className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold text-white bg-blue-600 hover:bg-blue-700 rounded-lg transition-colors shadow-2xs cursor-pointer"
             >
-              <Plus className="h-4 w-4" />
+              <Plus className="h-3.5 w-3.5" />
               <span>Add Optical Batch</span>
             </button>
           </div>
         </div>
 
         {/* Aggregate Metrics Bar */}
-        <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 mt-4 pt-4 border-t border-slate-100">
-          <div className="p-3 bg-slate-50 rounded-xl border border-slate-100">
-            <span className="text-[11px] font-medium text-slate-500 uppercase tracking-wider block">Total Batches</span>
-            <span className="text-lg font-mono font-bold text-slate-900">{totalBatches}</span>
+        <div className="grid grid-cols-2 sm:grid-cols-4 gap-2.5 mt-3 pt-3 border-t border-slate-100">
+          <div className="p-2.5 bg-slate-50 rounded-lg border border-slate-100">
+            <span className="text-[10px] font-semibold text-slate-500 uppercase tracking-wider block">Total Batches</span>
+            <span className="text-base font-mono font-bold text-slate-900">{totalBatches}</span>
           </div>
-          <div className="p-3 bg-slate-50 rounded-xl border border-slate-100">
-            <span className="text-[11px] font-medium text-slate-500 uppercase tracking-wider block">Total Stock</span>
-            <span className={`text-lg font-mono font-bold ${totalStock < 0 ? 'text-rose-600' : 'text-slate-900'}`}>
-              {totalStock} PRS
+          <div className="p-2.5 bg-slate-50 rounded-lg border border-slate-100">
+            <span className="text-[10px] font-semibold text-slate-500 uppercase tracking-wider block">Total Stock</span>
+            <span className={`text-base font-mono font-bold ${totalStock < 0 ? 'text-rose-600' : 'text-slate-900'}`}>
+              {formatQuantity(totalStock)} PRS
             </span>
           </div>
-          <div className="p-3 bg-slate-50 rounded-xl border border-slate-100">
-            <span className="text-[11px] font-medium text-slate-500 uppercase tracking-wider block">Reserved</span>
-            <span className="text-lg font-mono font-bold text-amber-700">{totalReserved} PRS</span>
+          <div className="p-2.5 bg-slate-50 rounded-lg border border-slate-100">
+            <span className="text-[10px] font-semibold text-slate-500 uppercase tracking-wider block">Reserved</span>
+            <span className="text-base font-mono font-bold text-amber-700">{formatQuantity(totalReserved)} PRS</span>
           </div>
-          <div className="p-3 bg-slate-50 rounded-xl border border-slate-100">
-            <span className="text-[11px] font-medium text-slate-500 uppercase tracking-wider block">Available</span>
-            <span className={`text-lg font-mono font-bold ${totalAvailable < 0 ? 'text-rose-600' : 'text-emerald-700'}`}>
-              {totalAvailable} PRS
+          <div className="p-2.5 bg-slate-50 rounded-lg border border-slate-100">
+            <span className="text-[10px] font-semibold text-slate-500 uppercase tracking-wider block">Available</span>
+            <span className={`text-base font-mono font-bold ${totalAvailable < 0 ? 'text-rose-600' : 'text-emerald-700'}`}>
+              {formatQuantity(totalAvailable)} PRS
             </span>
           </div>
         </div>
       </div>
 
       {/* Filter and Search Bar */}
-      <div className="bg-white rounded-xl border border-slate-200 shadow-sm p-3 flex flex-col sm:flex-row gap-3">
+      <div className="bg-white rounded-xl border border-slate-200 shadow-2xs p-2.5 flex flex-col sm:flex-row gap-2.5">
         <div className="relative flex-1">
-          <Search className="absolute left-3 top-2.5 h-4 w-4 text-slate-400" />
+          <Search className="absolute left-3 top-2.5 h-3.5 w-3.5 text-slate-400" />
           <input
             type="text"
             value={search}
             onChange={e => setSearch(e.target.value)}
             placeholder="Search Stock Item name, code, or power (e.g. 'hc sv 62' or 'item-sv')..."
-            className="w-full pl-9 pr-4 py-2 text-xs bg-slate-50 border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 transition-colors"
+            className="w-full pl-8 pr-4 py-1.5 text-xs bg-slate-50 border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 transition-colors"
           />
           {search && (
             <button
               onClick={() => setSearch('')}
-              className="absolute right-3 top-2.5 text-xs text-slate-400 hover:text-slate-600 font-medium"
+              className="absolute right-3 top-2 text-xs text-slate-400 hover:text-slate-600 font-medium cursor-pointer"
             >
               Clear
             </button>
@@ -154,7 +202,7 @@ export const StockItemsListView: React.FC<StockItemsListViewProps> = ({
           <select
             value={selectedCategory}
             onChange={e => setSelectedCategory(e.target.value)}
-            className="text-xs bg-slate-50 border border-slate-200 rounded-lg px-3 py-2 text-slate-700 focus:outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500"
+            className="text-xs bg-slate-50 border border-slate-200 rounded-lg px-2.5 py-1.5 text-slate-700 focus:outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 cursor-pointer"
           >
             <option value="">All Categories</option>
             {safeCategories.map(c => (
@@ -167,20 +215,20 @@ export const StockItemsListView: React.FC<StockItemsListViewProps> = ({
       </div>
 
       {/* Stock Items Table */}
-      <div className="bg-white rounded-2xl border border-slate-200 shadow-sm overflow-hidden">
+      <div className="bg-white rounded-xl border border-slate-200 shadow-2xs overflow-hidden">
         <div className="overflow-x-auto">
           <table className="w-full text-left text-xs border-collapse">
-            <thead className="bg-slate-50/80 border-b border-slate-200 text-slate-600 uppercase font-semibold text-[11px] tracking-wider">
+            <thead className="bg-slate-50/80 border-b border-slate-200 text-slate-600 uppercase font-semibold text-[10px] tracking-wider">
               <tr>
-                <th className="py-3 px-4">Stock Item</th>
-                <th className="py-3 px-3">Category</th>
-                <th className="py-3 px-3">Unit</th>
-                <th className="py-3 px-3 text-center">Maintain Batches</th>
-                <th className="py-3 px-3 text-right">No. of Batches</th>
-                <th className="py-3 px-3 text-right">Stock</th>
-                <th className="py-3 px-3 text-right">Reserved</th>
-                <th className="py-3 px-3 text-right">Available</th>
-                <th className="py-3 px-4 text-right">Actions</th>
+                <th className="py-2.5 px-3.5">Stock Item</th>
+                <th className="py-2.5 px-3">Category</th>
+                <th className="py-2.5 px-3">Unit</th>
+                <th className="py-2.5 px-3 text-center">Maintain Batches</th>
+                <th className="py-2.5 px-3 text-right">No. of Batches</th>
+                <th className="py-2.5 px-3 text-right">Stock</th>
+                <th className="py-2.5 px-3 text-right">Reserved</th>
+                <th className="py-2.5 px-3 text-right">Available</th>
+                <th className="py-2.5 px-3.5 text-right">Actions</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-100 text-slate-800">
@@ -211,7 +259,13 @@ export const StockItemsListView: React.FC<StockItemsListViewProps> = ({
                   return (
                     <tr
                       key={item.id}
-                      onClick={() => onSelectStockItem(item)}
+                      onClick={() => {
+                        if (item.maintainBatches === false) {
+                          onOpenLedger(item);
+                        } else {
+                          onSelectStockItem(item);
+                        }
+                      }}
                       className="hover:bg-blue-50/40 transition-colors cursor-pointer group"
                     >
                       {/* Stock Item Name & Code */}
@@ -261,19 +315,19 @@ export const StockItemsListView: React.FC<StockItemsListViewProps> = ({
                       <td className={`py-3 px-3 text-right font-mono font-bold ${
                         stockNum < 0 ? 'text-rose-600 bg-rose-50/40' : 'text-slate-900'
                       }`}>
-                        {stockNum}
+                        {formatQuantity(stockNum)}
                       </td>
 
                       {/* Reserved */}
                       <td className="py-3 px-3 text-right font-mono font-semibold text-amber-700">
-                        {reservedNum > 0 ? reservedNum : '0'}
+                        {reservedNum > 0 ? formatQuantity(reservedNum) : '0'}
                       </td>
 
                       {/* Available */}
                       <td className={`py-3 px-3 text-right font-mono font-bold ${
                         availableNum < 0 ? 'text-rose-600 bg-rose-50/40' : 'text-emerald-700'
                       }`}>
-                        {availableNum}
+                        {formatQuantity(availableNum)}
                       </td>
 
                       {/* Actions */}
@@ -281,19 +335,29 @@ export const StockItemsListView: React.FC<StockItemsListViewProps> = ({
                         <div className="flex items-center justify-end gap-1.5">
                           <button
                             onClick={() => onOpenLedger(item)}
-                            className="p-1.5 text-slate-500 hover:text-slate-800 hover:bg-slate-100 rounded-lg transition-colors"
+                            className="p-1.5 text-slate-500 hover:text-slate-800 hover:bg-slate-100 rounded-lg transition-colors cursor-pointer"
                             title="View Stock Item Ledger (Monthly & Transactions)"
                           >
                             <BookOpen className="h-4 w-4" />
                           </button>
 
-                          <button
-                            onClick={() => onSelectStockItem(item)}
-                            className="inline-flex items-center gap-1 px-2.5 py-1 text-xs font-semibold text-blue-700 bg-blue-50 hover:bg-blue-100 border border-blue-200 rounded-lg transition-colors"
-                          >
-                            <span>Batches ({bCount})</span>
-                            <ChevronRight className="h-3.5 w-3.5" />
-                          </button>
+                          {item.maintainBatches === false ? (
+                            <button
+                              onClick={() => onOpenLedger(item)}
+                              className="inline-flex items-center gap-1 px-2.5 py-1 text-xs font-semibold text-indigo-700 bg-indigo-50 hover:bg-indigo-100 border border-indigo-200 rounded-lg transition-colors cursor-pointer"
+                            >
+                              <span>Item Ledger</span>
+                              <ChevronRight className="h-3.5 w-3.5" />
+                            </button>
+                          ) : (
+                            <button
+                              onClick={() => onSelectStockItem(item)}
+                              className="inline-flex items-center gap-1 px-2.5 py-1 text-xs font-semibold text-blue-700 bg-blue-50 hover:bg-blue-100 border border-blue-200 rounded-lg transition-colors cursor-pointer"
+                            >
+                              <span>Batches ({bCount})</span>
+                              <ChevronRight className="h-3.5 w-3.5" />
+                            </button>
+                          )}
                         </div>
                       </td>
                     </tr>

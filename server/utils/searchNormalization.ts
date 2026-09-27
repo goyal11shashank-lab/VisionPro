@@ -97,6 +97,17 @@ export function scoreCandidate(c: SearchCandidate, query: string): number {
       ...getOpticalPowerTokens(c.axis),
       ...getOpticalPowerTokens(c.add),
     ];
+    if (c.sph !== undefined && c.sph !== null && c.cyl !== undefined && c.cyl !== null) {
+      const sNum = Math.abs(typeof c.sph === 'number' ? c.sph : parseFloat(String(c.sph)));
+      const cNum = Math.abs(typeof c.cyl === 'number' ? c.cyl : parseFloat(String(c.cyl)));
+      if (!isNaN(sNum) && !isNaN(cNum)) {
+        const sInt = Math.round(sNum * 100);
+        const cInt = Math.round(cNum * 100);
+        powerTokens.push(`${sInt}${cInt}`);
+        powerTokens.push(`${sInt} ${cInt}`);
+        powerTokens.push(`${sNum.toFixed(2)}${cNum.toFixed(2)}`);
+      }
+    }
     if (c.side && c.side !== 'NONE') {
       powerTokens.push(c.side.toLowerCase());
     }

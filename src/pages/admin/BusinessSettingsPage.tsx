@@ -321,8 +321,8 @@ export const BusinessSettingsPage: React.FC<Props> = ({ initialTab = 'general' }
   return (
     <div className="min-h-screen bg-slate-50 text-slate-900 pb-16 font-sans">
       {/* Header & Sticky Action Bar */}
-      <div className="sticky top-0 z-20 bg-white border-b border-slate-200 shadow-xs px-6 py-4">
-        <div className="max-w-7xl mx-auto flex flex-col md:flex-row md:items-center md:justify-between gap-4">
+      <div className="sticky top-0 z-20 bg-white border-b border-slate-200 shadow-xs px-4 sm:px-6 py-3.5">
+        <div className="w-full flex flex-col md:flex-row md:items-center md:justify-between gap-4">
           <div>
             <div className="flex items-center gap-2">
               <h1 className="text-xl font-bold text-slate-900 tracking-tight">Application Settings</h1>
@@ -355,7 +355,7 @@ export const BusinessSettingsPage: React.FC<Props> = ({ initialTab = 'general' }
               type="button"
               onClick={() => setShowRestoreModal(true)}
               disabled={saving}
-              className="px-3 py-1.5 text-xs font-medium text-slate-700 bg-white hover:bg-slate-100 border border-slate-300 rounded flex items-center gap-1.5 transition-colors"
+              className="px-3 py-1.5 text-xs font-medium text-slate-700 bg-white hover:bg-slate-100 border border-slate-300 rounded flex items-center gap-1.5 transition-colors cursor-pointer"
             >
               <RotateCcw className="w-3.5 h-3.5 text-slate-500" />
               <span>Restore Defaults</span>
@@ -367,7 +367,7 @@ export const BusinessSettingsPage: React.FC<Props> = ({ initialTab = 'general' }
               type="button"
               onClick={handleSaveAll}
               disabled={saving}
-              className="px-4 py-1.5 text-xs font-semibold text-white bg-blue-600 hover:bg-blue-700 rounded flex items-center gap-1.5 transition-colors shadow-xs disabled:opacity-50"
+              className="px-4 py-1.5 text-xs font-semibold text-white bg-blue-600 hover:bg-blue-700 rounded flex items-center gap-1.5 transition-colors shadow-xs disabled:opacity-50 cursor-pointer"
             >
               <Save className="w-4 h-4" />
               <span>{saving ? 'Saving...' : 'Save Settings'}</span>
@@ -379,7 +379,7 @@ export const BusinessSettingsPage: React.FC<Props> = ({ initialTab = 'general' }
         {successMsg && (
           <div
             id="notification-settings-success"
-            className="max-w-7xl mx-auto mt-3 p-3 bg-emerald-50 border border-emerald-200 text-emerald-800 text-xs rounded flex items-center gap-2"
+            className="w-full mt-3 p-3 bg-emerald-50 border border-emerald-200 text-emerald-800 text-xs rounded flex items-center gap-2"
           >
             <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0" />
             <span className="font-medium">{successMsg}</span>
@@ -389,7 +389,7 @@ export const BusinessSettingsPage: React.FC<Props> = ({ initialTab = 'general' }
         {errorMsg && (
           <div
             id="notification-settings-error"
-            className="max-w-7xl mx-auto mt-3 p-3 bg-rose-50 border border-rose-200 text-rose-800 text-xs rounded flex items-center gap-2"
+            className="w-full mt-3 p-3 bg-rose-50 border border-rose-200 text-rose-800 text-xs rounded flex items-center gap-2"
           >
             <AlertCircle className="w-4 h-4 text-rose-600 shrink-0" />
             <span className="font-medium">{errorMsg}</span>
@@ -397,7 +397,7 @@ export const BusinessSettingsPage: React.FC<Props> = ({ initialTab = 'general' }
         )}
       </div>
 
-      <div className="max-w-7xl mx-auto px-6 mt-6">
+      <div className="w-full px-4 sm:px-6 mt-4">
         <div className="grid grid-cols-1 lg:grid-cols-4 gap-6">
           {/* Left Navigation Tabs */}
           <div className="lg:col-span-1 space-y-1">

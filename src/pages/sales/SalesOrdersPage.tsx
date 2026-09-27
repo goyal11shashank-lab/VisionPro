@@ -649,7 +649,7 @@ export const SalesOrdersPage: React.FC<{ onNavigateToInvoice?: (orderId: string)
   };
 
   return (
-    <div id="sales-orders-container" className="p-6 max-w-7xl mx-auto space-y-6">
+    <div id="sales-orders-container" className="w-full space-y-4">
       {/* Header */}
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 bg-white p-6 rounded-xl border border-slate-200 shadow-sm">
         <div>
@@ -813,7 +813,7 @@ export const SalesOrdersPage: React.FC<{ onNavigateToInvoice?: (orderId: string)
                           <Trash2 className="w-4 h-4" />
                         </button>
 
-                        {order.status === 'CONFIRMED' && onNavigateToInvoice && (
+                        {(order.status === 'CONFIRMED' || order.status === 'PARTIALLY_CONVERTED') && onNavigateToInvoice && (
                           <button
                             id={`btn-convert-order-${order.id}`}
                             onClick={() => onNavigateToInvoice(order.id)}
@@ -1357,7 +1357,7 @@ export const SalesOrdersPage: React.FC<{ onNavigateToInvoice?: (orderId: string)
               </div>
 
               <div className="flex items-center gap-2">
-                {selectedOrder.status === 'CONFIRMED' && onNavigateToInvoice && (
+                {(selectedOrder.status === 'CONFIRMED' || selectedOrder.status === 'PARTIALLY_CONVERTED') && onNavigateToInvoice && (
                   <button
                     onClick={() => {
                       setIsDetailOpen(false);

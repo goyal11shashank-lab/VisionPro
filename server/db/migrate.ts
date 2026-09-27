@@ -6,6 +6,7 @@ export const INITIAL_SCHEMA_SQL = `
 -- 1. Businesses Table
 CREATE TABLE IF NOT EXISTS "businesses" (
   "id" UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  "code" VARCHAR(50),
   "name" VARCHAR(255) NOT NULL,
   "trade_name" VARCHAR(255),
   "gstin" VARCHAR(15),
@@ -21,6 +22,9 @@ CREATE TABLE IF NOT EXISTS "businesses" (
   "currency" VARCHAR(10) NOT NULL DEFAULT 'INR',
   "financial_year_start" VARCHAR(10) NOT NULL DEFAULT '04-01',
   "status" VARCHAR(20) NOT NULL DEFAULT 'ACTIVE',
+  "business_type" VARCHAR(20) NOT NULL DEFAULT 'MAIN',
+  "parent_business_id" UUID REFERENCES "businesses"("id") ON DELETE SET NULL,
+  "settings_config" JSONB DEFAULT '{"dealer": {}}'::jsonb,
   "created_at" TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW(),
   "updated_at" TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW(),
   "created_by" UUID
@@ -28,6 +32,7 @@ CREATE TABLE IF NOT EXISTS "businesses" (
 
 CREATE INDEX IF NOT EXISTS "businesses_status_idx" ON "businesses" ("status");
 CREATE INDEX IF NOT EXISTS "businesses_gstin_idx" ON "businesses" ("gstin");
+CREATE INDEX IF NOT EXISTS "businesses_code_idx" ON "businesses" ("code");
 
 -- 2. Users Table
 CREATE TABLE IF NOT EXISTS "users" (
@@ -1135,6 +1140,14 @@ let migrationExecuted = false;
 
 export async function runMigrations(): Promise<{ success: boolean; message: string; tablesCount?: number }> {
   try {
+    // Ensure businesses has dealer columns if table already exists
+    try {
+      await pool.query(`
+        ALTER TABLE "businesses" ADD COLUMN IF NOT EXISTS "business_type" VARCHAR(20) NOT NULL DEFAULT 'MAIN';
+        ALTER TABLE "businesses" ADD COLUMN IF NOT EXISTS "parent_business_id" UUID REFERENCES "businesses"("id") ON DELETE SET NULL;
+      `);
+    } catch {}
+
     // Run schema creation directly from inlined SQL definition (resilient to serverless environments)
     await pool.query(INITIAL_SCHEMA_SQL);
 
@@ -1478,9 +1491,333 @@ export async function runMigrations(): Promise<{ success: boolean; message: stri
           reserved_out = ROUND(reserved_out * 2) / 2,
           balance = ROUND(balance * 2) / 2
       WHERE quantity_in % 0.5 != 0 OR quantity_out % 0.5 != 0 OR reserved_in % 0.5 != 0 OR reserved_out % 0.5 != 0 OR balance % 0.5 != 0;
+
+      -- Enforce single default business per user and partial unique index
+      WITH ranked_defaults AS (
+        SELECT id, user_id,
+               ROW_NUMBER() OVER (PARTITION BY user_id ORDER BY created_at ASC) as rn
+        FROM user_business_access
+        WHERE is_default = true
+      )
+      UPDATE user_business_access
+      SET is_default = false
+      WHERE id IN (
+        SELECT id FROM ranked_defaults WHERE rn > 1
+      );
+
+      CREATE UNIQUE INDEX IF NOT EXISTS "user_biz_access_user_default_unique_idx"
+      ON "user_business_access" ("user_id")
+      WHERE "is_default" = true;
+
+      -- Phase 3A: Add Dealer architecture columns to businesses
+      ALTER TABLE businesses ADD COLUMN IF NOT EXISTS business_type VARCHAR(20) NOT NULL DEFAULT 'MAIN';
+      ALTER TABLE businesses ADD COLUMN IF NOT EXISTS parent_business_id UUID REFERENCES businesses(id) ON DELETE SET NULL;
+      CREATE INDEX IF NOT EXISTS businesses_type_idx ON businesses(business_type);
+      CREATE INDEX IF NOT EXISTS businesses_parent_idx ON businesses(parent_business_id);
+      UPDATE businesses SET business_type = 'MAIN' WHERE business_type IS NULL OR business_type = '';
+
+      -- Phase 3B: Dealer Orders linkage table
+      CREATE TABLE IF NOT EXISTS "dealer_orders" (
+        "id" UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+        "dealer_business_id" UUID NOT NULL REFERENCES "businesses"("id") ON DELETE CASCADE,
+        "main_business_id" UUID NOT NULL REFERENCES "businesses"("id") ON DELETE CASCADE,
+        "main_sales_order_id" UUID NOT NULL REFERENCES "sales_orders"("id") ON DELETE CASCADE,
+        "dealer_party_id_in_main" UUID NOT NULL REFERENCES "parties"("id") ON DELETE RESTRICT,
+        "order_number" VARCHAR(100) NOT NULL,
+        "status" VARCHAR(50) NOT NULL DEFAULT 'CONFIRMED',
+        "item_count" NUMERIC(12, 2) NOT NULL DEFAULT 0.00,
+        "total_quantity" NUMERIC(12, 2) NOT NULL DEFAULT 0.00,
+        "taxable_amount" NUMERIC(12, 2) NOT NULL DEFAULT 0.00,
+        "tax_amount" NUMERIC(12, 2) NOT NULL DEFAULT 0.00,
+        "grand_total" NUMERIC(12, 2) NOT NULL DEFAULT 0.00,
+        "notes" TEXT,
+        "idempotency_key" VARCHAR(255),
+        "created_at" TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW(),
+        "updated_at" TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW(),
+        "created_by" UUID REFERENCES "users"("id") ON DELETE SET NULL
+      );
+
+      CREATE UNIQUE INDEX IF NOT EXISTS "dealer_orders_idempotency_idx" ON "dealer_orders" ("dealer_business_id", "idempotency_key");
+      CREATE INDEX IF NOT EXISTS "dealer_orders_dealer_biz_idx" ON "dealer_orders" ("dealer_business_id");
+      CREATE INDEX IF NOT EXISTS "dealer_orders_main_biz_idx" ON "dealer_orders" ("main_business_id");
+      CREATE INDEX IF NOT EXISTS "dealer_orders_sales_order_idx" ON "dealer_orders" ("main_sales_order_id");
+      CREATE INDEX IF NOT EXISTS "dealer_orders_status_idx" ON "dealer_orders" ("status");
+      CREATE INDEX IF NOT EXISTS "dealer_orders_created_at_idx" ON "dealer_orders" ("created_at");
+
+      -- Phase 3C: Dealer Shipments & Goods Receipts
+      CREATE TABLE IF NOT EXISTS "dealer_shipments" (
+        "id" UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+        "shipment_number" VARCHAR(100) NOT NULL,
+        "main_business_id" UUID NOT NULL REFERENCES "businesses"("id") ON DELETE CASCADE,
+        "dealer_business_id" UUID NOT NULL REFERENCES "businesses"("id") ON DELETE CASCADE,
+        "dealer_order_id" UUID REFERENCES "dealer_orders"("id") ON DELETE SET NULL,
+        "main_sales_order_id" UUID REFERENCES "sales_orders"("id") ON DELETE SET NULL,
+        "main_sales_invoice_id" UUID REFERENCES "sales_invoices"("id") ON DELETE SET NULL,
+        "dispatch_date" TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW(),
+        "courier_name" VARCHAR(100),
+        "tracking_number" VARCHAR(100),
+        "vehicle_number" VARCHAR(100),
+        "eway_bill_number" VARCHAR(100),
+        "total_packages" NUMERIC(8, 0) NOT NULL DEFAULT 1,
+        "total_quantity" NUMERIC(12, 2) NOT NULL DEFAULT 0.00,
+        "status" VARCHAR(50) NOT NULL DEFAULT 'DISPATCHED',
+        "notes" TEXT,
+        "created_at" TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW(),
+        "updated_at" TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW(),
+        "created_by" UUID REFERENCES "users"("id") ON DELETE SET NULL
+      );
+
+      CREATE UNIQUE INDEX IF NOT EXISTS "dealer_shipments_main_num_idx" ON "dealer_shipments" ("main_business_id", "shipment_number");
+      CREATE INDEX IF NOT EXISTS "dealer_shipments_main_biz_idx" ON "dealer_shipments" ("main_business_id");
+      CREATE INDEX IF NOT EXISTS "dealer_shipments_dealer_biz_idx" ON "dealer_shipments" ("dealer_business_id");
+      CREATE INDEX IF NOT EXISTS "dealer_shipments_invoice_idx" ON "dealer_shipments" ("main_sales_invoice_id");
+      CREATE INDEX IF NOT EXISTS "dealer_shipments_order_idx" ON "dealer_shipments" ("dealer_order_id");
+      CREATE INDEX IF NOT EXISTS "dealer_shipments_status_idx" ON "dealer_shipments" ("status");
+      CREATE INDEX IF NOT EXISTS "dealer_shipments_dispatch_date_idx" ON "dealer_shipments" ("dispatch_date");
+
+      CREATE TABLE IF NOT EXISTS "dealer_shipment_lines" (
+        "id" UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+        "dealer_shipment_id" UUID NOT NULL REFERENCES "dealer_shipments"("id") ON DELETE CASCADE,
+        "sales_invoice_line_id" UUID REFERENCES "sales_invoice_lines"("id") ON DELETE SET NULL,
+        "main_unique_item_id" UUID NOT NULL REFERENCES "unique_items"("id") ON DELETE RESTRICT,
+        "main_batch_id" UUID NOT NULL REFERENCES "optical_batches"("id") ON DELETE RESTRICT,
+        "dispatched_quantity" NUMERIC(12, 2) NOT NULL,
+        "received_quantity" NUMERIC(12, 2) NOT NULL DEFAULT 0.00,
+        "damaged_quantity" NUMERIC(12, 2) NOT NULL DEFAULT 0.00,
+        "short_quantity" NUMERIC(12, 2) NOT NULL DEFAULT 0.00,
+        "rate" NUMERIC(12, 2) NOT NULL DEFAULT 0.00,
+        "gst_rate" NUMERIC(5, 2) NOT NULL DEFAULT 0.00,
+        "created_at" TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW()
+      );
+
+      CREATE INDEX IF NOT EXISTS "dealer_shipment_lines_shipment_idx" ON "dealer_shipment_lines" ("dealer_shipment_id");
+      CREATE INDEX IF NOT EXISTS "dealer_shipment_lines_batch_idx" ON "dealer_shipment_lines" ("main_batch_id");
+      CREATE INDEX IF NOT EXISTS "dealer_shipment_lines_item_idx" ON "dealer_shipment_lines" ("main_unique_item_id");
+
+      CREATE TABLE IF NOT EXISTS "dealer_goods_receipts" (
+        "id" UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+        "receipt_number" VARCHAR(100) NOT NULL,
+        "dealer_shipment_id" UUID NOT NULL REFERENCES "dealer_shipments"("id") ON DELETE RESTRICT,
+        "dealer_business_id" UUID NOT NULL REFERENCES "businesses"("id") ON DELETE CASCADE,
+        "main_business_id" UUID NOT NULL REFERENCES "businesses"("id") ON DELETE CASCADE,
+        "dealer_purchase_invoice_id" UUID REFERENCES "purchase_invoices"("id") ON DELETE SET NULL,
+        "receipt_date" TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW(),
+        "status" VARCHAR(50) NOT NULL DEFAULT 'CONFIRMED',
+        "total_received_qty" NUMERIC(12, 2) NOT NULL DEFAULT 0.00,
+        "total_damaged_qty" NUMERIC(12, 2) NOT NULL DEFAULT 0.00,
+        "total_short_qty" NUMERIC(12, 2) NOT NULL DEFAULT 0.00,
+        "remarks" TEXT,
+        "created_at" TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW(),
+        "updated_at" TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW(),
+        "created_by" UUID REFERENCES "users"("id") ON DELETE SET NULL
+      );
+
+      CREATE UNIQUE INDEX IF NOT EXISTS "dealer_grn_dealer_num_idx" ON "dealer_goods_receipts" ("dealer_business_id", "receipt_number");
+      CREATE INDEX IF NOT EXISTS "dealer_grn_dealer_biz_idx" ON "dealer_goods_receipts" ("dealer_business_id");
+      CREATE INDEX IF NOT EXISTS "dealer_grn_main_biz_idx" ON "dealer_goods_receipts" ("main_business_id");
+      CREATE INDEX IF NOT EXISTS "dealer_grn_shipment_idx" ON "dealer_goods_receipts" ("dealer_shipment_id");
+      CREATE INDEX IF NOT EXISTS "dealer_grn_status_idx" ON "dealer_goods_receipts" ("status");
+      CREATE INDEX IF NOT EXISTS "dealer_grn_date_idx" ON "dealer_goods_receipts" ("receipt_date");
+
+      CREATE TABLE IF NOT EXISTS "dealer_goods_receipt_lines" (
+        "id" UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+        "goods_receipt_id" UUID NOT NULL REFERENCES "dealer_goods_receipts"("id") ON DELETE CASCADE,
+        "shipment_line_id" UUID NOT NULL REFERENCES "dealer_shipment_lines"("id") ON DELETE RESTRICT,
+        "main_unique_item_id" UUID NOT NULL REFERENCES "unique_items"("id") ON DELETE RESTRICT,
+        "main_batch_id" UUID NOT NULL REFERENCES "optical_batches"("id") ON DELETE RESTRICT,
+        "dealer_unique_item_id" UUID NOT NULL REFERENCES "unique_items"("id") ON DELETE RESTRICT,
+        "dealer_batch_id" UUID NOT NULL REFERENCES "optical_batches"("id") ON DELETE RESTRICT,
+        "dispatched_quantity" NUMERIC(12, 2) NOT NULL,
+        "received_quantity" NUMERIC(12, 2) NOT NULL DEFAULT 0.00,
+        "damaged_quantity" NUMERIC(12, 2) NOT NULL DEFAULT 0.00,
+        "short_quantity" NUMERIC(12, 2) NOT NULL DEFAULT 0.00,
+        "rate" NUMERIC(12, 2) NOT NULL DEFAULT 0.00,
+        "created_at" TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW()
+      );
+
+      CREATE INDEX IF NOT EXISTS "dealer_grn_lines_grn_idx" ON "dealer_goods_receipt_lines" ("goods_receipt_id");
+      CREATE INDEX IF NOT EXISTS "dealer_grn_lines_ship_line_idx" ON "dealer_goods_receipt_lines" ("shipment_line_id");
+      CREATE INDEX IF NOT EXISTS "dealer_grn_lines_dealer_batch_idx" ON "dealer_goods_receipt_lines" ("dealer_batch_id");
+
+      -- Phase 3C Revision: Linked Purchase Order Before Purchase Invoice
+      ALTER TABLE "dealer_orders" ADD COLUMN IF NOT EXISTS "dealer_purchase_order_id" UUID REFERENCES "purchase_orders"("id") ON DELETE SET NULL;
+      CREATE INDEX IF NOT EXISTS "dealer_orders_purchase_order_idx" ON "dealer_orders" ("dealer_purchase_order_id");
+
+      ALTER TABLE "purchase_orders" ADD COLUMN IF NOT EXISTS "source" VARCHAR(50) NOT NULL DEFAULT 'MANUAL';
+      ALTER TABLE "purchase_orders" ADD COLUMN IF NOT EXISTS "dealer_order_id" UUID REFERENCES "dealer_orders"("id") ON DELETE SET NULL;
+      ALTER TABLE "purchase_orders" ADD COLUMN IF NOT EXISTS "main_sales_order_id" UUID REFERENCES "sales_orders"("id") ON DELETE SET NULL;
+      ALTER TABLE "purchase_orders" ADD COLUMN IF NOT EXISTS "main_sales_invoice_id" UUID REFERENCES "sales_invoices"("id") ON DELETE SET NULL;
+      CREATE INDEX IF NOT EXISTS "purchase_orders_dealer_order_idx" ON "purchase_orders" ("dealer_order_id");
+      CREATE INDEX IF NOT EXISTS "purchase_orders_sales_order_idx" ON "purchase_orders" ("main_sales_order_id");
+
+      ALTER TABLE "dealer_shipments" ADD COLUMN IF NOT EXISTS "dealer_purchase_order_id" UUID REFERENCES "purchase_orders"("id") ON DELETE SET NULL;
+      CREATE INDEX IF NOT EXISTS "dealer_shipments_purchase_order_idx" ON "dealer_shipments" ("dealer_purchase_order_id");
+
+      ALTER TABLE "dealer_goods_receipts" ADD COLUMN IF NOT EXISTS "dealer_purchase_order_id" UUID REFERENCES "purchase_orders"("id") ON DELETE SET NULL;
+      CREATE INDEX IF NOT EXISTS "dealer_grn_purchase_order_idx" ON "dealer_goods_receipts" ("dealer_purchase_order_id");
+
+      ALTER TABLE "purchase_invoices" ADD COLUMN IF NOT EXISTS "main_sales_invoice_id" UUID REFERENCES "sales_invoices"("id") ON DELETE SET NULL;
+      CREATE INDEX IF NOT EXISTS "purchase_invoices_main_si_idx" ON "purchase_invoices" ("main_sales_invoice_id");
+
+      -- 48. Dealer Returns Table
+      CREATE TABLE IF NOT EXISTS "dealer_returns" (
+        "id" UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+        "return_number" VARCHAR(100) NOT NULL,
+        "dealer_business_id" UUID REFERENCES "businesses"("id") ON DELETE CASCADE NOT NULL,
+        "main_business_id" UUID REFERENCES "businesses"("id") ON DELETE CASCADE NOT NULL,
+        "dealer_purchase_invoice_id" UUID REFERENCES "purchase_invoices"("id") ON DELETE RESTRICT NOT NULL,
+        "main_sales_invoice_id" UUID REFERENCES "sales_invoices"("id") ON DELETE SET NULL,
+        "dealer_purchase_return_id" UUID REFERENCES "purchase_returns"("id") ON DELETE SET NULL,
+        "main_sales_return_id" UUID REFERENCES "sales_returns"("id") ON DELETE SET NULL,
+        "status" VARCHAR(50) NOT NULL DEFAULT 'REQUESTED',
+        "return_reason" VARCHAR(100) NOT NULL,
+        "dealer_reference" VARCHAR(100),
+        "notes" TEXT,
+        "rejection_reason" TEXT,
+        "dispatch_date" TIMESTAMP WITH TIME ZONE,
+        "courier_name" VARCHAR(100),
+        "tracking_number" VARCHAR(100),
+        "total_requested_qty" NUMERIC(12, 2) NOT NULL DEFAULT 0.00,
+        "total_approved_qty" NUMERIC(12, 2) NOT NULL DEFAULT 0.00,
+        "total_sent_qty" NUMERIC(12, 2) NOT NULL DEFAULT 0.00,
+        "total_received_qty" NUMERIC(12, 2) NOT NULL DEFAULT 0.00,
+        "total_accepted_qty" NUMERIC(12, 2) NOT NULL DEFAULT 0.00,
+        "total_damaged_qty" NUMERIC(12, 2) NOT NULL DEFAULT 0.00,
+        "approved_by" UUID REFERENCES "users"("id") ON DELETE SET NULL,
+        "approved_at" TIMESTAMP WITH TIME ZONE,
+        "created_at" TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW(),
+        "updated_at" TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW(),
+        "created_by" UUID REFERENCES "users"("id") ON DELETE SET NULL
+      );
+
+      CREATE UNIQUE INDEX IF NOT EXISTS "dealer_returns_dealer_num_idx" ON "dealer_returns" ("dealer_business_id", "return_number");
+      CREATE INDEX IF NOT EXISTS "dealer_returns_dealer_biz_idx" ON "dealer_returns" ("dealer_business_id");
+      CREATE INDEX IF NOT EXISTS "dealer_returns_main_biz_idx" ON "dealer_returns" ("main_business_id");
+      CREATE INDEX IF NOT EXISTS "dealer_returns_status_idx" ON "dealer_returns" ("status");
+      CREATE INDEX IF NOT EXISTS "dealer_returns_pi_idx" ON "dealer_returns" ("dealer_purchase_invoice_id");
+      CREATE INDEX IF NOT EXISTS "dealer_returns_si_idx" ON "dealer_returns" ("main_sales_invoice_id");
+
+      -- 49. Dealer Return Lines Table
+      CREATE TABLE IF NOT EXISTS "dealer_return_lines" (
+        "id" UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+        "dealer_return_id" UUID REFERENCES "dealer_returns"("id") ON DELETE CASCADE NOT NULL,
+        "dealer_purchase_invoice_line_id" UUID REFERENCES "purchase_invoice_lines"("id") ON DELETE RESTRICT NOT NULL,
+        "main_sales_invoice_line_id" UUID REFERENCES "sales_invoice_lines"("id") ON DELETE SET NULL,
+        "dealer_unique_item_id" UUID REFERENCES "unique_items"("id") ON DELETE RESTRICT NOT NULL,
+        "dealer_batch_id" UUID REFERENCES "optical_batches"("id") ON DELETE RESTRICT NOT NULL,
+        "main_unique_item_id" UUID REFERENCES "unique_items"("id") ON DELETE RESTRICT,
+        "main_batch_id" UUID REFERENCES "optical_batches"("id") ON DELETE RESTRICT,
+        "rate" NUMERIC(12, 2) NOT NULL DEFAULT 0.00,
+        "gst_rate" NUMERIC(5, 2) NOT NULL DEFAULT 0.00,
+        "requested_quantity" NUMERIC(12, 2) NOT NULL DEFAULT 0.00,
+        "approved_quantity" NUMERIC(12, 2) NOT NULL DEFAULT 0.00,
+        "sent_quantity" NUMERIC(12, 2) NOT NULL DEFAULT 0.00,
+        "received_quantity" NUMERIC(12, 2) NOT NULL DEFAULT 0.00,
+        "accepted_quantity" NUMERIC(12, 2) NOT NULL DEFAULT 0.00,
+        "damaged_quantity" NUMERIC(12, 2) NOT NULL DEFAULT 0.00,
+        "reason" VARCHAR(100),
+        "notes" TEXT,
+        "created_at" TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW()
+      );
+
+      CREATE INDEX IF NOT EXISTS "dealer_return_lines_return_idx" ON "dealer_return_lines" ("dealer_return_id");
+      CREATE INDEX IF NOT EXISTS "dealer_return_lines_dealer_batch_idx" ON "dealer_return_lines" ("dealer_batch_id");
+      CREATE INDEX IF NOT EXISTS "dealer_return_lines_main_batch_idx" ON "dealer_return_lines" ("main_batch_id");
+
+      -- 50. Dealer Payment Advices Table
+      CREATE TABLE IF NOT EXISTS "dealer_payment_advices" (
+        "id" UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+        "advice_number" VARCHAR(100) NOT NULL,
+        "dealer_business_id" UUID REFERENCES "businesses"("id") ON DELETE CASCADE NOT NULL,
+        "main_business_id" UUID REFERENCES "businesses"("id") ON DELETE CASCADE NOT NULL,
+        "dealer_supplier_payment_id" UUID REFERENCES "payments"("id") ON DELETE RESTRICT NOT NULL,
+        "main_customer_receipt_id" UUID REFERENCES "payments"("id") ON DELETE SET NULL,
+        "amount" NUMERIC(12, 2) NOT NULL,
+        "payment_date" TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW(),
+        "payment_mode" VARCHAR(50) NOT NULL,
+        "reference_number" VARCHAR(100),
+        "bank_name" VARCHAR(255),
+        "cheque_number" VARCHAR(100),
+        "cheque_date" TIMESTAMP WITH TIME ZONE,
+        "notes" TEXT,
+        "proposed_allocations" JSONB NOT NULL DEFAULT '[]'::jsonb,
+        "status" VARCHAR(50) NOT NULL DEFAULT 'SUBMITTED',
+        "submitted_by" UUID REFERENCES "users"("id") ON DELETE SET NULL,
+        "submitted_at" TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW(),
+        "verified_by" UUID REFERENCES "users"("id") ON DELETE SET NULL,
+        "verified_at" TIMESTAMP WITH TIME ZONE,
+        "rejected_by" UUID REFERENCES "users"("id") ON DELETE SET NULL,
+        "rejected_at" TIMESTAMP WITH TIME ZONE,
+        "rejection_reason" TEXT,
+        "created_at" TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW(),
+        "updated_at" TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW()
+      );
+
+      CREATE UNIQUE INDEX IF NOT EXISTS "dealer_payment_advices_dealer_num_idx" ON "dealer_payment_advices" ("dealer_business_id", "advice_number");
+      CREATE INDEX IF NOT EXISTS "dealer_payment_advices_dealer_biz_idx" ON "dealer_payment_advices" ("dealer_business_id");
+      CREATE INDEX IF NOT EXISTS "dealer_payment_advices_main_biz_idx" ON "dealer_payment_advices" ("main_business_id");
+      CREATE INDEX IF NOT EXISTS "dealer_payment_advices_status_idx" ON "dealer_payment_advices" ("status");
+      CREATE INDEX IF NOT EXISTS "dealer_payment_advices_pay_idx" ON "dealer_payment_advices" ("dealer_supplier_payment_id");
+      CREATE INDEX IF NOT EXISTS "dealer_payment_advices_rec_idx" ON "dealer_payment_advices" ("main_customer_receipt_id");
+      CREATE INDEX IF NOT EXISTS "dealer_payment_advices_ref_idx" ON "dealer_payment_advices" ("reference_number");
+      CREATE INDEX IF NOT EXISTS "dealer_payment_advices_date_idx" ON "dealer_payment_advices" ("payment_date");
+
+      ALTER TABLE businesses ADD COLUMN IF NOT EXISTS settings_config JSONB DEFAULT '{}'::jsonb;
+
+      -- Phase 5D: Inventory, Stock Reporting & Optical Batch Production Hardening Indexes
+      CREATE INDEX IF NOT EXISTS "optical_batches_biz_item_powers_idx" ON "optical_batches" ("business_id", "unique_item_id", "sph", "cyl");
+      CREATE INDEX IF NOT EXISTS "stock_ledger_biz_batch_date_idx" ON "stock_ledger" ("business_id", "batch_id", "created_at");
+      CREATE INDEX IF NOT EXISTS "stock_reservations_biz_batch_status_idx" ON "stock_reservations" ("business_id", "batch_id", "status");
+
+      -- Phase 5F: Document Sequences & Concurrency Protection
+      CREATE TABLE IF NOT EXISTS "document_sequences" (
+        "id" UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+        "business_id" UUID NOT NULL REFERENCES "businesses"("id") ON DELETE CASCADE,
+        "document_type" VARCHAR(50) NOT NULL,
+        "financial_year" VARCHAR(20) NOT NULL DEFAULT 'ALL',
+        "current_number" INTEGER NOT NULL DEFAULT 0,
+        "prefix" VARCHAR(50) NOT NULL DEFAULT '',
+        "updated_at" TIMESTAMP WITH TIME ZONE DEFAULT NOW()
+      );
+      CREATE UNIQUE INDEX IF NOT EXISTS "document_sequences_biz_type_fy_idx" 
+        ON "document_sequences" ("business_id", "document_type", "financial_year");
+
+      -- Phase 5F: Idempotency Records
+      CREATE TABLE IF NOT EXISTS "idempotency_records" (
+        "id" UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+        "business_id" UUID NOT NULL REFERENCES "businesses"("id") ON DELETE CASCADE,
+        "resource_type" VARCHAR(50) NOT NULL,
+        "idempotency_key" VARCHAR(255) NOT NULL,
+        "resource_id" VARCHAR(100) NOT NULL,
+        "created_at" TIMESTAMP WITH TIME ZONE DEFAULT NOW()
+      );
+      CREATE UNIQUE INDEX IF NOT EXISTS "idempotency_records_biz_type_key_idx" 
+        ON "idempotency_records" ("business_id", "resource_type", "idempotency_key");
+
+      -- Phase 5F: Due Date & Cancellation Snapshots
+      ALTER TABLE "sales_invoices" ADD COLUMN IF NOT EXISTS "due_date" TIMESTAMP WITH TIME ZONE;
+      ALTER TABLE "sales_invoices" ADD COLUMN IF NOT EXISTS "credit_days_snapshot" INTEGER DEFAULT 0;
+      ALTER TABLE "sales_invoices" ADD COLUMN IF NOT EXISTS "cancellation_reason" TEXT;
+
+      ALTER TABLE "purchase_invoices" ADD COLUMN IF NOT EXISTS "due_date" TIMESTAMP WITH TIME ZONE;
+      ALTER TABLE "purchase_invoices" ADD COLUMN IF NOT EXISTS "credit_days_snapshot" INTEGER DEFAULT 0;
+      ALTER TABLE "purchase_invoices" ADD COLUMN IF NOT EXISTS "cancellation_reason" TEXT;
+
+      ALTER TABLE "sales_orders" ADD COLUMN IF NOT EXISTS "cancellation_reason" TEXT;
+      ALTER TABLE "purchase_orders" ADD COLUMN IF NOT EXISTS "cancellation_reason" TEXT;
+      ALTER TABLE "sales_returns" ADD COLUMN IF NOT EXISTS "cancellation_reason" TEXT;
+      ALTER TABLE "purchase_returns" ADD COLUMN IF NOT EXISTS "cancellation_reason" TEXT;
+      ALTER TABLE "payments" ADD COLUMN IF NOT EXISTS "cancellation_reason" TEXT;
     `);
 
-    const tableNames = tableRes.rows.map(r => r.table_name);
+    // Verify all created tables
+    const allTablesRes = await pool.query(`
+      SELECT table_name 
+      FROM information_schema.tables 
+      WHERE table_schema = 'public'
+    `);
+
+    const tableNames = allTablesRes.rows.map(r => r.table_name);
     migrationExecuted = true;
     console.log(`[Migrations] Successfully initialized ${tableNames.length} tables in PostgreSQL:`, tableNames.join(', '));
 

@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useMemo } from 'react';
+import React, { useState, useEffect, useMemo, useCallback } from 'react';
 import {
   X,
   Calendar,
@@ -22,6 +22,8 @@ import {
   CheckCircle2,
 } from 'lucide-react';
 import { apiRequest } from '../../api/client.js';
+import { formatQuantity, formatCurrency } from '../../utils/numberFormatting.js';
+import { QuickPeriodKey, getDateRangeForPeriod } from '../../utils/datePeriods.js';
 
 export interface MonthlySummary {
   month: string;
@@ -118,17 +120,56 @@ export const StockItemLedgerModal: React.FC<StockItemLedgerModalProps> = ({
   // View mode: 'monthly' (Tally Month-wise) or 'transactions' (Voucher Level)
   const [activeView, setActiveView] = useState<'monthly' | 'transactions'>('monthly');
 
+  // Date Filtering & Quick Periods
+  const [quickPeriod, setQuickPeriod] = useState<QuickPeriodKey>('ALL');
+  const [fromDate, setFromDate] = useState<string>('');
+  const [toDate, setToDate] = useState<string>('');
+
   // Filters
   const [selectedMonth, setSelectedMonth] = useState<string>('ALL');
   const [searchFilter, setSearchFilter] = useState('');
   const [directionFilter, setDirectionFilter] = useState<'ALL' | 'IN' | 'OUT'>('ALL');
   const [selectedBatchId, setSelectedBatchId] = useState<string>('ALL');
 
+  const fetchLedger = useCallback(async () => {
+    if (!targetItemId) return;
+    try {
+      setLoading(true);
+      setError(null);
+
+      const params = new URLSearchParams();
+      if (fromDate) params.append('from', fromDate);
+      if (toDate) params.append('to', toDate);
+
+      const queryStr = params.toString() ? `?${params.toString()}` : '';
+      const res = await apiRequest<{ success: boolean; data: StockItemLedgerData }>(
+        `/api/stock-items/${targetItemId}/ledger${queryStr}`
+      );
+      setLedgerData(res.data);
+    } catch (err: any) {
+      setError(err.message || 'Failed to load stock item ledger');
+    } finally {
+      setLoading(false);
+    }
+  }, [targetItemId, fromDate, toDate]);
+
   useEffect(() => {
     if (targetItemId) {
       fetchLedger();
     }
-  }, [targetItemId]);
+  }, [targetItemId, fetchLedger]);
+
+  const handleSelectQuickPeriod = (period: QuickPeriodKey) => {
+    setQuickPeriod(period);
+    if (period === 'ALL') {
+      setFromDate('');
+      setToDate('');
+    } else if (period !== 'CUSTOM') {
+      const range = getDateRangeForPeriod(period);
+      setFromDate(range.from || '');
+      setToDate(range.to || '');
+    }
+  };
 
   // Handle escape key
   useEffect(() => {
@@ -140,22 +181,6 @@ export const StockItemLedgerModal: React.FC<StockItemLedgerModalProps> = ({
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
   }, [onClose]);
-
-  const fetchLedger = async () => {
-    if (!targetItemId) return;
-    try {
-      setLoading(true);
-      setError(null);
-      const res = await apiRequest<{ success: boolean; data: StockItemLedgerData }>(
-        `/api/stock-items/${targetItemId}/ledger`
-      );
-      setLedgerData(res.data);
-    } catch (err: any) {
-      setError(err.message || 'Failed to load stock item ledger');
-    } finally {
-      setLoading(false);
-    }
-  };
 
   // Distinct power batches for filtering
   const distinctBatches = useMemo(() => {
@@ -337,50 +362,144 @@ export const StockItemLedgerModal: React.FC<StockItemLedgerModalProps> = ({
             <div className={`p-2.5 rounded-xl border shadow-2xs ${Number(ledgerData.stockSummary.physicalStock || 0) < 0 ? 'bg-rose-50/60 border-rose-200' : 'bg-white border-slate-200/80'}`}>
               <span className={`text-[11px] font-medium block ${Number(ledgerData.stockSummary.physicalStock || 0) < 0 ? 'text-rose-600 font-semibold' : 'text-slate-500'}`}>Stock</span>
               <span className={`text-base font-bold font-mono ${Number(ledgerData.stockSummary.physicalStock || 0) < 0 ? 'text-rose-600' : 'text-slate-900'}`}>
-                {ledgerData.stockSummary.physicalStock}{' '}
-                <span className="text-xs font-normal text-slate-500">pcs</span>
+                {formatQuantity(ledgerData.stockSummary.physicalStock)}{' '}
+                <span className="text-xs font-normal text-slate-500">PRS</span>
               </span>
             </div>
             <div className="bg-white p-2.5 rounded-xl border border-slate-200/80 shadow-2xs">
               <span className="text-[11px] font-medium text-amber-600 block">Reserved</span>
               <span className="text-base font-bold text-amber-700 font-mono">
-                {ledgerData.stockSummary.reservedStock}{' '}
-                <span className="text-xs font-normal text-amber-600">pcs</span>
+                {formatQuantity(ledgerData.stockSummary.reservedStock)}{' '}
+                <span className="text-xs font-normal text-amber-600">PRS</span>
               </span>
             </div>
             <div className={`p-2.5 rounded-xl border shadow-2xs ${Number(ledgerData.stockSummary.availableStock || 0) < 0 ? 'bg-rose-50/60 border-rose-200' : 'bg-white border-slate-200/80'}`}>
               <span className={`text-[11px] font-medium block ${Number(ledgerData.stockSummary.availableStock || 0) < 0 ? 'text-rose-600 font-semibold' : 'text-emerald-600'}`}>Available</span>
               <span className={`text-base font-bold font-mono ${Number(ledgerData.stockSummary.availableStock || 0) < 0 ? 'text-rose-600' : 'text-emerald-700'}`}>
-                {ledgerData.stockSummary.availableStock}{' '}
-                <span className={`text-xs font-normal ${Number(ledgerData.stockSummary.availableStock || 0) < 0 ? 'text-rose-500' : 'text-emerald-600'}`}>pcs</span>
+                {formatQuantity(ledgerData.stockSummary.availableStock)}{' '}
+                <span className={`text-xs font-normal ${Number(ledgerData.stockSummary.availableStock || 0) < 0 ? 'text-rose-500' : 'text-emerald-600'}`}>PRS</span>
               </span>
             </div>
             <div className="bg-white p-2.5 rounded-xl border border-slate-200/80 shadow-2xs">
               <span className="text-[11px] font-medium text-blue-600 block">Total Purchases</span>
               <span className="text-base font-bold text-blue-700 font-mono">
-                {ledgerData.stockSummary.totalPurchasedQty}{' '}
+                {formatQuantity(ledgerData.stockSummary.totalPurchasedQty)}{' '}
                 <span className="text-xs font-normal text-blue-600">
-                  (₹{ledgerData.stockSummary.totalPurchasedValue.toLocaleString()})
+                  (₹{formatCurrency(ledgerData.stockSummary.totalPurchasedValue)})
                 </span>
               </span>
             </div>
             <div className="bg-white p-2.5 rounded-xl border border-slate-200/80 shadow-2xs">
               <span className="text-[11px] font-medium text-indigo-600 block">Total Sales</span>
               <span className="text-base font-bold text-indigo-700 font-mono">
-                {ledgerData.stockSummary.totalSoldQty}{' '}
+                {formatQuantity(ledgerData.stockSummary.totalSoldQty)}{' '}
                 <span className="text-xs font-normal text-indigo-600">
-                  (₹{ledgerData.stockSummary.totalSoldValue.toLocaleString()})
+                  (₹{formatCurrency(ledgerData.stockSummary.totalSoldValue)})
                 </span>
               </span>
             </div>
             <div className="bg-white p-2.5 rounded-xl border border-slate-200/80 shadow-2xs">
               <span className="text-[11px] font-medium text-slate-500 block">Purchase Rate / MRP</span>
               <span className="text-xs font-bold text-slate-800 font-mono">
-                ₹{Number(ledgerData.item.purchaseRate).toFixed(2)} / ₹{Number(ledgerData.item.mrp).toFixed(2)}
+                ₹{formatCurrency(ledgerData.item.purchaseRate)} / ₹{formatCurrency(ledgerData.item.mrp)}
               </span>
             </div>
           </div>
         )}
+
+        {/* Date Filter & Quick Periods Toolbar */}
+        <div className="px-6 py-2.5 bg-slate-100/70 border-b border-slate-200 flex flex-wrap items-center justify-between gap-2 shrink-0">
+          <div className="flex items-center gap-1.5 flex-wrap">
+            <span className="text-xs font-semibold text-slate-500 mr-1 flex items-center gap-1">
+              <Clock className="h-3.5 w-3.5" />
+              <span>Period:</span>
+            </span>
+            <button
+              type="button"
+              onClick={() => handleSelectQuickPeriod('THIS_MONTH')}
+              className={`px-2 py-1 text-xs rounded-lg font-semibold transition-colors cursor-pointer ${
+                quickPeriod === 'THIS_MONTH'
+                  ? 'bg-indigo-600 text-white shadow-2xs'
+                  : 'bg-white text-slate-600 hover:bg-slate-200 border border-slate-200'
+              }`}
+            >
+              This Month
+            </button>
+            <button
+              type="button"
+              onClick={() => handleSelectQuickPeriod('LAST_MONTH')}
+              className={`px-2 py-1 text-xs rounded-lg font-semibold transition-colors cursor-pointer ${
+                quickPeriod === 'LAST_MONTH'
+                  ? 'bg-indigo-600 text-white shadow-2xs'
+                  : 'bg-white text-slate-600 hover:bg-slate-200 border border-slate-200'
+              }`}
+            >
+              Last Month
+            </button>
+            <button
+              type="button"
+              onClick={() => handleSelectQuickPeriod('THIS_FY')}
+              className={`px-2 py-1 text-xs rounded-lg font-semibold transition-colors cursor-pointer ${
+                quickPeriod === 'THIS_FY'
+                  ? 'bg-indigo-600 text-white shadow-2xs'
+                  : 'bg-white text-slate-600 hover:bg-slate-200 border border-slate-200'
+              }`}
+            >
+              This Financial Year
+            </button>
+            <button
+              type="button"
+              onClick={() => handleSelectQuickPeriod('ALL')}
+              className={`px-2 py-1 text-xs rounded-lg font-semibold transition-colors cursor-pointer ${
+                quickPeriod === 'ALL' && !fromDate && !toDate
+                  ? 'bg-indigo-600 text-white shadow-2xs'
+                  : 'bg-white text-slate-600 hover:bg-slate-200 border border-slate-200'
+              }`}
+            >
+              All Time
+            </button>
+          </div>
+
+          <div className="flex items-center gap-2 flex-wrap">
+            <div className="flex items-center gap-1 text-xs">
+              <span className="text-slate-500 font-medium">From:</span>
+              <input
+                type="date"
+                value={fromDate}
+                onChange={e => {
+                  setFromDate(e.target.value);
+                  setQuickPeriod('CUSTOM');
+                }}
+                className="px-2 py-1 text-xs bg-white border border-slate-200 rounded-lg text-slate-700 focus:outline-none focus:ring-1 focus:ring-indigo-500"
+              />
+            </div>
+            <div className="flex items-center gap-1 text-xs">
+              <span className="text-slate-500 font-medium">To:</span>
+              <input
+                type="date"
+                value={toDate}
+                onChange={e => {
+                  setToDate(e.target.value);
+                  setQuickPeriod('CUSTOM');
+                }}
+                className="px-2 py-1 text-xs bg-white border border-slate-200 rounded-lg text-slate-700 focus:outline-none focus:ring-1 focus:ring-indigo-500"
+              />
+            </div>
+            {(fromDate || toDate) && (
+              <button
+                type="button"
+                onClick={() => {
+                  setFromDate('');
+                  setToDate('');
+                  setQuickPeriod('ALL');
+                }}
+                className="text-xs text-rose-600 hover:text-rose-800 font-medium px-1 cursor-pointer"
+              >
+                Clear
+              </button>
+            )}
+          </div>
+        </div>
 
         {/* View Switcher Tabs & Filter Bar */}
         <div className="px-6 py-3 bg-white border-b border-slate-200 flex flex-wrap items-center justify-between gap-3 shrink-0">
@@ -542,19 +661,19 @@ export const StockItemLedgerModal: React.FC<StockItemLedgerModalProps> = ({
                               {m.monthLabel}
                             </td>
                             <td className="py-3 px-3 text-right font-mono text-slate-600">
-                              {m.openingQty}
+                              {formatQuantity(m.openingQty)}
                             </td>
                             <td className="py-3 px-3 text-right font-mono text-blue-700 font-semibold bg-blue-50/30">
-                              +{totalInwardQty}
+                              +{formatQuantity(totalInwardQty)}
                             </td>
                             <td className="py-3 px-3 text-right font-mono text-blue-700">
-                              ₹{m.purchaseValue.toLocaleString()}
+                              ₹{formatCurrency(m.purchaseValue)}
                             </td>
                             <td className="py-3 px-3 text-right font-mono text-indigo-700 font-semibold bg-indigo-50/30">
-                              -{totalOutwardQty}
+                              -{formatQuantity(totalOutwardQty)}
                             </td>
                             <td className="py-3 px-3 text-right font-mono text-indigo-700">
-                              ₹{m.salesValue.toLocaleString()}
+                              ₹{formatCurrency(m.salesValue)}
                             </td>
                             <td className="py-3 px-3 text-right font-mono">
                               <span
@@ -566,13 +685,13 @@ export const StockItemLedgerModal: React.FC<StockItemLedgerModalProps> = ({
                                     : 'text-slate-600 bg-slate-100'
                                 }`}
                               >
-                                {netFlow > 0 ? `+${netFlow}` : netFlow}
+                                {netFlow > 0 ? `+${formatQuantity(netFlow)}` : formatQuantity(netFlow)}
                               </span>
                             </td>
                             <td className={`py-3 px-4 text-right font-mono font-bold text-sm ${
                               Number(m.closingQty || 0) < 0 ? 'text-rose-600 bg-rose-50/50' : 'text-slate-900 bg-slate-50'
                             }`}>
-                              {m.closingQty}
+                              {formatQuantity(m.closingQty)}
                             </td>
                             <td className="py-3 px-4 text-center">
                               <button
@@ -592,25 +711,25 @@ export const StockItemLedgerModal: React.FC<StockItemLedgerModalProps> = ({
                         <tr className="bg-slate-100 text-slate-900 font-bold border-t-2 border-slate-300">
                           <td className="py-3.5 px-4 uppercase text-[11px] tracking-wider">Total / Position</td>
                           <td className="py-3.5 px-3 text-right font-mono">
-                            {ledgerData.stockSummary.openingBalance}
+                            {formatQuantity(ledgerData.stockSummary.openingBalance)}
                           </td>
                           <td className="py-3.5 px-3 text-right font-mono text-blue-700">
-                            +{ledgerData.stockSummary.totalPurchasedQty}
+                            +{formatQuantity(ledgerData.stockSummary.totalPurchasedQty)}
                           </td>
                           <td className="py-3.5 px-3 text-right font-mono text-blue-700">
-                            ₹{ledgerData.stockSummary.totalPurchasedValue.toLocaleString()}
+                            ₹{formatCurrency(ledgerData.stockSummary.totalPurchasedValue)}
                           </td>
                           <td className="py-3.5 px-3 text-right font-mono text-indigo-700">
-                            -{ledgerData.stockSummary.totalSoldQty}
+                            -{formatQuantity(ledgerData.stockSummary.totalSoldQty)}
                           </td>
                           <td className="py-3.5 px-3 text-right font-mono text-indigo-700">
-                            ₹{ledgerData.stockSummary.totalSoldValue.toLocaleString()}
+                            ₹{formatCurrency(ledgerData.stockSummary.totalSoldValue)}
                           </td>
                           <td className="py-3.5 px-3 text-right font-mono">
-                            {ledgerData.stockSummary.totalPurchasedQty - ledgerData.stockSummary.totalSoldQty}
+                            {formatQuantity(ledgerData.stockSummary.totalPurchasedQty - ledgerData.stockSummary.totalSoldQty)}
                           </td>
                           <td className="py-3.5 px-4 text-right font-mono text-sm text-slate-900 bg-slate-200/60">
-                            {ledgerData.stockSummary.closingBalance}
+                            {formatQuantity(ledgerData.stockSummary.closingBalance)}
                           </td>
                           <td className="py-3.5 px-4 text-center text-slate-500 font-normal">
                             {ledgerData.transactions.length} total
@@ -733,21 +852,21 @@ export const StockItemLedgerModal: React.FC<StockItemLedgerModalProps> = ({
                                 )}
                               </td>
                               <td className="py-2.5 px-3 text-right font-mono text-blue-700 font-semibold bg-blue-50/20">
-                                {tx.quantityIn > 0 ? `+${tx.quantityIn}` : '—'}
+                                {tx.quantityIn > 0 ? `+${formatQuantity(tx.quantityIn)}` : '—'}
                               </td>
                               <td className="py-2.5 px-3 text-right font-mono text-indigo-700 font-semibold bg-indigo-50/20">
-                                {tx.quantityOut > 0 ? `-${tx.quantityOut}` : '—'}
+                                {tx.quantityOut > 0 ? `-${formatQuantity(tx.quantityOut)}` : '—'}
                               </td>
                               <td className="py-2.5 px-3 text-right font-mono text-slate-600">
-                                {tx.rate > 0 ? `₹${Number(tx.rate).toFixed(2)}` : '—'}
+                                {tx.rate > 0 ? `₹${formatCurrency(tx.rate)}` : '—'}
                               </td>
                               <td className="py-2.5 px-3 text-right font-mono text-slate-900 font-medium">
-                                {tx.value > 0 ? `₹${Number(tx.value).toFixed(2)}` : '—'}
+                                {tx.value > 0 ? `₹${formatCurrency(tx.value)}` : '—'}
                               </td>
                               <td className={`py-2.5 px-4 text-right font-mono font-bold text-xs ${
                                 Number(tx.runningBalance || 0) < 0 ? 'text-rose-600 bg-rose-50/50' : 'text-slate-900 bg-slate-50'
                               }`}>
-                                {tx.runningBalance}
+                                {formatQuantity(tx.runningBalance)}
                               </td>
                             </tr>
                           );

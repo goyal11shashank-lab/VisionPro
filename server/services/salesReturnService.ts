@@ -1,3 +1,4 @@
+import { PoolClient } from 'pg';
 import { db, pool } from '../db/index.js';
 import {
   salesReturns,
@@ -15,6 +16,8 @@ import {
 import { eq, and, desc, sql, inArray } from 'drizzle-orm';
 import { calculateLineTax, calculateInvoiceTotals, round2 } from './taxCalculationService.js';
 import { AuditService } from './auditService.js';
+import { PaymentService } from './paymentService.js';
+import { DocumentSequenceService } from './documentSequenceService.js';
 
 export interface CreateSalesReturnLineBatchInput {
   batchId: string;
@@ -36,35 +39,20 @@ export interface CreateSalesReturnInput {
   salesInvoiceId: string;
   partyId?: string;
   returnDate?: string | Date;
+  returnNumber?: string;
   status?: 'DRAFT' | 'POSTED';
   reason?: string;
   notes?: string;
   lines: CreateSalesReturnLineInput[];
+  idempotencyKey?: string;
 }
 
 export class SalesReturnService {
   /**
    * Generate next sequential return number per business (e.g., SR-000001)
    */
-  static async generateReturnNumber(businessId: string): Promise<string> {
-    const [latest] = await db
-      .select({ returnNumber: salesReturns.returnNumber })
-      .from(salesReturns)
-      .where(eq(salesReturns.businessId, businessId))
-      .orderBy(desc(salesReturns.createdAt))
-      .limit(1);
-
-    if (!latest || !latest.returnNumber) {
-      return 'SR-000001';
-    }
-
-    const match = latest.returnNumber.match(/SR-(\d+)/);
-    if (!match) {
-      return `SR-${Date.now().toString().slice(-6)}`;
-    }
-
-    const nextSeq = parseInt(match[1], 10) + 1;
-    return `SR-${nextSeq.toString().padStart(6, '0')}`;
+  static async generateReturnNumber(businessId: string, client?: PoolClient, options?: any): Promise<string> {
+    return await DocumentSequenceService.getNextVoucherNumber(client || pool, businessId, 'SALES_RETURN', options);
   }
 
   /**
@@ -185,6 +173,13 @@ export class SalesReturnService {
     }
     if (!data.lines || data.lines.length === 0) {
       throw new Error('At least one item line must be returned');
+    }
+
+    if (data.idempotencyKey) {
+      const existingId = await DocumentSequenceService.checkIdempotency(pool, businessId, 'SALES_RETURN', data.idempotencyKey);
+      if (existingId) {
+        return await this.getSalesReturnById(businessId, existingId);
+      }
     }
 
     const client = await pool.connect();
@@ -378,8 +373,12 @@ export class SalesReturnService {
         gstMode: isInterState ? 'INTER_STATE' : 'INTRA_STATE',
       });
 
-      const returnNumber = await this.generateReturnNumber(businessId);
       const returnDate = data.returnDate ? new Date(data.returnDate) : new Date();
+      const returnNumber =
+        data.returnNumber ||
+        (await DocumentSequenceService.getNextVoucherNumber(client, businessId, 'SALES_RETURN', {
+          voucherDate: returnDate,
+        }));
 
       // 5. Insert Sales Return header
       const returnRes = await client.query(
@@ -462,6 +461,16 @@ export class SalesReturnService {
             [returnLine.id, b.batchId, round2(b.quantity).toFixed(2)]
           );
         }
+      }
+
+      if (data.idempotencyKey) {
+        await DocumentSequenceService.recordIdempotency(
+          client,
+          businessId,
+          'SALES_RETURN',
+          data.idempotencyKey,
+          sReturn.id
+        );
       }
 
       await client.query('COMMIT');
@@ -648,6 +657,9 @@ export class SalesReturnService {
         [userId || null, returnId]
       );
 
+      // 7. Sync parent sales invoice payment_status
+      await PaymentService.syncSalesInvoicePaymentStatus(client, businessId, sReturn.sales_invoice_id);
+
       await client.query('COMMIT');
 
       await AuditService.log({
@@ -704,6 +716,8 @@ export class SalesReturnService {
       if (sReturn.status === 'CANCELLED') {
         throw new Error('Sales Return is already CANCELLED');
       }
+
+      const wasPosted = sReturn.status === 'POSTED';
 
       // If POSTED, reverse stock and customer ledger
       if (sReturn.status === 'POSTED') {
@@ -801,6 +815,10 @@ export class SalesReturnService {
          WHERE id = $3`,
         [`[CANCELLED: ${reason || 'User cancelled'}]`, userId || null, returnId]
       );
+
+      if (wasPosted) {
+        await PaymentService.syncSalesInvoicePaymentStatus(client, businessId, sReturn.sales_invoice_id);
+      }
 
       await client.query('COMMIT');
 
@@ -984,6 +1002,7 @@ export class SalesReturnService {
       }
 
       const sReturn = returnRes.rows[0];
+      const wasPosted = sReturn.status === 'POSTED';
 
       // If POSTED, reverse restored stock and customer ledger
       if (sReturn.status === 'POSTED') {
@@ -1053,6 +1072,10 @@ export class SalesReturnService {
         `DELETE FROM sales_returns WHERE business_id = $1 AND id = $2`,
         [businessId, returnId]
       );
+
+      if (wasPosted) {
+        await PaymentService.syncSalesInvoicePaymentStatus(client, businessId, sReturn.sales_invoice_id);
+      }
 
       await client.query('COMMIT');
 

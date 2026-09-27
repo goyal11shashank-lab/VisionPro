@@ -1,3 +1,4 @@
+import { PoolClient } from 'pg';
 import { db, pool } from '../db/index.js';
 import {
   purchaseReturns,
@@ -16,6 +17,8 @@ import {
 import { eq, and, desc, sql, inArray } from 'drizzle-orm';
 import { calculateLineTax, calculateInvoiceTotals, round2 } from './taxCalculationService.js';
 import { AuditService } from './auditService.js';
+import { PaymentService } from './paymentService.js';
+import { DocumentSequenceService } from './documentSequenceService.js';
 
 export interface CreatePurchaseReturnLineBatchInput {
   batchId: string;
@@ -39,35 +42,20 @@ export interface CreatePurchaseReturnInput {
   purchaseInvoiceId: string;
   supplierPartyId?: string;
   returnDate?: string | Date;
+  returnNumber?: string;
   status?: 'DRAFT' | 'POSTED';
   reason?: string;
   notes?: string;
   lines: CreatePurchaseReturnLineInput[];
+  idempotencyKey?: string;
 }
 
 export class PurchaseReturnService {
   /**
    * Generate next sequential return number per business (e.g., PR-000001)
    */
-  static async generateReturnNumber(businessId: string): Promise<string> {
-    const [latest] = await db
-      .select({ returnNumber: purchaseReturns.returnNumber })
-      .from(purchaseReturns)
-      .where(eq(purchaseReturns.businessId, businessId))
-      .orderBy(desc(purchaseReturns.createdAt))
-      .limit(1);
-
-    if (!latest || !latest.returnNumber) {
-      return 'PR-000001';
-    }
-
-    const match = latest.returnNumber.match(/PR-(\d+)/);
-    if (!match) {
-      return `PR-${Date.now().toString().slice(-6)}`;
-    }
-
-    const nextSeq = parseInt(match[1], 10) + 1;
-    return `PR-${nextSeq.toString().padStart(6, '0')}`;
+  static async generateReturnNumber(businessId: string, client?: PoolClient, options?: any): Promise<string> {
+    return await DocumentSequenceService.getNextVoucherNumber(client || pool, businessId, 'PURCHASE_RETURN', options);
   }
 
   /**
@@ -197,6 +185,13 @@ export class PurchaseReturnService {
     }
     if (!data.lines || data.lines.length === 0) {
       throw new Error('At least one item line must be returned');
+    }
+
+    if (data.idempotencyKey) {
+      const existingId = await DocumentSequenceService.checkIdempotency(pool, businessId, 'PURCHASE_RETURN', data.idempotencyKey);
+      if (existingId) {
+        return await this.getPurchaseReturnById(businessId, existingId);
+      }
     }
 
     const client = await pool.connect();
@@ -415,8 +410,12 @@ export class PurchaseReturnService {
         gstMode: isInterState ? 'INTER_STATE' : 'INTRA_STATE',
       });
 
-      const returnNumber = await this.generateReturnNumber(businessId);
       const returnDate = data.returnDate ? new Date(data.returnDate) : new Date();
+      const returnNumber =
+        data.returnNumber ||
+        (await DocumentSequenceService.getNextVoucherNumber(client, businessId, 'PURCHASE_RETURN', {
+          voucherDate: returnDate,
+        }));
 
       // 5. Insert Purchase Return header
       const returnRes = await client.query(
@@ -506,6 +505,16 @@ export class PurchaseReturnService {
             ]
           );
         }
+      }
+
+      if (data.idempotencyKey) {
+        await DocumentSequenceService.recordIdempotency(
+          client,
+          businessId,
+          'PURCHASE_RETURN',
+          data.idempotencyKey,
+          pReturn.id
+        );
       }
 
       await client.query('COMMIT');
@@ -708,6 +717,9 @@ export class PurchaseReturnService {
         [userId || null, returnId]
       );
 
+      // 7. Sync parent purchase bill payment_status
+      await PaymentService.syncPurchaseInvoicePaymentStatus(client, businessId, pReturn.purchase_invoice_id);
+
       await client.query('COMMIT');
 
       await AuditService.log({
@@ -765,6 +777,8 @@ export class PurchaseReturnService {
       if (pReturn.status === 'CANCELLED') {
         throw new Error('Purchase Return is already CANCELLED');
       }
+
+      const wasPosted = pReturn.status === 'POSTED';
 
       // If POSTED, reverse stock, lots, and supplier ledger
       if (pReturn.status === 'POSTED') {
@@ -878,6 +892,10 @@ export class PurchaseReturnService {
          WHERE id = $3`,
         [`[CANCELLED: ${reason || 'User cancelled'}]`, userId || null, returnId]
       );
+
+      if (wasPosted) {
+        await PaymentService.syncPurchaseInvoicePaymentStatus(client, businessId, pReturn.purchase_invoice_id);
+      }
 
       await client.query('COMMIT');
 
@@ -1061,6 +1079,7 @@ export class PurchaseReturnService {
       }
 
       const pReturn = returnRes.rows[0];
+      const wasPosted = pReturn.status === 'POSTED';
 
       // If POSTED, reverse stock deductions (add back stock) and supplier ledger entries
       if (pReturn.status === 'POSTED') {
@@ -1130,6 +1149,10 @@ export class PurchaseReturnService {
         `DELETE FROM purchase_returns WHERE business_id = $1 AND id = $2`,
         [businessId, returnId]
       );
+
+      if (wasPosted) {
+        await PaymentService.syncPurchaseInvoicePaymentStatus(client, businessId, pReturn.purchase_invoice_id);
+      }
 
       await client.query('COMMIT');
 

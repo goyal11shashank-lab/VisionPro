@@ -2,7 +2,7 @@ import { Request, Response, NextFunction } from 'express';
 import { verifyAuthToken, AuthJwtPayload } from '../auth/jwt.js';
 import { db, pool } from '../db/index.js';
 import { users, userBusinessAccess, businesses, userRoles, roles, rolePermissions, permissions } from '../db/schema.js';
-import { eq, and } from 'drizzle-orm';
+import { eq, and, inArray } from 'drizzle-orm';
 
 export interface AuthenticatedUser {
   id: string;
@@ -19,6 +19,9 @@ export interface AuthenticatedUser {
     gstin?: string | null;
     currency: string;
     status: string;
+    businessType: string;
+    parentBusinessId?: string | null;
+    onboardingCompleted?: boolean;
   };
   roles: Array<{ id: string; name: string; code: string }>;
   permissions: string[];
@@ -86,12 +89,17 @@ export async function authenticateToken(req: Request, res: Response, next: NextF
     }
 
     // 2. Resolve target business ID
-    let requestedBusinessId = (req.headers['x-business-id'] as string) || payload.businessId;
-    if (requestedBusinessId === 'undefined' || requestedBusinessId === 'null' || !requestedBusinessId?.trim()) {
-      requestedBusinessId = payload.businessId;
-    }
+    const headerBizId = req.headers['x-business-id'] as string | undefined;
+    const cleanHeaderBizId = headerBizId && headerBizId !== 'undefined' && headerBizId !== 'null' && headerBizId.trim()
+      ? headerBizId.trim()
+      : undefined;
 
-    let targetBusinessId = requestedBusinessId;
+    const tokenBizId = payload.businessId && payload.businessId !== 'undefined' && payload.businessId !== 'null' && payload.businessId.trim()
+      ? payload.businessId.trim()
+      : undefined;
+
+    // Explicitly requested business (header takes precedence if supplied, else token)
+    const explicitlyRequestedId = cleanHeaderBizId || tokenBizId;
 
     // Check user's authorized businesses
     const accessibleBusinesses = await db
@@ -112,25 +120,40 @@ export async function authenticateToken(req: Request, res: Response, next: NextF
       return;
     }
 
-    // If super admin has no explicit access row, allow access to first active business or requested
-    let currentBusiness = accessibleBusinesses.find(b => b.businessId === targetBusinessId)?.business;
+    let currentBusiness: typeof businesses.$inferSelect | undefined;
 
-    if (!currentBusiness) {
-      if (userRecord.isSuperAdmin) {
-        if (targetBusinessId && targetBusinessId !== 'undefined' && targetBusinessId !== 'null' && targetBusinessId.trim()) {
-          try {
-            const [foundBiz] = await db.select().from(businesses).where(eq(businesses.id, targetBusinessId)).limit(1);
-            currentBusiness = foundBiz;
-          } catch (bizErr) {
-            console.warn('[AUTH_TARGET_BIZ_LOOKUP_FAILED]', bizErr);
-          }
+    if (userRecord.isSuperAdmin) {
+      // Super Admin can access any business
+      if (explicitlyRequestedId) {
+        try {
+          const [foundBiz] = await db.select().from(businesses).where(eq(businesses.id, explicitlyRequestedId)).limit(1);
+          currentBusiness = foundBiz;
+        } catch (bizErr) {
+          console.warn('[AUTH_TARGET_BIZ_LOOKUP_FAILED]', bizErr);
         }
-        if (!currentBusiness) {
-          const [firstBiz] = await db.select().from(businesses).where(eq(businesses.status, 'ACTIVE')).limit(1);
-          currentBusiness = firstBiz;
+      }
+      if (!currentBusiness) {
+        currentBusiness = accessibleBusinesses.find(b => b.isDefault)?.business || accessibleBusinesses[0]?.business;
+      }
+      if (!currentBusiness) {
+        const [firstBiz] = await db.select().from(businesses).where(eq(businesses.status, 'ACTIVE')).limit(1);
+        currentBusiness = firstBiz;
+      }
+    } else {
+      // Normal users: strictly enforce authorized membership!
+      if (explicitlyRequestedId) {
+        const matchingAccess = accessibleBusinesses.find(b => b.businessId === explicitlyRequestedId);
+        if (!matchingAccess) {
+          // Explicitly requested an unauthorized business! Deny immediately.
+          res.status(403).json({
+            error: 'UNAUTHORIZED_BUSINESS_ACCESS',
+            message: 'You do not have authorization to access this business.',
+          });
+          return;
         }
+        currentBusiness = matchingAccess.business;
       } else {
-        // Pick default or first accessible business
+        // No explicit business requested: fall back to default or first accessible
         const defaultBiz = accessibleBusinesses.find(b => b.isDefault) || accessibleBusinesses[0];
         currentBusiness = defaultBiz?.business;
       }
@@ -144,7 +167,7 @@ export async function authenticateToken(req: Request, res: Response, next: NextF
       return;
     }
 
-    targetBusinessId = currentBusiness.id;
+    const targetBusinessId = currentBusiness.id;
 
     // 3. Fetch User Roles for current business
     const userRoleRecords = await db
@@ -182,8 +205,7 @@ export async function authenticateToken(req: Request, res: Response, next: NextF
         .from(rolePermissions)
         .innerJoin(permissions, eq(rolePermissions.permissionId, permissions.id))
         .where(
-          // Role matching
-          eq(rolePermissions.roleId, roleIds[0]) // or inArray if multiple
+          inArray(rolePermissions.roleId, roleIds)
         );
       userPermissionsList = Array.from(new Set(perms.map(p => p.code)));
     }
@@ -204,6 +226,9 @@ export async function authenticateToken(req: Request, res: Response, next: NextF
         gstin: currentBusiness.gstin,
         currency: currentBusiness.currency,
         status: currentBusiness.status,
+        businessType: currentBusiness.businessType || 'MAIN',
+        parentBusinessId: currentBusiness.parentBusinessId || null,
+        onboardingCompleted: Boolean((currentBusiness.settingsConfig as any)?.dealer?.onboardingCompleted ?? false),
       },
       roles: userRolesList,
       permissions: userPermissionsList,

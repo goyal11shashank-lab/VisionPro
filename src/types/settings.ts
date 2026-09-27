@@ -198,6 +198,11 @@ export interface AppSettings {
     enableKeyboardNavigation: boolean;
     autoFocusNextField: boolean;
   };
+  dealer?: {
+    shareStockWithMain: boolean;
+    notifyOnOrderDispatched?: boolean;
+    notifyOnStockReservation?: boolean;
+  };
 }
 
 export const DEFAULT_APP_SETTINGS: AppSettings = {
@@ -394,5 +399,10 @@ export const DEFAULT_APP_SETTINGS: AppSettings = {
     searchResultLimit: 25,
     enableKeyboardNavigation: true,
     autoFocusNextField: true,
+  },
+  dealer: {
+    shareStockWithMain: false,
+    notifyOnOrderDispatched: true,
+    notifyOnStockReservation: true,
   },
 };

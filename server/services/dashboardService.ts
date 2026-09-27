@@ -287,17 +287,17 @@ export class DashboardService {
       const custAgingRes = await pool.query(
         `SELECT 
            COALESCE(SUM(CASE 
-             WHEN (si.invoice_date + COALESCE(NULLIF(regexp_replace(p.credit_days, '[^0-9]', '', 'g'), '')::integer, 0) * INTERVAL '1 day') < CURRENT_DATE 
+             WHEN COALESCE(si.due_date, (si.invoice_date + COALESCE(NULLIF(regexp_replace(p.credit_days, '[^0-9]', '', 'g'), '')::integer, 0) * INTERVAL '1 day')) < CURRENT_DATE 
              THEN (si.grand_total - COALESCE(pa_sub.paid_amount, 0)) 
              ELSE 0 
            END), 0) AS overdue_amount,
            COALESCE(SUM(CASE 
-             WHEN (si.invoice_date + COALESCE(NULLIF(regexp_replace(p.credit_days, '[^0-9]', '', 'g'), '')::integer, 0) * INTERVAL '1 day') >= CURRENT_DATE 
+             WHEN COALESCE(si.due_date, (si.invoice_date + COALESCE(NULLIF(regexp_replace(p.credit_days, '[^0-9]', '', 'g'), '')::integer, 0) * INTERVAL '1 day')) >= CURRENT_DATE 
              THEN (si.grand_total - COALESCE(pa_sub.paid_amount, 0)) 
              ELSE 0 
            END), 0) AS current_amount,
            COUNT(DISTINCT CASE 
-             WHEN (si.invoice_date + COALESCE(NULLIF(regexp_replace(p.credit_days, '[^0-9]', '', 'g'), '')::integer, 0) * INTERVAL '1 day') < CURRENT_DATE 
+             WHEN COALESCE(si.due_date, (si.invoice_date + COALESCE(NULLIF(regexp_replace(p.credit_days, '[^0-9]', '', 'g'), '')::integer, 0) * INTERVAL '1 day')) < CURRENT_DATE 
              THEN si.party_id 
              ELSE NULL 
            END) AS overdue_customers_count
@@ -320,17 +320,17 @@ export class DashboardService {
       const suppAgingRes = await pool.query(
         `SELECT 
            COALESCE(SUM(CASE 
-             WHEN (pi.invoice_date + COALESCE(NULLIF(regexp_replace(p.credit_days, '[^0-9]', '', 'g'), '')::integer, 0) * INTERVAL '1 day') < CURRENT_DATE 
+             WHEN COALESCE(pi.due_date, (pi.invoice_date + COALESCE(NULLIF(regexp_replace(p.credit_days, '[^0-9]', '', 'g'), '')::integer, 0) * INTERVAL '1 day')) < CURRENT_DATE 
              THEN (pi.grand_total - COALESCE(pa_sub.paid_amount, 0)) 
              ELSE 0 
            END), 0) AS overdue_amount,
            COALESCE(SUM(CASE 
-             WHEN (pi.invoice_date + COALESCE(NULLIF(regexp_replace(p.credit_days, '[^0-9]', '', 'g'), '')::integer, 0) * INTERVAL '1 day') >= CURRENT_DATE 
+             WHEN COALESCE(pi.due_date, (pi.invoice_date + COALESCE(NULLIF(regexp_replace(p.credit_days, '[^0-9]', '', 'g'), '')::integer, 0) * INTERVAL '1 day')) >= CURRENT_DATE 
              THEN (pi.grand_total - COALESCE(pa_sub.paid_amount, 0)) 
              ELSE 0 
            END), 0) AS current_amount,
            COUNT(DISTINCT CASE 
-             WHEN (pi.invoice_date + COALESCE(NULLIF(regexp_replace(p.credit_days, '[^0-9]', '', 'g'), '')::integer, 0) * INTERVAL '1 day') < CURRENT_DATE 
+             WHEN COALESCE(pi.due_date, (pi.invoice_date + COALESCE(NULLIF(regexp_replace(p.credit_days, '[^0-9]', '', 'g'), '')::integer, 0) * INTERVAL '1 day')) < CURRENT_DATE 
              THEN pi.supplier_party_id 
              ELSE NULL 
            END) AS overdue_suppliers_count

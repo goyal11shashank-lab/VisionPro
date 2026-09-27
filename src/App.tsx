@@ -4,15 +4,21 @@ import { SettingsProvider } from './context/SettingsContext.js';
 import { MainLayout } from './components/layout/MainLayout.js';
 import { LoginPage } from './pages/LoginPage.js';
 import { DashboardPage } from './pages/DashboardPage.js';
+import { BusinessesPage } from './pages/admin/BusinessesPage.js';
 import { UsersPage } from './pages/admin/UsersPage.js';
 import { RolesPage } from './pages/admin/RolesPage.js';
 import { BusinessSettingsPage } from './pages/admin/BusinessSettingsPage.js';
 import { AuditLogsPage } from './pages/admin/AuditLogsPage.js';
+import { DealerMainWarehouseAvailabilityPage } from './pages/inventory/DealerMainWarehouseAvailabilityPage.js';
+import { DealerOrdersListPage } from './pages/sales/DealerOrdersListPage.js';
+import { DealerControlCenterPage } from './pages/dealers/DealerControlCenterPage.js';
+import { DealerDashboardPage } from './pages/dashboard/DealerDashboardPage.js';
+import { DealerOnboardingPage } from './pages/dealers/DealerOnboardingPage.js';
+import { DealerPaymentAdvicesList } from './pages/dealers/DealerPaymentAdvicesList.js';
 import { ModulePlaceholderPage } from './pages/admin/ModulePlaceholderPage.js';
 import { CategoriesPage } from './pages/master/CategoriesPage.js';
 import { CoatingsPage } from './pages/master/CoatingsPage.js';
 import { BasesPage } from './pages/master/BasesPage.js';
-import { PrimaryItemsPage } from './pages/master/PrimaryItemsPage.js';
 import { UniqueItemsPage } from './pages/master/UniqueItemsPage.js';
 import { OpticalBatchesPage } from './pages/master/OpticalBatchesPage.js';
 import { PartiesPage } from './pages/parties/PartiesPage.js';
@@ -32,11 +38,30 @@ import { CustomerReceiptsPage } from './pages/accounts/CustomerReceiptsPage.js';
 import { SupplierPaymentsPage } from './pages/accounts/SupplierPaymentsPage.js';
 import { OutstandingAgingPage } from './pages/accounts/OutstandingAgingPage.js';
 import { ReportsCenterPage } from './pages/reports/ReportsCenterPage.js';
-import { RefreshCw, ShieldCheck } from 'lucide-react';
+import { RefreshCw, ShieldCheck, Building2, LogOut } from 'lucide-react';
 
 const AppContent: React.FC = () => {
-  const { user, isLoading } = useAuth();
+  const { user, isLoading, currentBusiness, accessibleBusinesses, logout, hasPermission, roles, refreshUser } = useAuth();
   const [currentPath, setCurrentPath] = useState<string>('/dashboard');
+
+  const canConfigureDealer = Boolean(
+    user?.isSuperAdmin ||
+    hasPermission('admin:manage_settings') ||
+    hasPermission('business:edit') ||
+    roles?.some(r => r.code === 'MANAGER' || r.code === 'ADMIN' || r.code === 'SUPER_ADMIN')
+  );
+
+  React.useEffect(() => {
+    if (
+      currentBusiness?.businessType === 'DEALER' &&
+      currentBusiness.onboardingCompleted !== true &&
+      canConfigureDealer
+    ) {
+      if (currentPath === '/' || currentPath === '/dashboard' || currentPath === '/dealer/dashboard') {
+        setCurrentPath('/dealer/onboarding');
+      }
+    }
+  }, [currentBusiness?.id, currentBusiness?.businessType, currentBusiness?.onboardingCompleted, canConfigureDealer]);
 
   if (isLoading) {
     return (
@@ -56,15 +81,50 @@ const AppContent: React.FC = () => {
     return <LoginPage />;
   }
 
-  const getPageTitle = (): string => {
-    if (currentPath.startsWith('/sales/voucher/edit/') || currentPath.startsWith('/sales/invoices/edit/')) {
+  // If user has zero accessible businesses and is not super admin, show clean unassigned message
+  if (!user.isSuperAdmin && (!currentBusiness || accessibleBusinesses.length === 0)) {
+    return (
+      <div className="min-h-screen w-full flex items-center justify-center bg-slate-100 p-4">
+        <div className="max-w-md w-full bg-white rounded-2xl p-6 shadow-xl border border-slate-200 text-center space-y-4">
+          <div className="w-14 h-14 bg-amber-100 text-amber-700 rounded-2xl flex items-center justify-center mx-auto">
+            <Building2 className="w-7 h-7" />
+          </div>
+          <div>
+            <h2 className="text-lg font-bold text-slate-900">No Authorized Business Assigned</h2>
+            <p className="text-xs text-slate-500 mt-1.5 leading-relaxed">
+              Welcome, <strong className="text-slate-800">{user.fullName || user.username}</strong>. Your login account
+              is active, but an administrator has not yet assigned you to any Dealer or Main Warehouse business.
+            </p>
+          </div>
+          <div className="p-3 bg-slate-50 rounded-xl text-xs text-slate-600 border border-slate-200 text-left space-y-1">
+            <p className="font-semibold text-slate-700">Next Steps:</p>
+            <p>1. Contact your Main Warehouse or Dealer Administrator.</p>
+            <p>2. Ask them to assign your account (@{user.username}) to your business location.</p>
+          </div>
+          <button
+            type="button"
+            onClick={() => logout()}
+            className="w-full py-2 bg-slate-900 hover:bg-slate-800 text-white text-xs font-semibold rounded-xl flex items-center justify-center gap-2 transition-colors shadow-sm"
+          >
+            <LogOut className="w-4 h-4" />
+            Log Out
+          </button>
+        </div>
+      </div>
+    );
+  }
+
+  const getPageTitle = (targetPath = pathOnly): string => {
+    if (targetPath.startsWith('/sales/voucher/edit/') || targetPath.startsWith('/sales/invoices/edit/')) {
       return 'Alteration Sales Voucher';
     }
 
-    switch (currentPath) {
+    switch (targetPath) {
       case '/':
       case '/dashboard':
         return 'Enterprise Dashboard';
+      case '/admin/businesses':
+        return 'Business Entities & Multi-Tenancy';
       case '/admin/users':
         return 'System Users & Access';
       case '/admin/roles':
@@ -87,7 +147,6 @@ const AppContent: React.FC = () => {
       case '/master/coatings':
         return 'Optical Coatings Master';
       case '/master/primary-items':
-        return 'Primary Items Master';
       case '/master/stock-items':
       case '/stock-items':
       case '/master/unique-items':
@@ -95,12 +154,20 @@ const AppContent: React.FC = () => {
         return 'Stock Items Master';
       case '/master/batches':
         return 'Optical Batches & Permanent Barcodes';
+      case '/inventory/dealer-availability':
+      case '/dealer/availability':
+      case '/inventory/main-warehouse':
+        return 'Main Warehouse Stock Availability';
+      case '/dealer/orders':
+      case '/inventory/dealer-orders':
+        return 'My Warehouse Orders';
       case '/sales/pos':
         return 'Optical POS & Billing';
+      case '/sales/invoices/new':
       case '/sales/voucher/new':
       case '/sales/voucher':
       case '/sales/new':
-        return 'Normal Sales Voucher';
+        return 'Create Sales Invoice';
       case '/sales/invoices':
         return 'Sales Invoices Register';
       case '/sales/prescriptions':
@@ -166,16 +233,51 @@ const AppContent: React.FC = () => {
         return 'Payments & Receipts Register';
       case '/reports/analytics':
         return 'Product & Optical Power Analytics';
+      case '/dealers':
+      case '/sales/dealers':
+        return 'Dealer Control Center';
+      case '/dealer/dashboard':
+        return 'Dealer Operations Dashboard';
+      case '/dealer/onboarding':
+        return 'Dealer Setup Wizard';
       default:
         return 'Optical Billing & Management';
     }
   };
 
+  const [pathOnly, queryString] = currentPath.split('?');
+  const searchParams = new URLSearchParams(queryString || (typeof window !== 'undefined' ? window.location.search : ''));
+  const orderIdParam = searchParams.get('orderId');
+
   const renderContent = () => {
-    switch (currentPath) {
+    switch (pathOnly) {
+      case '/dealer/onboarding':
+        if (currentBusiness?.businessType === 'MAIN') {
+          return <DashboardPage onNavigate={setCurrentPath} />;
+        }
+        return (
+          <DealerOnboardingPage
+            onNavigate={setCurrentPath}
+            onComplete={() => {
+              setCurrentPath('/dealer/dashboard');
+              refreshUser();
+            }}
+          />
+        );
       case '/':
       case '/dashboard':
+        if (currentBusiness?.businessType === 'DEALER') {
+          return <DealerDashboardPage onNavigate={setCurrentPath} />;
+        }
         return <DashboardPage onNavigate={setCurrentPath} />;
+      case '/dealer/dashboard':
+        return <DealerDashboardPage onNavigate={setCurrentPath} />;
+      case '/dealers':
+      case '/sales/dealers':
+      case '/admin/dealers':
+        return <DealerControlCenterPage onNavigate={setCurrentPath} />;
+      case '/admin/businesses':
+        return <BusinessesPage />;
       case '/admin/users':
         return <UsersPage />;
       case '/admin/roles':
@@ -200,29 +302,53 @@ const AppContent: React.FC = () => {
       case '/master/coatings':
         return <CoatingsPage />;
       case '/master/primary-items':
-        return <PrimaryItemsPage />;
       case '/master/stock-items':
       case '/stock-items':
       case '/master/unique-items':
       case '/unique-items':
         return <UniqueItemsPage />;
       case '/master/batches':
-        return <OpticalBatchesPage />;
+        return <OpticalBatchesPage onNavigate={setCurrentPath} />;
+      case '/inventory/dealer-availability':
+      case '/dealer/availability':
+      case '/inventory/main-warehouse':
+        return <DealerMainWarehouseAvailabilityPage onNavigate={setCurrentPath} />;
+      case '/dealer/orders':
+      case '/inventory/dealer-orders':
+        return <DealerOrdersListPage onNavigate={setCurrentPath} />;
+      case '/dealer/payments':
+      case '/dealer/payment-advices':
+        return (
+          <div className="p-6 max-w-7xl mx-auto space-y-6">
+            <DealerPaymentAdvicesList onNavigate={setCurrentPath} />
+          </div>
+        );
 
       // Sales Submodules
       case '/sales/orders':
-        return <SalesOrdersPage />;
+        return (
+          <SalesOrdersPage
+            onNavigateToInvoice={(orderId) => {
+              const target = `/sales/invoices/new?orderId=${orderId}`;
+              if (typeof window !== 'undefined') {
+                window.history.pushState(null, '', target);
+              }
+              setCurrentPath(target);
+            }}
+          />
+        );
       case '/sales/invoices':
         return <SalesInvoicesPage onNavigate={setCurrentPath} />;
       case '/sales/pos':
         return <SalesInvoicesPage initialOpenPos={true} onNavigate={setCurrentPath} />;
+      case '/sales/invoices/new':
       case '/sales/voucher/new':
       case '/sales/voucher':
       case '/sales/new':
-        return <NormalSalesVoucherPage onNavigate={setCurrentPath} />;
+        return <NormalSalesVoucherPage onNavigate={setCurrentPath} orderId={orderIdParam} />;
       default:
-        if (currentPath.startsWith('/sales/invoices/') && currentPath.endsWith('/print')) {
-          const invId = currentPath.replace('/sales/invoices/', '').replace('/print', '');
+        if (pathOnly.startsWith('/sales/invoices/') && pathOnly.endsWith('/print')) {
+          const invId = pathOnly.replace('/sales/invoices/', '').replace('/print', '');
           return (
             <SalesInvoicePrintPage
               invoiceId={invId}
@@ -230,8 +356,8 @@ const AppContent: React.FC = () => {
             />
           );
         }
-        if (currentPath.startsWith('/sales/voucher/') && currentPath.endsWith('/print')) {
-          const invId = currentPath.replace('/sales/voucher/', '').replace('/print', '');
+        if (pathOnly.startsWith('/sales/voucher/') && pathOnly.endsWith('/print')) {
+          const invId = pathOnly.replace('/sales/voucher/', '').replace('/print', '');
           return (
             <SalesInvoicePrintPage
               invoiceId={invId}
@@ -239,8 +365,8 @@ const AppContent: React.FC = () => {
             />
           );
         }
-        if (currentPath.startsWith('/sales/voucher/edit/')) {
-          const editId = currentPath.replace('/sales/voucher/edit/', '');
+        if (pathOnly.startsWith('/sales/voucher/edit/')) {
+          const editId = pathOnly.replace('/sales/voucher/edit/', '');
           return (
             <NormalSalesVoucherPage
               editInvoiceId={editId}
@@ -250,8 +376,8 @@ const AppContent: React.FC = () => {
             />
           );
         }
-        if (currentPath.startsWith('/sales/invoices/edit/')) {
-          const editId = currentPath.replace('/sales/invoices/edit/', '');
+        if (pathOnly.startsWith('/sales/invoices/edit/')) {
+          const editId = pathOnly.replace('/sales/invoices/edit/', '');
           return (
             <NormalSalesVoucherPage
               editInvoiceId={editId}
@@ -264,7 +390,7 @@ const AppContent: React.FC = () => {
         break;
     }
 
-    switch (currentPath) {
+    switch (pathOnly) {
       case '/sales/returns':
         return <SalesReturnsPage />;
       case '/sales/customer-ledger':
@@ -364,6 +490,13 @@ const AppContent: React.FC = () => {
         return <ReportsCenterPage initialTab="analytics" />;
 
       default:
+        if (pathOnly.startsWith('/dealers/')) {
+          const dealerId = pathOnly.replace('/dealers/', '');
+          return <DealerControlCenterPage onNavigate={setCurrentPath} initialDealerId={dealerId} />;
+        }
+        if (currentBusiness?.businessType === 'DEALER') {
+          return <DealerDashboardPage onNavigate={setCurrentPath} />;
+        }
         return <DashboardPage onNavigate={setCurrentPath} />;
     }
   };
@@ -374,7 +507,9 @@ const AppContent: React.FC = () => {
       onNavigate={setCurrentPath}
       title={getPageTitle()}
     >
-      {renderContent()}
+      <div key={currentBusiness?.id || 'no-business'}>
+        {renderContent()}
+      </div>
     </MainLayout>
   );
 };

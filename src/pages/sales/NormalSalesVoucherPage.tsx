@@ -5,6 +5,7 @@ import {
   Printer,
   CheckCircle2,
   AlertTriangle,
+  ShoppingCart,
 } from 'lucide-react';
 import { useAuth } from '../../context/AuthContext';
 import { useBusinessSettings } from '../../context/BusinessSettingsContext';
@@ -25,15 +26,17 @@ import {
 import { PrintPreviewModal } from '../../components/print/PrintPreviewModal';
 import { PrintableVoucher } from '../../components/print/PrintableVoucher';
 import { cleanNarrationNotes } from '../../utils/narrationHelper';
+import { validateQuantity } from '../../utils/quantityValidator';
 
 interface Props {
   onNavigate?: (path: string) => void;
   onSuccess?: (invoiceId: string) => void;
   editInvoiceId?: string | null;
+  orderId?: string | null;
   onBack?: () => void;
 }
 
-export const NormalSalesVoucherPage: React.FC<Props> = ({ onNavigate, onSuccess, editInvoiceId, onBack }) => {
+export const NormalSalesVoucherPage: React.FC<Props> = ({ onNavigate, onSuccess, editInvoiceId, orderId, onBack }) => {
   const { currentBusiness } = useAuth();
   const { settings } = useBusinessSettings();
 
@@ -44,6 +47,18 @@ export const NormalSalesVoucherPage: React.FC<Props> = ({ onNavigate, onSuccess,
   const [autoInvokePrint, setAutoInvokePrint] = useState<boolean>(false);
 
   // Voucher Header State
+  const detectedOrderId = (() => {
+    if (orderId) return orderId;
+    if (typeof window !== 'undefined') {
+      const sp = new URLSearchParams(window.location.search);
+      return sp.get('orderId') || null;
+    }
+    return null;
+  })();
+
+  const [convertingOrderId, setConvertingOrderId] = useState<string | null>(detectedOrderId);
+  const [convertedOrderNumber, setConvertedOrderNumber] = useState<string | null>(null);
+
   const [selectedPartyId, setSelectedPartyId] = useState<string>('');
   const [selectedParty, setSelectedParty] = useState<any>(null);
   const [partyCreditInfo, setPartyCreditInfo] = useState<any>(null);
@@ -189,6 +204,82 @@ export const NormalSalesVoucherPage: React.FC<Props> = ({ onNavigate, onSuccess,
         }
       }
 
+      // If converting an existing Sales Order, load sales order details, lines, and allocated batches
+      if (!editInvoiceId && detectedOrderId) {
+        try {
+          const order = await apiRequest<any>(`/api/sales/orders/${detectedOrderId}`);
+          if (order) {
+            setConvertingOrderId(detectedOrderId);
+            setConvertedOrderNumber(order.orderNumber || null);
+
+            const partyId = order.partyId || '';
+            if (partyId) {
+              setSelectedPartyId(partyId);
+              const foundParty = validCustomers.find((p: any) => p.id === partyId) || order.party || null;
+              setSelectedParty(foundParty);
+              apiRequest<any>(`/api/sales/parties/${partyId}/credit-check`)
+                .then(creditRes => setPartyCreditInfo(creditRes))
+                .catch(err => console.error('Credit check error:', err));
+            }
+
+            // Auto-detect GST Mode
+            if (order.party?.state && currentBusiness?.state) {
+              if (order.party.state.trim().toLowerCase() !== currentBusiness.state.trim().toLowerCase()) {
+                setGstMode('INTER_STATE');
+              } else {
+                setGstMode('INTRA_STATE');
+              }
+            }
+
+            if (order.paymentTerms) setPaymentTerms(order.paymentTerms);
+            if (order.notes) setNotes(order.notes);
+            if (order.orderNumber) setReferenceNumber(`SO: ${order.orderNumber}`);
+
+            if (order.lines && order.lines.length > 0) {
+              const loadedLines: VoucherLineItem[] = order.lines.map((l: any, idx: number) => {
+                const batches: BatchAllocation[] = (l.batches || []).map((b: any) => ({
+                  batchId: b.batchId || b.id,
+                  sph: b.sph ?? '0.00',
+                  cyl: b.cyl ?? '0.00',
+                  axis: b.axis ?? '',
+                  add: b.add ?? '',
+                  side: b.side ?? 'NONE',
+                  quantity: parseFloat(b.remainingReservedQty !== undefined ? b.remainingReservedQty : (b.quantity || '0')),
+                  rate: parseFloat(b.rate !== undefined ? b.rate : (l.rate || '0')),
+                  barcode: b.barcode || '',
+                  availableStock: parseFloat(b.availableStock || b.quantity || '0'),
+                }));
+
+                const totalBatchQty = batches.reduce((sum, b) => sum + b.quantity, 0);
+                const lineQty = batches.length > 0 ? totalBatchQty : parseFloat(l.quantity || '0');
+
+                return {
+                  id: `so-line-${idx}-${Date.now()}`,
+                  uniqueItemId: l.uniqueItemId,
+                  uniqueItemName: l.uniqueItemName || l.uniqueItem?.name || 'Stock Item',
+                  uniqueItemCode: l.uniqueItemCode || l.uniqueItem?.code || '',
+                  categoryCode: l.uniqueItem?.categoryCode || 'SV',
+                  unit: l.unit || l.uniqueItem?.unit || 'PRS',
+                  maintainBatches: l.uniqueItem?.maintainBatches !== false,
+                  quantity: lineQty,
+                  rate: parseFloat(l.rate || '0'),
+                  discountType: l.discountType || 'NONE',
+                  discountValue: parseFloat(l.discountValue || '0'),
+                  gstRate: parseFloat(l.gstRate || '5'),
+                  batches,
+                };
+              });
+
+              setLines(ensureTrailingBlankRow(loadedLines, 'row'));
+              return;
+            }
+          }
+        } catch (err: any) {
+          console.error('Failed to load sales order for conversion:', err);
+          setFormError(err.message || 'Failed to load sales order for conversion');
+        }
+      }
+
       // Initialize with one blank row if empty
       setLines(prev => (prev.length === 0 ? [createEmptyVoucherLine('row')] : prev));
     } catch (err: any) {
@@ -201,7 +292,7 @@ export const NormalSalesVoucherPage: React.FC<Props> = ({ onNavigate, onSuccess,
 
   useEffect(() => {
     loadPrerequisites();
-  }, [currentBusiness?.id, editInvoiceId]);
+  }, [currentBusiness?.id, editInvoiceId, detectedOrderId]);
 
   // Handle party change & auto-detect GST mode + credit check
   const handlePartyChange = async (partyId: string) => {
@@ -592,12 +683,18 @@ export const NormalSalesVoucherPage: React.FC<Props> = ({ onNavigate, onSuccess,
           setFormError(`Line #${lineNum} (${itemName}): Sum of batch quantities (${batchSum.toFixed(2)}) must match line quantity (${l.quantity.toFixed(2)}).`);
           return;
         }
+        for (const b of l.batches) {
+          const bVal = validateQuantity(b.quantity, l.unit || 'PRS');
+          if (!bVal.valid) {
+            setFormError(`Line #${lineNum} (${itemName}) batch allocation: ${bVal.error}`);
+            return;
+          }
+        }
       }
 
-      if (l.quantity <= 0) {
-        setFormError(
-          `Line #${lineNum} (${itemName}) has invalid quantity (${l.quantity}). Must be ≥ 0.5.`
-        );
+      const qVal = validateQuantity(l.quantity, l.unit || 'PRS');
+      if (!qVal.valid) {
+        setFormError(`Line #${lineNum} (${itemName}): ${qVal.error}`);
         return;
       }
       if (l.rate < 0) {
@@ -609,6 +706,7 @@ export const NormalSalesVoucherPage: React.FC<Props> = ({ onNavigate, onSuccess,
     setSubmitting(true);
     try {
       const payload = {
+        salesOrderId: convertingOrderId || undefined,
         partyId: selectedPartyId,
         invoiceNumber: invoiceNumber.trim() || undefined,
         invoiceDate: invoiceDate,
@@ -643,7 +741,11 @@ export const NormalSalesVoucherPage: React.FC<Props> = ({ onNavigate, onSuccess,
         })),
       };
 
-      const endpoint = editInvoiceId ? `/api/sales/invoices/${editInvoiceId}` : '/api/sales/invoices';
+      const endpoint = editInvoiceId
+        ? `/api/sales/invoices/${editInvoiceId}`
+        : convertingOrderId
+        ? `/api/sales/orders/${convertingOrderId}/convert`
+        : '/api/sales/invoices';
       const method = editInvoiceId ? 'PUT' : 'POST';
 
       const result = await apiRequest<any>(endpoint, {
@@ -667,11 +769,14 @@ export const NormalSalesVoucherPage: React.FC<Props> = ({ onNavigate, onSuccess,
   const handleResetForm = () => {
     setCreatedInvoice(null);
     setShowPrintModal(false);
+    setConvertingOrderId(null);
+    setConvertedOrderNumber(null);
     setSelectedPartyId('');
     setSelectedParty(null);
     setPartyCreditInfo(null);
     setInvoiceDate(new Date().toISOString().split('T')[0]);
     setNotes('');
+    setReferenceNumber('');
     setLines([createEmptyVoucherLine('row')]);
     setFormError(null);
     loadPrerequisites();
@@ -730,6 +835,32 @@ export const NormalSalesVoucherPage: React.FC<Props> = ({ onNavigate, onSuccess,
       id="normal-sales-voucher-page"
       className="flex flex-col h-full w-full bg-slate-100 border border-slate-300 rounded-md overflow-hidden select-none font-sans"
     >
+      {convertingOrderId && (
+        <div
+          id="so-conversion-banner"
+          className="bg-amber-50 border-b border-amber-200 px-4 py-2 flex items-center justify-between text-xs text-amber-900"
+        >
+          <div className="flex items-center space-x-2">
+            <ShoppingCart className="w-4 h-4 text-amber-600" />
+            <span>
+              Converting from Sales Order: <strong className="font-mono font-semibold">{convertedOrderNumber || convertingOrderId}</strong>. Reserved batch allocations have been pre-hydrated.
+            </span>
+          </div>
+          <button
+            type="button"
+            onClick={() => {
+              setConvertingOrderId(null);
+              setConvertedOrderNumber(null);
+              setReferenceNumber('');
+              setLines([createEmptyVoucherLine('row')]);
+            }}
+            className="text-amber-700 hover:text-amber-900 underline font-medium cursor-pointer"
+          >
+            Clear Order Link
+          </button>
+        </div>
+      )}
+
       {/* 1. Tally-style Voucher Header */}
       <VoucherHeader
         voucherType="SALES"

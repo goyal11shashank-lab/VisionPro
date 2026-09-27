@@ -402,6 +402,9 @@ export class StockItemLedgerService {
       toDate.setHours(23, 59, 59, 999);
     }
 
+    // Helper for exact optical decimal precision (never produces 1.5000000000000002 or 0.499999999)
+    const roundQty = (val: number): number => Math.round((val + Number.EPSILON) * 10000) / 10000;
+
     let openingBalanceBeforeRange = 0;
     const inRangeTransactions: StockLedgerTransactionRow[] = [];
 
@@ -410,7 +413,7 @@ export class StockItemLedgerService {
 
       if (fromDate && txDate < fromDate) {
         // Transactions prior to start date contribute to opening balance
-        openingBalanceBeforeRange += (tx.quantityIn - tx.quantityOut);
+        openingBalanceBeforeRange = roundQty(openingBalanceBeforeRange + (tx.quantityIn - tx.quantityOut));
       } else if (!toDate || txDate <= toDate) {
         inRangeTransactions.push(tx);
       }
@@ -419,7 +422,7 @@ export class StockItemLedgerService {
     // 7. Compute Chronological Running Balance for in-range transactions
     let runningPhysicalBalance = openingBalanceBeforeRange;
     for (const tx of inRangeTransactions) {
-      runningPhysicalBalance += (tx.quantityIn - tx.quantityOut);
+      runningPhysicalBalance = roundQty(runningPhysicalBalance + (tx.quantityIn - tx.quantityOut));
       tx.runningBalance = runningPhysicalBalance;
     }
 
@@ -532,14 +535,15 @@ export class StockItemLedgerService {
       const mData = monthMap.get(mKey)!;
       mData.openingQty = rollingOpening;
       
-      mData.closingQty = 
+      mData.closingQty = roundQty(
         mData.openingQty + 
         mData.purchaseQty + 
         mData.openingStockEntry + 
         mData.returnIn - 
         mData.salesQty - 
         mData.returnOut + 
-        mData.adjustment;
+        mData.adjustment
+      );
 
       const [yearStr, monthStr] = mKey.split('-');
       const monthIdx = parseInt(monthStr, 10) - 1;
@@ -548,15 +552,15 @@ export class StockItemLedgerService {
       monthlySummaries.push({
         month: mKey,
         monthLabel,
-        openingQty: mData.openingQty,
-        purchaseQty: mData.purchaseQty,
+        openingQty: roundQty(mData.openingQty),
+        purchaseQty: roundQty(mData.purchaseQty),
         purchaseValue: mData.purchaseValue,
-        salesQty: mData.salesQty,
+        salesQty: roundQty(mData.salesQty),
         salesValue: mData.salesValue,
-        returnIn: mData.returnIn,
-        returnOut: mData.returnOut,
-        adjustment: mData.adjustment,
-        openingStockEntry: mData.openingStockEntry,
+        returnIn: roundQty(mData.returnIn),
+        returnOut: roundQty(mData.returnOut),
+        adjustment: roundQty(mData.adjustment),
+        openingStockEntry: roundQty(mData.openingStockEntry),
         closingQty: mData.closingQty,
         transactionCount: mData.count,
       });
@@ -566,17 +570,17 @@ export class StockItemLedgerService {
     }
 
     // 9. Cumulative summary aggregates
-    const totalPurchasedQty = inRangeTransactions
+    const totalPurchasedQty = roundQty(inRangeTransactions
       .filter(t => t.transactionType === 'PURCHASE')
-      .reduce((sum, t) => sum + t.quantityIn, 0);
+      .reduce((sum, t) => sum + t.quantityIn, 0));
 
     const totalPurchasedValue = inRangeTransactions
       .filter(t => t.transactionType === 'PURCHASE')
       .reduce((sum, t) => sum + t.value, 0);
 
-    const totalSoldQty = inRangeTransactions
+    const totalSoldQty = roundQty(inRangeTransactions
       .filter(t => t.transactionType === 'SALE')
-      .reduce((sum, t) => sum + t.quantityOut, 0);
+      .reduce((sum, t) => sum + t.quantityOut, 0));
 
     const totalSoldValue = inRangeTransactions
       .filter(t => t.transactionType === 'SALE')

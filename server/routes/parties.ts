@@ -2,6 +2,7 @@ import { Router, Request, Response } from 'express';
 import { authenticateToken } from '../middleware/auth.js';
 import { requireAnyPermission } from '../middleware/permission.js';
 import { PartyService } from '../services/partyService.js';
+import { PaymentService } from '../services/paymentService.js';
 import { db } from '../db/index.js';
 import { supplierLedgers } from '../db/schema.js';
 import { eq, and, desc } from 'drizzle-orm';
@@ -82,19 +83,18 @@ router.get(
   async (req: Request, res: Response) => {
     try {
       const businessId = req.user!.currentBusinessId;
-      const party = await PartyService.getPartyById(businessId, req.params.id);
-
-      const entries = await db
-        .select()
-        .from(supplierLedgers)
-        .where(and(eq(supplierLedgers.businessId, businessId), eq(supplierLedgers.partyId, req.params.id)))
-        .orderBy(desc(supplierLedgers.transactionDate), desc(supplierLedgers.createdAt))
-        .limit(100);
+      const { fromDate, toDate, ledgerType } = req.query;
+      const statement = await PaymentService.getPartyStatement(businessId, req.params.id, {
+        fromDate: fromDate as string,
+        toDate: toDate as string,
+        ledgerType: ledgerType as any,
+      });
 
       res.json({
-        party,
-        entries,
-        currentBalance: entries.length > 0 ? entries[0].balance : '0.00',
+        ...statement,
+        party: statement.party,
+        entries: statement.entries,
+        currentBalance: statement.summary.closingBalanceFormatted,
       });
     } catch (err: any) {
       res.status(400).json({ error: 'FETCH_LEDGER_FAILED', message: err.message });
