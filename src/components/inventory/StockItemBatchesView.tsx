@@ -21,6 +21,7 @@ interface StockItemBatchesViewProps {
   onInspectBatch: (batch: OpticalBatch) => void;
   onOpenImportModal: () => void;
   onBatchesUpdated?: () => void;
+  refreshKey?: number;
 }
 
 export const StockItemBatchesView: React.FC<StockItemBatchesViewProps> = ({
@@ -34,6 +35,7 @@ export const StockItemBatchesView: React.FC<StockItemBatchesViewProps> = ({
   onInspectBatch,
   onOpenImportModal,
   onBatchesUpdated,
+  refreshKey,
 }) => {
   const { hasPermission } = useAuth();
   const canDelete = hasPermission('master:delete') || hasPermission('master:edit');
@@ -154,7 +156,7 @@ export const StockItemBatchesView: React.FC<StockItemBatchesViewProps> = ({
 
   useEffect(() => {
     fetchBatches();
-  }, [fetchBatches]);
+  }, [fetchBatches, refreshKey]);
 
   // Selection calculations
   const allVisibleSelected = useMemo(() => {
@@ -239,7 +241,14 @@ export const StockItemBatchesView: React.FC<StockItemBatchesViewProps> = ({
       });
 
       if (res.deletedCount > 0 && res.failedCount === 0) {
-        // Complete success
+        // Complete success: immediately remove all deleted batches from state
+        const deletedIdsSet = new Set(ids);
+        setBatches(prev => prev.filter(b => !deletedIdsSet.has(b.id)));
+        setTotals(prev => ({
+          ...prev,
+          batchesCount: Math.max(0, (prev.batchesCount || ids.length) - res.deletedCount),
+        }));
+        setTotalCount(prev => Math.max(0, prev - res.deletedCount));
         setShowBulkDeleteModal(false);
         setSelectedBatchIds(new Set());
         setFeedbackBanner({
@@ -253,8 +262,16 @@ export const StockItemBatchesView: React.FC<StockItemBatchesViewProps> = ({
         // Partial or complete block
         setBulkDeleteResult(res);
         if (res.deletedCount > 0) {
-          const remainingIds = new Set(res.blockedBatches?.map((b: any) => b.batchId) || []);
-          setSelectedBatchIds(remainingIds);
+          const blockedIds = new Set(res.blockedBatches?.map((b: any) => b.batchId) || []);
+          const actuallyDeleted = ids.filter(id => !blockedIds.has(id));
+          const deletedSet = new Set(actuallyDeleted);
+          setBatches(prev => prev.filter(b => !deletedSet.has(b.id)));
+          setTotals(prev => ({
+            ...prev,
+            batchesCount: Math.max(0, (prev.batchesCount || actuallyDeleted.length) - actuallyDeleted.length),
+          }));
+          setTotalCount(prev => Math.max(0, prev - actuallyDeleted.length));
+          setSelectedBatchIds(blockedIds);
           await fetchBatches();
           onBatchesUpdated?.();
         }
@@ -312,6 +329,7 @@ export const StockItemBatchesView: React.FC<StockItemBatchesViewProps> = ({
 
   const handleConfirmSingleDelete = async () => {
     if (!singleBatchToDelete) return;
+    const deletedId = singleBatchToDelete.id;
 
     try {
       setSingleDeleting(true);
@@ -319,7 +337,7 @@ export const StockItemBatchesView: React.FC<StockItemBatchesViewProps> = ({
       setSingleDeleteBlocked(null);
 
       const res = await apiRequest<{ success: boolean; message: string }>(
-        `/api/optical-master/batches/${singleBatchToDelete.id}`,
+        `/api/optical-master/batches/${deletedId}`,
         { method: 'DELETE' }
       );
 
@@ -327,13 +345,21 @@ export const StockItemBatchesView: React.FC<StockItemBatchesViewProps> = ({
         type: 'success',
         text: res.message || `Optical Batch "${singleBatchToDelete.barcode}" was deleted successfully.`
       });
-      setSingleBatchToDelete(null);
+      // Immediately remove from batches state so it disappears instantly
+      setBatches(prev => prev.filter(b => b.id !== deletedId));
       setSelectedBatchIds(prev => {
         const next = new Set(prev);
-        next.delete(singleBatchToDelete.id);
+        next.delete(deletedId);
         return next;
       });
+      setTotals(prev => ({
+        ...prev,
+        batchesCount: Math.max(0, (prev.batchesCount || 1) - 1),
+      }));
+      setTotalCount(prev => Math.max(0, prev - 1));
+      setSingleBatchToDelete(null);
       setTimeout(() => setFeedbackBanner(null), 6000);
+      // Synchronize fresh state from backend
       await fetchBatches();
       onBatchesUpdated?.();
     } catch (err: any) {
@@ -349,7 +375,8 @@ export const StockItemBatchesView: React.FC<StockItemBatchesViewProps> = ({
 
   const handleSingleSetInactive = async () => {
     if (!singleBatchToDelete) return;
-    await handleBulkSetInactive([singleBatchToDelete.id]);
+    const targetId = singleBatchToDelete.id;
+    await handleBulkSetInactive([targetId]);
     setSingleBatchToDelete(null);
     setSingleDeleteBlocked(null);
   };
@@ -487,6 +514,18 @@ export const StockItemBatchesView: React.FC<StockItemBatchesViewProps> = ({
           </div>
 
           <div className="flex flex-wrap items-center gap-2 print:hidden">
+            <button
+              onClick={() => {
+                fetchBatches();
+                onBatchesUpdated?.();
+              }}
+              disabled={loading}
+              className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold text-slate-700 bg-white hover:bg-slate-100 border border-slate-200 rounded-lg transition-colors shadow-2xs cursor-pointer"
+              title="Refresh Batches List"
+            >
+              <RefreshCw className={`h-3.5 w-3.5 ${loading ? 'animate-spin text-blue-600' : 'text-slate-500'}`} />
+              <span>Refresh</span>
+            </button>
             <button
               onClick={handlePrint}
               className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold text-slate-700 bg-white hover:bg-slate-100 border border-slate-200 rounded-lg transition-colors shadow-2xs cursor-pointer"

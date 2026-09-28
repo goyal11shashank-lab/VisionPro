@@ -158,12 +158,69 @@ router.post(
 );
 
 /**
+ * POST /api/sales/orders/bulk-delete
+ * Bulk permanently delete multiple sales orders
+ */
+router.post(
+  '/orders/bulk-delete',
+  requireAnyPermission([
+    'sales:delete',
+    'sales.delete',
+    'sales:order:delete',
+    'sales.order.delete',
+    'sales:cancel',
+    'sales.cancel',
+    'sales:order:cancel',
+    'sales.order.cancel',
+    'sales:edit',
+    'sales.edit',
+    'sales:order:edit',
+    'sales.order.edit',
+    'sales:create',
+    'sales.create',
+  ]),
+  async (req: Request, res: Response) => {
+    try {
+      const businessId = req.user!.currentBusinessId;
+      const userId = req.user!.id;
+      const { orderIds } = req.body;
+
+      if (!Array.isArray(orderIds) || orderIds.length === 0) {
+        res.status(400).json({ error: 'INVALID_ORDER_IDS', message: 'No sales order IDs provided for bulk deletion.' });
+        return;
+      }
+
+      const result = await SalesService.bulkDeleteSalesOrders(businessId, orderIds, userId);
+      res.json(result);
+    } catch (err: any) {
+      console.error('[POST /api/sales/orders/bulk-delete Error]', err);
+      res.status(400).json({ error: 'BULK_DELETE_ORDERS_FAILED', message: err.message });
+    }
+  }
+);
+
+/**
  * DELETE /api/sales/orders/:id
  * Permanently delete a sales order
  */
 router.delete(
   '/orders/:id',
-  requireAnyPermission(['sales:delete', 'sales.delete', 'sales:order:delete', 'sales.order.delete', 'sales:cancel', 'sales:edit']),
+  requireAnyPermission([
+    'sales:delete',
+    'sales.delete',
+    'sales:order:delete',
+    'sales.order.delete',
+    'sales:cancel',
+    'sales.cancel',
+    'sales:order:cancel',
+    'sales.order.cancel',
+    'sales:edit',
+    'sales.edit',
+    'sales:order:edit',
+    'sales.order.edit',
+    'sales:create',
+    'sales.create',
+  ]),
   async (req: Request, res: Response) => {
     try {
       const businessId = req.user!.currentBusinessId;

@@ -21,6 +21,9 @@ import {
   Layers,
   FileSpreadsheet,
   Download,
+  CheckSquare,
+  Square,
+  MinusSquare,
 } from 'lucide-react';
 import { useAuth } from '../../context/AuthContext.js';
 import { getStoredToken, apiRequest } from '../../api/client.js';
@@ -97,6 +100,35 @@ export const SalesOrdersPage: React.FC<{ onNavigateToInvoice?: (orderId: string)
   const [selectedOrder, setSelectedOrder] = useState<SalesOrder | null>(null);
   const [isDetailOpen, setIsDetailOpen] = useState(false);
   const [isCreateOpen, setIsCreateOpen] = useState(false);
+
+  // Delete Confirmation Modal State
+  const [orderToDelete, setOrderToDelete] = useState<{
+    id: string;
+    orderNumber: string;
+    partyName?: string;
+    grandTotal?: string | number;
+    status?: string;
+  } | null>(null);
+  const [deleteLoading, setDeleteLoading] = useState(false);
+  const [deleteError, setDeleteError] = useState<string | null>(null);
+
+  // Multi-select & Bulk Delete State
+  const [selectedOrderIds, setSelectedOrderIds] = useState<Set<string>>(new Set());
+  const [showBulkDeleteModal, setShowBulkDeleteModal] = useState<boolean>(false);
+  const [bulkDeleteLoading, setBulkDeleteLoading] = useState<boolean>(false);
+  const [bulkDeleteError, setBulkDeleteError] = useState<string | null>(null);
+
+  // Cancel Confirmation Modal State
+  const [orderToCancel, setOrderToCancel] = useState<{
+    id: string;
+    orderNumber: string;
+  } | null>(null);
+  const [cancelReason, setCancelReason] = useState('');
+  const [cancelLoading, setCancelLoading] = useState(false);
+  const [cancelError, setCancelError] = useState<string | null>(null);
+
+  // Global Notification Banner State
+  const [notification, setNotification] = useState<{ type: 'success' | 'error'; message: string } | null>(null);
 
   // Print Preview Modal State
   const [printPreviewOrder, setPrintPreviewOrder] = useState<any | null>(null);
@@ -548,86 +580,156 @@ export const SalesOrdersPage: React.FC<{ onNavigateToInvoice?: (orderId: string)
   const handleConfirmOrder = async (orderId: string) => {
     try {
       setSubmitting(true);
-      const res = await fetch(`/api/sales/orders/${orderId}/confirm`, {
-        method: 'POST',
-        headers: {
-          Authorization: `Bearer ${getStoredToken()}`,
-          'X-Business-Id': currentBusiness!.id,
-        },
+      const res = await apiRequest<{ success: boolean; message?: string }>(
+        `/api/sales/orders/${orderId}/confirm`,
+        { method: 'POST' }
+      );
+      setNotification({
+        type: 'success',
+        message: res.message || 'Sales order confirmed and optical batch stock reserved successfully.',
       });
-      if (!res.ok) {
-        const err = await res.json();
-        throw new Error(err.message || 'Failed to confirm order');
-      }
       setIsDetailOpen(false);
       fetchOrders();
     } catch (err: any) {
-      alert(err.message);
+      setNotification({
+        type: 'error',
+        message: err.message || 'Failed to confirm order',
+      });
     } finally {
       setSubmitting(false);
     }
   };
 
-  // Cancel Order
-  const handleCancelOrder = async (orderId: string) => {
-    const reason = prompt('Enter cancellation reason (mandatory for audit):');
-    if (!reason || !reason.trim()) return;
-
-    try {
-      setSubmitting(true);
-      const res = await fetch(`/api/sales/orders/${orderId}/cancel`, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          Authorization: `Bearer ${getStoredToken()}`,
-          'X-Business-Id': currentBusiness!.id,
-        },
-        body: JSON.stringify({ reason }),
-      });
-      if (!res.ok) {
-        const err = await res.json();
-        throw new Error(err.message || 'Failed to cancel order');
-      }
-      setIsDetailOpen(false);
-      fetchOrders();
-    } catch (err: any) {
-      alert(err.message);
-    } finally {
-      setSubmitting(false);
-    }
+  // Cancel Order Modal Handlers
+  const promptCancelOrder = (order: { id: string; orderNumber: string }) => {
+    setCancelReason('');
+    setCancelError(null);
+    setOrderToCancel(order);
   };
 
-  // Delete Order
-  const handleDeleteOrder = async (orderId: string, orderNumber: string) => {
-    if (
-      !window.confirm(
-        `Are you sure you want to permanently delete Sales Order #${orderNumber}?\nAny reserved optical batch stock will be released.`
-      )
-    ) {
+  const confirmCancelOrder = async () => {
+    if (!orderToCancel) return;
+    if (!cancelReason.trim()) {
+      setCancelError('Please enter a cancellation reason for the audit trail.');
       return;
     }
-
     try {
-      setSubmitting(true);
-      const res = await fetch(`/api/sales/orders/${orderId}`, {
-        method: 'DELETE',
-        headers: {
-          Authorization: `Bearer ${getStoredToken()}`,
-          'X-Business-Id': currentBusiness!.id,
-        },
+      setCancelLoading(true);
+      setCancelError(null);
+      await apiRequest(`/api/sales/orders/${orderToCancel.id}/cancel`, {
+        method: 'POST',
+        body: JSON.stringify({ reason: cancelReason.trim() }),
       });
-
-      if (!res.ok) {
-        const err = await res.json();
-        throw new Error(err.message || 'Failed to delete sales order');
-      }
-
+      setNotification({
+        type: 'success',
+        message: `Sales Order #${orderToCancel.orderNumber} cancelled successfully.`,
+      });
+      setOrderToCancel(null);
       setIsDetailOpen(false);
       fetchOrders();
     } catch (err: any) {
-      alert(err.message);
+      setCancelError(err.message || 'Failed to cancel order');
     } finally {
-      setSubmitting(false);
+      setCancelLoading(false);
+    }
+  };
+
+  // Multi-select Handlers
+  const handleToggleSelectAll = () => {
+    if (selectedOrderIds.size === orders.length && orders.length > 0) {
+      setSelectedOrderIds(new Set());
+    } else {
+      setSelectedOrderIds(new Set(orders.map(o => o.id)));
+    }
+  };
+
+  const handleToggleSelectOrder = (id: string, e?: React.MouseEvent) => {
+    if (e) e.stopPropagation();
+    setSelectedOrderIds(prev => {
+      const next = new Set(prev);
+      if (next.has(id)) {
+        next.delete(id);
+      } else {
+        next.add(id);
+      }
+      return next;
+    });
+  };
+
+  const handleConfirmBulkDelete = async () => {
+    if (selectedOrderIds.size === 0) return;
+    const orderIds = Array.from(selectedOrderIds);
+    try {
+      setBulkDeleteLoading(true);
+      setBulkDeleteError(null);
+      const res = await apiRequest<{ deletedCount: number; failedCount: number; message?: string }>(
+        '/api/sales/orders/bulk-delete',
+        {
+          method: 'POST',
+          headers: currentBusiness?.id ? { 'X-Business-Id': currentBusiness.id } : undefined,
+          body: JSON.stringify({ orderIds }),
+        }
+      );
+      setNotification({
+        type: 'success',
+        message: res.message || `Successfully deleted ${res.deletedCount} sales orders.`,
+      });
+      // Optimistically remove from orders list
+      setOrders(prev => prev.filter(o => !selectedOrderIds.has(o.id)));
+      setSelectedOrderIds(new Set());
+      setShowBulkDeleteModal(false);
+      fetchOrders();
+    } catch (err: any) {
+      setBulkDeleteError(err.message || 'Failed to bulk delete sales orders');
+    } finally {
+      setBulkDeleteLoading(false);
+    }
+  };
+
+  // Delete Order Modal Handlers
+  const promptDeleteOrder = (order: {
+    id: string;
+    orderNumber: string;
+    partyName?: string;
+    grandTotal?: string | number;
+    status?: string;
+  }) => {
+    setDeleteError(null);
+    setOrderToDelete(order);
+  };
+
+  const confirmDeleteOrder = async () => {
+    if (!orderToDelete) return;
+    const deletedId = orderToDelete.id;
+    const deletedNumber = orderToDelete.orderNumber;
+    try {
+      setDeleteLoading(true);
+      setDeleteError(null);
+      const res = await apiRequest<{ success: boolean; message?: string }>(
+        `/api/sales/orders/${deletedId}`,
+        {
+          method: 'DELETE',
+          headers: currentBusiness?.id ? { 'X-Business-Id': currentBusiness.id } : undefined,
+        }
+      );
+      setNotification({
+        type: 'success',
+        message: res.message || `Sales Order #${deletedNumber} was permanently deleted.`,
+      });
+      // Optimistically remove from orders list immediately
+      setOrders(prev => prev.filter(o => o.id !== deletedId));
+      setSelectedOrderIds(prev => {
+        const next = new Set(prev);
+        next.delete(deletedId);
+        return next;
+      });
+      setOrderToDelete(null);
+      setIsDetailOpen(false);
+      fetchOrders();
+    } catch (err: any) {
+      setDeleteError(err.message || 'Failed to delete sales order');
+    } finally {
+      setDeleteLoading(false);
     }
   };
 
@@ -650,6 +752,32 @@ export const SalesOrdersPage: React.FC<{ onNavigateToInvoice?: (orderId: string)
 
   return (
     <div id="sales-orders-container" className="w-full space-y-4">
+      {/* Notification Banner */}
+      {notification && (
+        <div
+          className={`p-4 rounded-xl border flex items-center justify-between gap-3 shadow-xs transition-all ${
+            notification.type === 'success'
+              ? 'bg-emerald-50 border-emerald-200 text-emerald-900'
+              : 'bg-rose-50 border-rose-200 text-rose-900'
+          }`}
+        >
+          <div className="flex items-center gap-2.5">
+            {notification.type === 'success' ? (
+              <CheckCircle2 className="w-5 h-5 text-emerald-600 shrink-0" />
+            ) : (
+              <AlertCircle className="w-5 h-5 text-rose-600 shrink-0" />
+            )}
+            <p className="text-sm font-medium">{notification.message}</p>
+          </div>
+          <button
+            onClick={() => setNotification(null)}
+            className="text-slate-400 hover:text-slate-600 text-sm font-bold p-1 cursor-pointer"
+          >
+            &times;
+          </button>
+        </div>
+      )}
+
       {/* Header */}
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 bg-white p-6 rounded-xl border border-slate-200 shadow-sm">
         <div>
@@ -733,6 +861,41 @@ export const SalesOrdersPage: React.FC<{ onNavigateToInvoice?: (orderId: string)
         </div>
       </div>
 
+      {/* Multi-select Action Bar */}
+      {selectedOrderIds.size > 0 && (
+        <div className="flex items-center justify-between p-3.5 bg-blue-50 border border-blue-200 rounded-xl shadow-xs text-xs text-blue-900 animate-in fade-in duration-150">
+          <div className="flex items-center gap-2">
+            <span className="font-bold text-sm px-2 py-0.5 bg-blue-200 text-blue-900 rounded-md">
+              {selectedOrderIds.size}
+            </span>
+            <span className="font-semibold text-slate-800">
+              Sales Order{selectedOrderIds.size > 1 ? 's' : ''} selected
+            </span>
+          </div>
+          <div className="flex items-center gap-2">
+            <button
+              type="button"
+              id="btn-bulk-delete-orders"
+              onClick={() => {
+                setBulkDeleteError(null);
+                setShowBulkDeleteModal(true);
+              }}
+              className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold text-white bg-rose-600 hover:bg-rose-700 rounded-lg shadow-xs transition cursor-pointer"
+            >
+              <Trash2 className="w-3.5 h-3.5" />
+              <span>Delete Selected ({selectedOrderIds.size})</span>
+            </button>
+            <button
+              type="button"
+              onClick={() => setSelectedOrderIds(new Set())}
+              className="px-3 py-1.5 text-xs font-medium text-slate-600 hover:text-slate-900 hover:bg-white rounded-lg transition border border-slate-200 bg-white cursor-pointer"
+            >
+              Deselect All
+            </button>
+          </div>
+        </div>
+      )}
+
       {/* Orders Table */}
       <div className="bg-white rounded-xl border border-slate-200 shadow-sm overflow-hidden">
         {loading ? (
@@ -752,6 +915,22 @@ export const SalesOrdersPage: React.FC<{ onNavigateToInvoice?: (orderId: string)
             <table className="w-full text-left text-sm">
               <thead className="bg-slate-50 border-b border-slate-200 text-slate-600 font-semibold">
                 <tr>
+                  <th className="py-3.5 px-3 text-center w-10">
+                    <button
+                      type="button"
+                      onClick={handleToggleSelectAll}
+                      className="p-1 hover:bg-slate-100 rounded text-slate-500 cursor-pointer"
+                      title={selectedOrderIds.size === orders.length && orders.length > 0 ? 'Deselect All' : 'Select All'}
+                    >
+                      {selectedOrderIds.size === orders.length && orders.length > 0 ? (
+                        <CheckSquare className="w-4 h-4 text-blue-600" />
+                      ) : selectedOrderIds.size > 0 ? (
+                        <MinusSquare className="w-4 h-4 text-blue-600" />
+                      ) : (
+                        <Square className="w-4 h-4 text-slate-400" />
+                      )}
+                    </button>
+                  </th>
                   <th className="py-3.5 px-4">Order #</th>
                   <th className="py-3.5 px-4">Date</th>
                   <th className="py-3.5 px-4">Customer</th>
@@ -762,72 +941,98 @@ export const SalesOrdersPage: React.FC<{ onNavigateToInvoice?: (orderId: string)
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-100">
-                {orders.map(order => (
-                  <tr key={order.id} className="hover:bg-slate-50 transition">
-                    <td className="py-3.5 px-4 font-mono font-medium text-blue-600">
-                      {order.orderNumber}
-                    </td>
-                    <td className="py-3.5 px-4 text-slate-600">
-                      {new Date(order.orderDate).toLocaleDateString()}
-                    </td>
-                    <td className="py-3.5 px-4">
-                      <div className="font-medium text-slate-900">{order.partyName}</div>
-                      <div className="text-xs text-slate-400 font-mono">{order.partyGstin || order.partyState}</div>
-                    </td>
-                    <td className="py-3.5 px-4">{getStatusBadge(order.status)}</td>
-                    <td className="py-3.5 px-4 text-right font-mono text-slate-700">
-                      ₹{parseFloat(String(order.taxableAmount)).toLocaleString('en-IN', { minimumFractionDigits: 2 })}
-                    </td>
-                    <td className="py-3.5 px-4 text-right font-mono font-semibold text-slate-900">
-                      ₹{parseFloat(String(order.grandTotal)).toLocaleString('en-IN', { minimumFractionDigits: 2 })}
-                    </td>
-                    <td className="py-3.5 px-4 text-center">
-                      <div className="flex items-center justify-center gap-1.5">
+                {orders.map(order => {
+                  const isSelected = selectedOrderIds.has(order.id);
+                  return (
+                    <tr
+                      key={order.id}
+                      className={`transition ${isSelected ? 'bg-blue-50/70 hover:bg-blue-50' : 'hover:bg-slate-50'}`}
+                    >
+                      <td className="py-3.5 px-3 text-center w-10" onClick={e => e.stopPropagation()}>
                         <button
-                          id={`btn-view-order-${order.id}`}
-                          onClick={() => {
-                            setSelectedOrder(order);
-                            setIsDetailOpen(true);
-                          }}
-                          className="p-1.5 text-slate-600 hover:text-blue-600 hover:bg-blue-50 rounded transition"
-                          title="View Details"
+                          type="button"
+                          onClick={(e) => handleToggleSelectOrder(order.id, e)}
+                          className="p-1 hover:bg-slate-100 rounded text-slate-500 cursor-pointer"
                         >
-                          <Eye className="w-4 h-4" />
+                          {isSelected ? (
+                            <CheckSquare className="w-4 h-4 text-blue-600" />
+                          ) : (
+                            <Square className="w-4 h-4 text-slate-300 hover:text-slate-400" />
+                          )}
                         </button>
-
-                        <button
-                          id={`btn-print-preview-order-${order.id}`}
-                          onClick={() => handleOpenPrintPreview(order)}
-                          className="p-1.5 text-slate-500 hover:text-slate-900 hover:bg-slate-100 rounded transition"
-                          title="Print Preview / Export PDF"
-                        >
-                          <Printer className="w-4 h-4" />
-                        </button>
-
-                        <button
-                          id={`btn-delete-order-${order.id}`}
-                          onClick={() => handleDeleteOrder(order.id, order.orderNumber)}
-                          className="p-1.5 text-slate-400 hover:text-rose-600 hover:bg-rose-50 rounded transition"
-                          title="Delete Sales Order"
-                        >
-                          <Trash2 className="w-4 h-4" />
-                        </button>
-
-                        {(order.status === 'CONFIRMED' || order.status === 'PARTIALLY_CONVERTED') && onNavigateToInvoice && (
+                      </td>
+                      <td className="py-3.5 px-4 font-mono font-medium text-blue-600">
+                        {order.orderNumber}
+                      </td>
+                      <td className="py-3.5 px-4 text-slate-600">
+                        {new Date(order.orderDate).toLocaleDateString()}
+                      </td>
+                      <td className="py-3.5 px-4">
+                        <div className="font-medium text-slate-900">{order.partyName}</div>
+                        <div className="text-xs text-slate-400 font-mono">{order.partyGstin || order.partyState}</div>
+                      </td>
+                      <td className="py-3.5 px-4">{getStatusBadge(order.status)}</td>
+                      <td className="py-3.5 px-4 text-right font-mono text-slate-700">
+                        ₹{parseFloat(String(order.taxableAmount)).toLocaleString('en-IN', { minimumFractionDigits: 2 })}
+                      </td>
+                      <td className="py-3.5 px-4 text-right font-mono font-semibold text-slate-900">
+                        ₹{parseFloat(String(order.grandTotal)).toLocaleString('en-IN', { minimumFractionDigits: 2 })}
+                      </td>
+                      <td className="py-3.5 px-4 text-center">
+                        <div className="flex items-center justify-center gap-1.5">
                           <button
-                            id={`btn-convert-order-${order.id}`}
-                            onClick={() => onNavigateToInvoice(order.id)}
-                            className="flex items-center gap-1 px-2.5 py-1 text-xs font-medium text-emerald-700 bg-emerald-50 hover:bg-emerald-100 rounded border border-emerald-200 transition"
-                            title="Convert to Sales Invoice"
+                            type="button"
+                            id={`btn-view-order-${order.id}`}
+                            onClick={() => {
+                              setSelectedOrder(order);
+                              setIsDetailOpen(true);
+                            }}
+                            className="p-1.5 text-slate-600 hover:text-blue-600 hover:bg-blue-50 rounded transition"
+                            title="View Details"
                           >
-                            <ArrowRight className="w-3.5 h-3.5" />
-                            Invoice
+                            <Eye className="w-4 h-4" />
                           </button>
-                        )}
-                      </div>
-                    </td>
-                  </tr>
-                ))}
+
+                          <button
+                            type="button"
+                            id={`btn-print-preview-order-${order.id}`}
+                            onClick={() => handleOpenPrintPreview(order)}
+                            className="p-1.5 text-slate-500 hover:text-slate-900 hover:bg-slate-100 rounded transition"
+                            title="Print Preview / Export PDF"
+                          >
+                            <Printer className="w-4 h-4" />
+                          </button>
+
+                          <button
+                            type="button"
+                            id={`btn-delete-order-${order.id}`}
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              promptDeleteOrder(order);
+                            }}
+                            className="p-1.5 text-slate-400 hover:text-rose-600 hover:bg-rose-50 rounded transition cursor-pointer"
+                            title="Delete Sales Order"
+                          >
+                            <Trash2 className="w-4 h-4" />
+                          </button>
+
+                          {(order.status === 'CONFIRMED' || order.status === 'PARTIALLY_CONVERTED') && onNavigateToInvoice && (
+                            <button
+                              type="button"
+                              id={`btn-convert-order-${order.id}`}
+                              onClick={() => onNavigateToInvoice(order.id)}
+                              className="flex items-center gap-1 px-2.5 py-1 text-xs font-medium text-emerald-700 bg-emerald-50 hover:bg-emerald-100 rounded border border-emerald-200 transition"
+                              title="Convert to Sales Invoice"
+                            >
+                              <ArrowRight className="w-3.5 h-3.5" />
+                              Invoice
+                            </button>
+                          )}
+                        </div>
+                      </td>
+                    </tr>
+                  );
+                })}
               </tbody>
             </table>
           </div>
@@ -1337,9 +1542,10 @@ export const SalesOrdersPage: React.FC<{ onNavigateToInvoice?: (orderId: string)
 
                 {(selectedOrder.status === 'CONFIRMED' || selectedOrder.status === 'DRAFT') && (
                   <button
-                    onClick={() => handleCancelOrder(selectedOrder.id)}
+                    id="btn-cancel-order-modal"
+                    onClick={() => promptCancelOrder(selectedOrder)}
                     disabled={submitting}
-                    className="px-4 py-2 bg-rose-50 hover:bg-rose-100 text-rose-700 text-xs font-semibold rounded-lg border border-rose-200 transition"
+                    className="px-4 py-2 bg-rose-50 hover:bg-rose-100 text-rose-700 text-xs font-semibold rounded-lg border border-rose-200 transition cursor-pointer"
                   >
                     Cancel Order
                   </button>
@@ -1347,9 +1553,9 @@ export const SalesOrdersPage: React.FC<{ onNavigateToInvoice?: (orderId: string)
 
                 <button
                   id="btn-delete-order-modal"
-                  onClick={() => handleDeleteOrder(selectedOrder.id, selectedOrder.orderNumber)}
+                  onClick={() => promptDeleteOrder(selectedOrder)}
                   disabled={submitting}
-                  className="px-4 py-2 bg-rose-600 hover:bg-rose-700 text-white text-xs font-semibold rounded-lg transition flex items-center gap-1.5 shadow-sm"
+                  className="px-4 py-2 bg-rose-600 hover:bg-rose-700 text-white text-xs font-semibold rounded-lg transition flex items-center gap-1.5 shadow-sm cursor-pointer"
                 >
                   <Trash2 className="w-3.5 h-3.5" />
                   Delete Order
@@ -1404,6 +1610,261 @@ export const SalesOrdersPage: React.FC<{ onNavigateToInvoice?: (orderId: string)
             />
           )}
         </PrintPreviewModal>
+      )}
+
+      {/* DELETE SALES ORDER CONFIRMATION MODAL */}
+      {orderToDelete && (
+        <div
+          id="modal-delete-sales-order"
+          className="fixed inset-0 z-[70] flex items-center justify-center bg-slate-900/60 backdrop-blur-sm p-4"
+        >
+          <div className="bg-white rounded-2xl max-w-md w-full p-6 shadow-2xl border border-rose-100 animate-in fade-in zoom-in-95 duration-150">
+            <div className="flex items-start gap-3.5">
+              <div className="p-3 bg-rose-100 text-rose-600 rounded-full shrink-0">
+                <Trash2 className="w-6 h-6" />
+              </div>
+              <div className="flex-1">
+                <h3 className="text-base font-bold text-slate-900">
+                  Delete Sales Order
+                </h3>
+                <p className="text-xs text-slate-500 font-mono mt-0.5">
+                  Order #{orderToDelete.orderNumber}
+                </p>
+              </div>
+            </div>
+
+            <p className="text-xs text-slate-600 mt-3.5 leading-relaxed">
+              Are you sure you want to permanently delete Sales Order{' '}
+              <span className="font-semibold text-slate-800">#{orderToDelete.orderNumber}</span>
+              {orderToDelete.partyName ? ` for ${orderToDelete.partyName}` : ''}?
+            </p>
+
+            <div className="mt-3 p-3 bg-amber-50 border border-amber-200 rounded-xl text-xs text-amber-900 space-y-1">
+              <p className="font-semibold flex items-center gap-1.5">
+                <AlertCircle className="w-4 h-4 text-amber-600 shrink-0" />
+                <span>Inventory &amp; Audit Safeguard</span>
+              </p>
+              <p className="text-[11px] text-amber-800 leading-normal">
+                Any reserved optical batch stock allocated to this sales order will be immediately released back to available inventory.
+              </p>
+            </div>
+
+            {deleteError && (
+              <div className="mt-3 p-3 bg-rose-50 border border-rose-200 rounded-xl text-xs text-rose-800 flex items-start gap-2">
+                <AlertCircle className="w-4 h-4 text-rose-600 shrink-0 mt-0.5" />
+                <p className="font-medium">{deleteError}</p>
+              </div>
+            )}
+
+            <div className="flex items-center justify-end gap-2.5 mt-5 pt-3 border-t border-slate-100">
+              <button
+                type="button"
+                disabled={deleteLoading}
+                onClick={() => {
+                  setOrderToDelete(null);
+                  setDeleteError(null);
+                }}
+                className="px-4 py-2 text-xs font-semibold text-slate-600 hover:bg-slate-100 rounded-lg transition-colors cursor-pointer"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                id="btn-confirm-delete-order"
+                disabled={deleteLoading}
+                onClick={confirmDeleteOrder}
+                className="inline-flex items-center gap-1.5 px-4 py-2 text-xs font-semibold text-white bg-rose-600 hover:bg-rose-700 rounded-lg shadow-sm disabled:opacity-50 transition-colors cursor-pointer"
+              >
+                {deleteLoading ? (
+                  <>
+                    <div className="w-3.5 h-3.5 border-2 border-white/30 border-t-white rounded-full animate-spin" />
+                    <span>Deleting...</span>
+                  </>
+                ) : (
+                  <>
+                    <Trash2 className="w-3.5 h-3.5" />
+                    <span>Confirm Delete</span>
+                  </>
+                )}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* BULK DELETE SALES ORDERS CONFIRMATION MODAL */}
+      {showBulkDeleteModal && selectedOrderIds.size > 0 && (
+        <div
+          id="modal-bulk-delete-sales-orders"
+          className="fixed inset-0 z-[70] flex items-center justify-center bg-slate-900/60 backdrop-blur-sm p-4"
+        >
+          <div className="bg-white rounded-2xl max-w-md w-full p-6 shadow-2xl border border-rose-100 animate-in fade-in zoom-in-95 duration-150">
+            <div className="flex items-start gap-3.5">
+              <div className="p-3 bg-rose-100 text-rose-600 rounded-full shrink-0">
+                <Trash2 className="w-6 h-6" />
+              </div>
+              <div className="flex-1">
+                <h3 className="text-base font-bold text-slate-900">
+                  Delete {selectedOrderIds.size} Sales Orders
+                </h3>
+                <p className="text-xs text-slate-500 mt-0.5">
+                  Permanent removal and stock reservation release
+                </p>
+              </div>
+            </div>
+
+            <p className="text-xs text-slate-600 mt-3.5 leading-relaxed">
+              Are you sure you want to permanently delete{' '}
+              <span className="font-bold text-slate-900">{selectedOrderIds.size}</span> selected sales order{selectedOrderIds.size > 1 ? 's' : ''}?
+            </p>
+
+            <div className="mt-3 p-3 bg-slate-50 border border-slate-200 rounded-xl text-xs space-y-1.5 max-h-36 overflow-y-auto custom-scrollbar">
+              <span className="text-[11px] font-semibold text-slate-500 uppercase tracking-wider block">Selected Orders:</span>
+              <div className="flex flex-wrap gap-1.5">
+                {orders
+                  .filter(o => selectedOrderIds.has(o.id))
+                  .map(o => (
+                    <span key={o.id} className="px-2 py-0.5 bg-white border border-slate-200 rounded text-slate-700 font-mono text-[11px]">
+                      {o.orderNumber}
+                    </span>
+                  ))}
+              </div>
+            </div>
+
+            <div className="mt-3 p-3 bg-amber-50 border border-amber-200 rounded-xl text-xs text-amber-900 space-y-1">
+              <p className="font-semibold flex items-center gap-1.5">
+                <AlertCircle className="w-4 h-4 text-amber-600 shrink-0" />
+                <span>Inventory Safeguard</span>
+              </p>
+              <p className="text-[11px] text-amber-800 leading-normal">
+                Any reserved optical batch stock held by these sales orders will be released back to available stock immediately.
+              </p>
+            </div>
+
+            {bulkDeleteError && (
+              <div className="mt-3 p-3 bg-rose-50 border border-rose-200 rounded-xl text-xs text-rose-800 flex items-start gap-2">
+                <AlertCircle className="w-4 h-4 text-rose-600 shrink-0 mt-0.5" />
+                <p className="font-medium">{bulkDeleteError}</p>
+              </div>
+            )}
+
+            <div className="flex items-center justify-end gap-2.5 mt-5 pt-3 border-t border-slate-100">
+              <button
+                type="button"
+                disabled={bulkDeleteLoading}
+                onClick={() => {
+                  setShowBulkDeleteModal(false);
+                  setBulkDeleteError(null);
+                }}
+                className="px-4 py-2 text-xs font-semibold text-slate-600 hover:bg-slate-100 rounded-lg transition-colors cursor-pointer"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                id="btn-confirm-bulk-delete-orders"
+                disabled={bulkDeleteLoading}
+                onClick={handleConfirmBulkDelete}
+                className="inline-flex items-center gap-1.5 px-4 py-2 text-xs font-semibold text-white bg-rose-600 hover:bg-rose-700 rounded-lg shadow-sm disabled:opacity-50 transition-colors cursor-pointer"
+              >
+                {bulkDeleteLoading ? (
+                  <>
+                    <div className="w-3.5 h-3.5 border-2 border-white/30 border-t-white rounded-full animate-spin" />
+                    <span>Deleting...</span>
+                  </>
+                ) : (
+                  <>
+                    <Trash2 className="w-3.5 h-3.5" />
+                    <span>Confirm Delete ({selectedOrderIds.size})</span>
+                  </>
+                )}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* CANCEL SALES ORDER CONFIRMATION MODAL */}
+      {orderToCancel && (
+        <div
+          id="modal-cancel-sales-order"
+          className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/60 backdrop-blur-xs p-4"
+        >
+          <div className="bg-white rounded-2xl max-w-md w-full p-6 shadow-2xl border border-slate-200 animate-in fade-in zoom-in-95 duration-150">
+            <div className="flex items-start gap-3.5">
+              <div className="p-3 bg-amber-100 text-amber-700 rounded-full shrink-0">
+                <RotateCcw className="w-6 h-6" />
+              </div>
+              <div className="flex-1">
+                <h3 className="text-base font-bold text-slate-900">
+                  Cancel Sales Order
+                </h3>
+                <p className="text-xs text-slate-500 font-mono mt-0.5">
+                  Order #{orderToCancel.orderNumber}
+                </p>
+              </div>
+            </div>
+
+            <p className="text-xs text-slate-600 mt-3.5 leading-relaxed">
+              Cancelling will release reserved stock while keeping the voucher recorded in the audit trail as{' '}
+              <span className="font-semibold text-slate-800">CANCELLED</span>.
+            </p>
+
+            <div className="mt-3.5">
+              <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-1.5">
+                Cancellation Reason * (Audit Trail)
+              </label>
+              <textarea
+                id="input-cancel-order-reason"
+                rows={3}
+                value={cancelReason}
+                onChange={e => setCancelReason(e.target.value)}
+                placeholder="e.g. Customer cancelled prescription, ordered wrong lens type..."
+                className="w-full text-xs p-2.5 rounded-lg border border-slate-300 focus:outline-none focus:ring-2 focus:ring-amber-500/30 focus:border-amber-500"
+              />
+            </div>
+
+            {cancelError && (
+              <div className="mt-3 p-3 bg-rose-50 border border-rose-200 rounded-xl text-xs text-rose-800 flex items-start gap-2">
+                <AlertCircle className="w-4 h-4 text-rose-600 shrink-0 mt-0.5" />
+                <p className="font-medium">{cancelError}</p>
+              </div>
+            )}
+
+            <div className="flex items-center justify-end gap-2.5 mt-5 pt-3 border-t border-slate-100">
+              <button
+                type="button"
+                disabled={cancelLoading}
+                onClick={() => {
+                  setOrderToCancel(null);
+                  setCancelError(null);
+                }}
+                className="px-4 py-2 text-xs font-semibold text-slate-600 hover:bg-slate-100 rounded-lg transition-colors cursor-pointer"
+              >
+                Close
+              </button>
+              <button
+                type="button"
+                id="btn-confirm-cancel-order"
+                disabled={cancelLoading || !cancelReason.trim()}
+                onClick={confirmCancelOrder}
+                className="inline-flex items-center gap-1.5 px-4 py-2 text-xs font-semibold text-white bg-amber-600 hover:bg-amber-700 rounded-lg shadow-sm disabled:opacity-50 transition-colors cursor-pointer"
+              >
+                {cancelLoading ? (
+                  <>
+                    <div className="w-3.5 h-3.5 border-2 border-white/30 border-t-white rounded-full animate-spin" />
+                    <span>Cancelling...</span>
+                  </>
+                ) : (
+                  <>
+                    <RotateCcw className="w-3.5 h-3.5" />
+                    <span>Confirm Cancel</span>
+                  </>
+                )}
+              </button>
+            </div>
+          </div>
+        </div>
       )}
     </div>
   );

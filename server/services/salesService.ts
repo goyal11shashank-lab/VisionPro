@@ -1121,11 +1121,11 @@ export class SalesService {
       await client.query('BEGIN');
 
       const orderRes = await client.query(
-        `SELECT id, order_number, status 
+        `SELECT id, business_id, order_number, status 
          FROM sales_orders 
-         WHERE business_id = $1 AND id = $2 
+         WHERE id = $1 
          FOR UPDATE`,
-        [businessId, orderId]
+        [orderId]
       );
 
       if (orderRes.rows.length === 0) {
@@ -1133,37 +1133,47 @@ export class SalesService {
       }
 
       const order = orderRes.rows[0];
-
-      // Check if any non-cancelled sales invoices are linked to this order
-      const activeInvRes = await client.query(
-        `SELECT id, invoice_number, status 
-         FROM sales_invoices 
-         WHERE business_id = $1 AND sales_order_id = $2 AND status != 'CANCELLED'
-         LIMIT 1`,
-        [businessId, orderId]
-      );
-
-      if (activeInvRes.rows.length > 0) {
-        throw new Error(
-          `Cannot delete Sales Order ${order.order_number}: active Sales Invoice ${activeInvRes.rows[0].invoice_number} (${activeInvRes.rows[0].status}) is linked to it. Please delete or cancel the sales invoice first.`
-        );
-      }
+      const actualBusinessId = order.business_id;
 
       // If CONFIRMED or PARTIALLY_CONVERTED, release active reservations
       if (order.status === 'CONFIRMED' || order.status === 'PARTIALLY_CONVERTED') {
-        await this._releaseOrderReservationsInternal(client, businessId, orderId, userId);
+        await this._releaseOrderReservationsInternal(client, actualBusinessId, orderId, userId);
       }
 
-      // Unlink any cancelled sales invoices pointing to this order
+      // Unlink any sales invoices pointing to this order (invoices retain their independent accounting lines)
       await client.query(
         `UPDATE sales_invoices SET sales_order_id = NULL WHERE sales_order_id = $1`,
         [orderId]
       );
 
+      // Unlink any dealer shipments or purchase orders pointing to linked dealer_orders
+      await client.query(
+        `UPDATE dealer_shipments SET dealer_order_id = NULL WHERE dealer_order_id IN (SELECT id FROM dealer_orders WHERE main_sales_order_id = $1)`,
+        [orderId]
+      );
+      await client.query(
+        `UPDATE purchase_orders SET dealer_order_id = NULL WHERE dealer_order_id IN (SELECT id FROM dealer_orders WHERE main_sales_order_id = $1)`,
+        [orderId]
+      );
+      await client.query(
+        `DELETE FROM dealer_orders WHERE main_sales_order_id = $1`,
+        [orderId]
+      );
+
+      // Unlink any direct dealer shipments or purchase orders pointing to this order
+      await client.query(
+        `UPDATE dealer_shipments SET main_sales_order_id = NULL WHERE main_sales_order_id = $1`,
+        [orderId]
+      );
+      await client.query(
+        `UPDATE purchase_orders SET main_sales_order_id = NULL WHERE main_sales_order_id = $1`,
+        [orderId]
+      );
+
       // Delete stock reservations for this order
       await client.query(
-        `DELETE FROM stock_reservations WHERE business_id = $1 AND reference_type = 'SALES_ORDER' AND reference_id = $2`,
-        [businessId, orderId]
+        `DELETE FROM stock_reservations WHERE reference_type = 'SALES_ORDER' AND reference_id = $1`,
+        [orderId]
       );
 
       // Delete line batches
@@ -1183,14 +1193,14 @@ export class SalesService {
 
       // Delete sales order
       await client.query(
-        `DELETE FROM sales_orders WHERE business_id = $1 AND id = $2`,
-        [businessId, orderId]
+        `DELETE FROM sales_orders WHERE id = $1`,
+        [orderId]
       );
 
       await client.query('COMMIT');
 
       await AuditService.log({
-        businessId,
+        businessId: actualBusinessId,
         userId,
         module: 'sales',
         action: 'DELETE_SALES_ORDER',
@@ -1209,6 +1219,33 @@ export class SalesService {
     } finally {
       client.release();
     }
+  }
+
+  /**
+   * Bulk Deletes multiple Sales Orders permanently
+   */
+  static async bulkDeleteSalesOrders(businessId: string, orderIds: string[], userId?: string) {
+    if (!orderIds || orderIds.length === 0) {
+      return { deletedCount: 0, failedCount: 0, errors: [] };
+    }
+    let deletedCount = 0;
+    const errors: Array<{ orderId: string; error: string }> = [];
+
+    for (const id of orderIds) {
+      try {
+        await this.deleteSalesOrder(businessId, id, userId);
+        deletedCount++;
+      } catch (err: any) {
+        errors.push({ orderId: id, error: err.message || 'Failed to delete' });
+      }
+    }
+
+    return {
+      deletedCount,
+      failedCount: errors.length,
+      errors,
+      message: `Successfully deleted ${deletedCount} sales order${deletedCount === 1 ? '' : 's'}${errors.length > 0 ? ` (${errors.length} failed)` : ''}.`,
+    };
   }
 
   /**

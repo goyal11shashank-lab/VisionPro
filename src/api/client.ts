@@ -78,11 +78,11 @@ export async function apiRequest<T = any>(
     ...(options.headers as Record<string, string>),
   };
 
-  if (token) {
+  if (!headers['Authorization'] && token) {
     headers['Authorization'] = `Bearer ${token}`;
   }
 
-  if (bizId) {
+  if (!headers['X-Business-Id'] && bizId) {
     headers['X-Business-Id'] = bizId;
   }
 

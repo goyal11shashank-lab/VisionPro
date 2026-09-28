@@ -33,6 +33,7 @@ export const OpticalBatchesPage: React.FC<OpticalBatchesPageProps> = ({ onNaviga
   const [loading, setLoading] = useState<boolean>(true);
   const [error, setError] = useState<string | null>(null);
   const [feedbackMessage, setFeedbackMessage] = useState<{ type: 'success' | 'error'; text: string; details?: string[] } | null>(null);
+  const [batchesRefreshKey, setBatchesRefreshKey] = useState<number>(0);
 
   // Modals state
   // 1. Stock Item Ledger Modal
@@ -198,6 +199,7 @@ export const OpticalBatchesPage: React.FC<OpticalBatchesPageProps> = ({ onNaviga
         text: res.message || `Optical Batch "${batchToDelete.barcode}" was deleted successfully.`
       });
       setBatchToDelete(null);
+      setBatchesRefreshKey(k => k + 1);
       setTimeout(() => setFeedbackMessage(null), 6000);
       fetchStockItems();
     } catch (err: any) {
@@ -226,6 +228,7 @@ export const OpticalBatchesPage: React.FC<OpticalBatchesPageProps> = ({ onNaviga
       setBatchToDelete(null);
       setDeleteBlockedInfo(null);
       setInspectBatch(null);
+      setBatchesRefreshKey(k => k + 1);
       setTimeout(() => setFeedbackMessage(null), 8000);
       fetchStockItems();
     } catch (err: any) {
@@ -481,7 +484,9 @@ export const OpticalBatchesPage: React.FC<OpticalBatchesPageProps> = ({ onNaviga
 
       {viewMode === 'BATCHES' && selectedStockItem && (
         <StockItemBatchesView
+          key={`batches-view-${selectedStockItem.id}-${batchesRefreshKey}`}
           stockItem={selectedStockItem}
+          refreshKey={batchesRefreshKey}
           onBackToItems={handleBackToItems}
           onSelectBatch={handleSelectBatch}
           onOpenItemLedger={handleOpenItemLedger}
@@ -490,7 +495,10 @@ export const OpticalBatchesPage: React.FC<OpticalBatchesPageProps> = ({ onNaviga
           onDeleteBatch={setBatchToDelete}
           onInspectBatch={handleInspectDependencies}
           onOpenImportModal={() => setShowImportModal(true)}
-          onBatchesUpdated={fetchStockItems}
+          onBatchesUpdated={() => {
+            fetchStockItems();
+            setBatchesRefreshKey(k => k + 1);
+          }}
         />
       )}
 
