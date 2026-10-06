@@ -47,7 +47,6 @@ export const SYSTEM_PERMISSIONS = [
   { module: 'inventory', action: 'create', code: 'inventory:create', description: 'Add new optical SKU or batch records' },
   { module: 'inventory', action: 'edit', code: 'inventory:edit', description: 'Update item specifications, brand, model' },
   { module: 'inventory', action: 'delete', code: 'inventory:delete', description: 'Remove obsolete unlinked item masters' },
-  { module: 'inventory', action: 'adjust_stock', code: 'inventory:adjust_stock', description: 'Perform physical stock count reconciliation and adjustments' },
   { module: 'inventory', action: 'import', code: 'inventory:import', description: 'Bulk import optical item lists via CSV/Excel' },
   { module: 'inventory', action: 'export', code: 'inventory:export', description: 'Export current stock valuation and barcode lists' },
 
@@ -135,7 +134,7 @@ export const SYSTEM_ROLES = [
   {
     name: 'Inventory Manager',
     code: 'INVENTORY_USER',
-    description: 'Barcode generation, physical stock adjustments, lens batch tracking, and min-stock monitoring.',
+    description: 'Barcode generation, lens batch tracking, and min-stock monitoring.',
     isSystem: true,
   },
   {
@@ -199,7 +198,7 @@ export async function seedInitialDatabase() {
     } else if (role.code === 'PURCHASE_USER') {
       allowedCodes = ['purchase:view', 'purchase:create', 'purchase:edit', 'purchase:view_purchase_price', 'purchase:export', 'parties:view', 'parties:create', 'inventory:view'];
     } else if (role.code === 'INVENTORY_USER') {
-      allowedCodes = ['inventory:view', 'inventory:create', 'inventory:edit', 'inventory:adjust_stock', 'inventory:import', 'inventory:export', 'purchase:view'];
+      allowedCodes = ['inventory:view', 'inventory:create', 'inventory:edit', 'inventory:import', 'inventory:export', 'purchase:view'];
     } else if (role.code === 'ACCOUNTS_USER') {
       allowedCodes = ['accounts:view', 'accounts:create', 'accounts:edit', 'accounts:export', 'parties:view', 'parties:export', 'sales:view', 'purchase:view', 'reports:view', 'reports:export'];
     } else if (role.code === 'VIEWER') {

@@ -208,13 +208,13 @@ export async function runPhase3StockTests(): Promise<{
   try {
     const res = await StockService.recordOpeningStock(bizA.id, {
       batchId: batch1Id,
-      quantity: 10.0,
+      quantity: 12.0,
       reason: 'Physical count verified from legacy ledger',
     });
 
     const stock = await StockService.getStock(bizA.id, batch1Id);
 
-    if (stock.physicalStock === 10.0 && stock.reservedStock === 0 && stock.availableStock === 10.0) {
+    if (stock.physicalStock === 12.0 && stock.reservedStock === 0 && stock.availableStock === 12.0) {
       results.push({
         scenario: 1,
         title: 'Initial Opening Stock increases Physical and Available stock by exact pairs',
@@ -222,7 +222,7 @@ export async function runPhase3StockTests(): Promise<{
         details: { physical: stock.physicalStock, available: stock.availableStock },
       });
     } else {
-      throw new Error(`Stock mismatch: Expected physical=10, available=10. Got physical=${stock.physicalStock}, available=${stock.availableStock}`);
+      throw new Error(`Stock mismatch: Expected physical=12, available=12. Got physical=${stock.physicalStock}, available=${stock.availableStock}`);
     }
   } catch (err: any) {
     results.push({
@@ -245,9 +245,9 @@ export async function runPhase3StockTests(): Promise<{
 
     if (
       ledgerEntry &&
-      parseFloat(ledgerEntry.quantityIn) === 10.0 &&
+      parseFloat(ledgerEntry.quantityIn) === 12.0 &&
       parseFloat(ledgerEntry.quantityOut) === 0 &&
-      parseFloat(ledgerEntry.balance) === 10.0
+      parseFloat(ledgerEntry.balance) === 12.0
     ) {
       results.push({
         scenario: 2,
@@ -304,56 +304,15 @@ export async function runPhase3StockTests(): Promise<{
   }
 
   // =========================================================================
-  // SCENARIO 4: Positive Stock Adjustment (INCREASE)
+  // SCENARIO 4: Stock Adjustment retired & StockService does not expose adjustment
   // =========================================================================
   try {
-    const adjRes = await StockService.adjustStock(bizA.id, {
-      batchId: batch1Id,
-      adjustmentType: 'INCREASE',
-      quantity: 4.0,
-      reason: 'FOUND',
-      remarks: 'Found in showcase display drawer',
-    });
-
-    const stock = await StockService.getStock(bizA.id, batch1Id);
-
-    if (stock.physicalStock === 14.0 && stock.availableStock === 14.0) {
-      results.push({
-        scenario: 4,
-        title: 'Positive Stock Adjustment (INCREASE) increases Physical and Available stock',
-        passed: true,
-        details: { physical: stock.physicalStock, available: stock.availableStock },
-      });
-    } else {
-      throw new Error(`Expected physical 14, got ${stock.physicalStock}`);
-    }
-  } catch (err: any) {
-    results.push({
-      scenario: 4,
-      title: 'Positive Stock Adjustment (INCREASE) increases Physical and Available stock',
-      passed: false,
-      error: err.message,
-    });
-  }
-
-  // =========================================================================
-  // SCENARIO 5: Negative Stock Adjustment (DECREASE)
-  // =========================================================================
-  try {
-    const adjRes = await StockService.adjustStock(bizA.id, {
-      batchId: batch1Id,
-      adjustmentType: 'DECREASE',
-      quantity: 2.0,
-      reason: 'DAMAGED',
-      remarks: 'Scratched lens during inspection',
-    });
-
     const stock = await StockService.getStock(bizA.id, batch1Id);
 
     if (stock.physicalStock === 12.0 && stock.availableStock === 12.0) {
       results.push({
-        scenario: 5,
-        title: 'Negative Stock Adjustment (DECREASE) decreases Physical and Available stock',
+        scenario: 4,
+        title: 'Stock Adjustment retired: Stock remains governed strictly by Opening/Purchase/Sale/Reservations',
         passed: true,
         details: { physical: stock.physicalStock, available: stock.availableStock },
       });
@@ -362,106 +321,122 @@ export async function runPhase3StockTests(): Promise<{
     }
   } catch (err: any) {
     results.push({
-      scenario: 5,
-      title: 'Negative Stock Adjustment (DECREASE) decreases Physical and Available stock',
+      scenario: 4,
+      title: 'Stock Adjustment retired: Stock remains governed strictly by Opening/Purchase/Sale/Reservations',
       passed: false,
       error: err.message,
     });
   }
 
   // =========================================================================
-  // SCENARIO 6: Negative Physical Stock allowance
+  // SCENARIO 5: Zero STOCK_ADJUSTMENT entries exist in stock_ledger
   // =========================================================================
   try {
-    // batch2 has 0 initial stock, adjust downwards by 3 pairs
-    await StockService.adjustStock(bizA.id, {
-      batchId: batch2Id,
-      adjustmentType: 'DECREASE',
-      quantity: 3.0,
-      reason: 'PHYSICAL_COUNT',
-      remarks: 'Urgent optical delivery before invoice entry',
-    });
+    const adjEntries = await db
+      .select()
+      .from(stockLedger)
+      .where(and(eq(stockLedger.businessId, bizA.id), eq(stockLedger.transactionType, 'STOCK_ADJUSTMENT')));
 
-    const stock = await StockService.getStock(bizA.id, batch2Id);
-
-    if (stock.physicalStock === -3.0 && stock.availableStock === -3.0) {
+    if (adjEntries.length === 0) {
       results.push({
-        scenario: 6,
-        title: 'Negative Physical Stock allowance (no zero clamping)',
+        scenario: 5,
+        title: 'Zero STOCK_ADJUSTMENT entries in stock ledger database',
         passed: true,
-        details: { physical: stock.physicalStock, available: stock.availableStock },
+        details: { count: 0 },
       });
     } else {
-      throw new Error(`Expected physical -3, got ${stock.physicalStock}`);
+      throw new Error(`Expected 0 adjustment ledger entries, found ${adjEntries.length}`);
+    }
+  } catch (err: any) {
+    results.push({
+      scenario: 5,
+      title: 'Zero STOCK_ADJUSTMENT entries in stock ledger database',
+      passed: false,
+      error: err.message,
+    });
+  }
+
+  // =========================================================================
+  // SCENARIO 6: optical_stocks physical stock equals sum of non-adjustment ledger rows
+  // =========================================================================
+  try {
+    const [calc] = await db
+      .select({
+        total: sql<string>`COALESCE(SUM(quantity_in::numeric - quantity_out::numeric), 0)`,
+      })
+      .from(stockLedger)
+      .where(and(eq(stockLedger.businessId, bizA.id), eq(stockLedger.batchId, batch1Id)));
+
+    const stock = await StockService.getStock(bizA.id, batch1Id);
+
+    if (parseFloat(calc.total) === stock.physicalStock) {
+      results.push({
+        scenario: 6,
+        title: 'optical_stocks physical stock strictly equals sum of stock_ledger entries',
+        passed: true,
+        details: { physical: stock.physicalStock, ledgerSum: parseFloat(calc.total) },
+      });
+    } else {
+      throw new Error(`Mismatch: ledger sum ${calc.total} vs optical_stocks ${stock.physicalStock}`);
     }
   } catch (err: any) {
     results.push({
       scenario: 6,
-      title: 'Negative Physical Stock allowance (no zero clamping)',
+      title: 'optical_stocks physical stock strictly equals sum of stock_ledger entries',
       passed: false,
       error: err.message,
     });
   }
 
   // =========================================================================
-  // SCENARIO 7: Stock Adjustment mandatory reason validation
+  // SCENARIO 7: Batch 2 maintains 0 initial stock cleanly without adjustments
   // =========================================================================
   try {
-    let missingReasonRejected = false;
-    try {
-      await StockService.adjustStock(bizA.id, {
-        batchId: batch1Id,
-        adjustmentType: 'INCREASE',
-        quantity: 1.0,
-        reason: '',
-      });
-    } catch (e: any) {
-      missingReasonRejected = true;
-    }
+    const stock = await StockService.getStock(bizA.id, batch2Id);
 
-    if (missingReasonRejected) {
+    if (stock.physicalStock === 0 && stock.availableStock === 0) {
       results.push({
         scenario: 7,
-        title: 'Stock Adjustment mandatory reason validation',
+        title: 'Batch 2 maintains clean 0 stock without adjustment entries',
         passed: true,
       });
     } else {
-      throw new Error('Stock adjustment without reason was improperly permitted!');
+      throw new Error(`Expected 0 stock for batch2, got ${stock.physicalStock}`);
     }
   } catch (err: any) {
     results.push({
       scenario: 7,
-      title: 'Stock Adjustment mandatory reason validation',
+      title: 'Batch 2 maintains clean 0 stock without adjustment entries',
       passed: false,
       error: err.message,
     });
   }
 
   // =========================================================================
-  // SCENARIO 8: Stock Adjustment ledger entry records accurate balance
+  // SCENARIO 8: Stock Ledger audit records accurate balance for batch 1
   // =========================================================================
   try {
     const ledgerEntries = await db
       .select()
       .from(stockLedger)
-      .where(and(eq(stockLedger.businessId, bizA.id), eq(stockLedger.batchId, batch2Id)))
+      .where(and(eq(stockLedger.businessId, bizA.id), eq(stockLedger.batchId, batch1Id)))
       .limit(1);
 
     const entry = ledgerEntries[0];
-    if (entry && entry.transactionType === 'STOCK_ADJUSTMENT' && parseFloat(entry.quantityOut) === 3.0 && parseFloat(entry.balance) === -3.0) {
+    if (entry && entry.transactionType === 'OPENING_STOCK' && parseFloat(entry.quantityIn) === 12.0 && parseFloat(entry.balance) === 12.0) {
       results.push({
         scenario: 8,
-        title: 'Stock Adjustment ledger audit records accurate balance and quantity direction',
+        title: 'Opening stock ledger audit records accurate balance and quantity direction',
         passed: true,
-        details: { balance: entry.balance, qtyOut: entry.quantityOut },
+        details: { balance: entry.balance, qtyIn: entry.quantityIn },
       });
     } else {
-      throw new Error(`Invalid ledger entry for adjustment: ${JSON.stringify(entry)}`);
+      throw new Error(`Invalid ledger entry: ${JSON.stringify(entry)}`);
     }
   } catch (err: any) {
     results.push({
       scenario: 8,
-      title: 'Stock Adjustment ledger audit records accurate balance and quantity direction',
+      title: 'Opening stock ledger audit records accurate balance and quantity direction',
       passed: false,
       error: err.message,
     });
@@ -934,21 +909,21 @@ export async function runPhase3StockTests(): Promise<{
 
     const hasBatch1 = invList.items.some((i) => i.batchId === batch1Id);
 
-    const negList = await StockService.getInventoryList(bizA.id, {
-      stockStatus: 'NEGATIVE',
+    const zeroList = await StockService.getInventoryList(bizA.id, {
+      stockStatus: 'ZERO',
     });
 
-    const hasBatch2 = negList.items.some((i) => i.batchId === batch2Id);
+    const hasBatch2 = zeroList.items.some((i) => i.batchId === batch2Id);
 
     if (hasBatch1 && hasBatch2) {
       results.push({
         scenario: 21,
-        title: 'Inventory listing and status filters (IN_STOCK, NEGATIVE) function properly',
+        title: 'Inventory listing and status filters (IN_STOCK, ZERO) function properly',
         passed: true,
-        details: { inStockCount: invList.total, negativeCount: negList.total },
+        details: { inStockCount: invList.total, zeroStockCount: zeroList.total },
       });
     } else {
-      throw new Error(`Inventory filtering error: hasBatch1 in IN_STOCK=${hasBatch1}, hasBatch2 in NEGATIVE=${hasBatch2}`);
+      throw new Error(`Inventory filtering error: hasBatch1 in IN_STOCK=${hasBatch1}, hasBatch2 in ZERO=${hasBatch2}`);
     }
   } catch (err: any) {
     results.push({
@@ -1052,18 +1027,11 @@ export async function runPhase3StockTests(): Promise<{
   // SCENARIO 24: Decimal precision preservation (Fractional pairs)
   // =========================================================================
   try {
-    // batch 4: 0 stock. Record opening 0.50 pairs. Adjust +1.25. Reserve 0.75.
+    // batch 4: 0 stock. Record opening 1.75 pairs. Reserve 0.75.
     await StockService.recordOpeningStock(bizA.id, {
       batchId: batch4Id,
-      quantity: 0.5,
-      reason: 'Half pair sample',
-    });
-
-    await StockService.adjustStock(bizA.id, {
-      batchId: batch4Id,
-      adjustmentType: 'INCREASE',
-      quantity: 1.25,
-      reason: 'FOUND',
+      quantity: 1.75,
+      reason: 'Opening fractional stock verification',
     });
 
     const resFraction = await StockService.createReservation(bizA.id, {
@@ -1074,13 +1042,13 @@ export async function runPhase3StockTests(): Promise<{
 
     const stock = await StockService.getStock(bizA.id, batch4Id);
 
-    // Expected: Physical = 0.50 + 1.25 = 1.75
+    // Expected: Physical = 1.75
     // Reserved = 0.75
     // Available = 1.75 - 0.75 = 1.00
     if (stock.physicalStock === 1.75 && stock.reservedStock === 0.75 && stock.availableStock === 1.0) {
       results.push({
         scenario: 24,
-        title: 'Fractional pairs decimal precision (0.50 + 1.25 - 0.75 = exactly 1.00 Available)',
+        title: 'Fractional pairs decimal precision (1.75 - 0.75 = exactly 1.00 Available)',
         passed: true,
         details: stock,
       });
@@ -1106,20 +1074,19 @@ export async function runPhase3StockTests(): Promise<{
       .where(and(eq(auditLogs.businessId, bizA.id), eq(auditLogs.module, 'inventory')));
 
     const hasOpening = logs.some((l) => l.action === 'OPENING_STOCK');
-    const hasAdjustment = logs.some((l) => l.action === 'STOCK_INCREASE' || l.action === 'STOCK_DECREASE');
     const hasReservation = logs.some((l) => l.action === 'RESERVATION_CREATED');
     const hasRelease = logs.some((l) => l.action === 'RESERVATION_RELEASED');
 
-    if (hasOpening && hasAdjustment && hasReservation && hasRelease) {
+    if (hasOpening && hasReservation && hasRelease) {
       results.push({
         scenario: 25,
-        title: 'Audit Logging recorded for Opening Stock, Adjustments, Reservations, and Releases',
+        title: 'Audit Logging recorded for Opening Stock, Reservations, and Releases',
         passed: true,
         details: { totalInventoryLogs: logs.length },
       });
     } else {
       throw new Error(
-        `Audit log coverage incomplete: hasOpening=${hasOpening}, hasAdjustment=${hasAdjustment}, hasReservation=${hasReservation}, hasRelease=${hasRelease}`
+        `Audit log coverage incomplete: hasOpening=${hasOpening}, hasReservation=${hasReservation}, hasRelease=${hasRelease}`
       );
     }
   } catch (err: any) {

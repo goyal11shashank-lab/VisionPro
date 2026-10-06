@@ -35,7 +35,6 @@ export interface MonthlySummary {
   salesValue: number;
   returnIn: number;
   returnOut: number;
-  adjustment: number;
   openingStockEntry: number;
   closingQty: number;
   transactionCount: number;
@@ -645,7 +644,7 @@ export const StockItemLedgerModal: React.FC<StockItemLedgerModalProps> = ({
                       {(ledgerData?.monthlySummaries || []).map((m) => {
                         const totalInwardQty = m.purchaseQty + m.returnIn + m.openingStockEntry;
                         const totalOutwardQty = m.salesQty + m.returnOut;
-                        const netFlow = totalInwardQty - totalOutwardQty + m.adjustment;
+                        const netFlow = totalInwardQty - totalOutwardQty;
 
                         return (
                           <tr

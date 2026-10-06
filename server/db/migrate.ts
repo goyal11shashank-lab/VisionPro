@@ -993,9 +993,6 @@ export const SYSTEM_PERMISSIONS = [
   { module: 'inventory', action: 'create', code: 'inventory:create', description: 'Add new optical SKU or batch records' },
   { module: 'inventory', action: 'edit', code: 'inventory:edit', description: 'Update item specifications, brand, model' },
   { module: 'inventory', action: 'delete', code: 'inventory:delete', description: 'Remove obsolete unlinked item masters' },
-  { module: 'inventory', action: 'adjust', code: 'inventory:adjust', description: 'Perform physical stock count reconciliation and adjustments' },
-  { module: 'inventory', action: 'adjust', code: 'inventory.adjust', description: 'Perform physical stock count reconciliation and adjustments (dot notation)' },
-  { module: 'inventory', action: 'adjust_stock', code: 'inventory:adjust_stock', description: 'Perform physical stock count reconciliation and adjustments (legacy code)' },
   { module: 'inventory', action: 'opening_stock', code: 'inventory:opening_stock', description: 'Post initial opening stock balances for optical batches' },
   { module: 'inventory', action: 'opening_stock', code: 'inventory.opening_stock', description: 'Post initial opening stock balances (dot notation)' },
   { module: 'inventory', action: 'reservation_view', code: 'inventory:reservation:view', description: 'View stock reservations' },
@@ -1119,7 +1116,7 @@ export const SYSTEM_ROLES = [
   {
     name: 'Inventory Manager',
     code: 'INVENTORY_USER',
-    description: 'Barcode generation, physical stock adjustments, lens batch tracking, and min-stock monitoring.',
+    description: 'Barcode generation, lens batch tracking, and min-stock monitoring.',
     isSystem: true,
   },
   {
@@ -1373,9 +1370,6 @@ export async function runMigrations(): Promise<{ success: boolean; message: stri
           'inventory.view',
           'inventory:create',
           'inventory:edit',
-          'inventory:adjust',
-          'inventory.adjust',
-          'inventory:adjust_stock',
           'inventory:opening_stock',
           'inventory.opening_stock',
           'inventory:reservation:view',

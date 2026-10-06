@@ -38,8 +38,8 @@ export const StockItemBatchesView: React.FC<StockItemBatchesViewProps> = ({
   refreshKey,
 }) => {
   const { hasPermission } = useAuth();
-  const canDelete = hasPermission('master:delete') || hasPermission('master:edit');
-  const canEdit = hasPermission('master:edit') || hasPermission('master:create');
+  const canDelete = hasPermission('master:delete') || hasPermission('master.delete') || hasPermission('master:edit') || hasPermission('master.edit') || hasPermission('master:manage') || hasPermission('inventory:delete');
+  const canEdit = hasPermission('master:edit') || hasPermission('master.edit') || hasPermission('master:create') || hasPermission('master:manage');
 
   const [batches, setBatches] = useState<any[]>([]);
   const [totals, setTotals] = useState<{ batchesCount: number; stock: number; reserved: number; available: number }>({

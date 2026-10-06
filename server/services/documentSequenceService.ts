@@ -11,7 +11,6 @@ export type DocumentType =
   | 'PURCHASE_RETURN'
   | 'CUSTOMER_RECEIPT'
   | 'SUPPLIER_PAYMENT'
-  | 'STOCK_ADJUSTMENT'
   | 'DEALER_ORDER'
   | 'DEALER_SHIPMENT'
   | 'DEALER_GRN'
@@ -99,7 +98,6 @@ export class DocumentSequenceService {
       PURCHASE_RETURN: 'purchaseReturn',
       CUSTOMER_RECEIPT: 'customerReceipt',
       SUPPLIER_PAYMENT: 'supplierPayment',
-      STOCK_ADJUSTMENT: 'stockAdjustment',
       DEALER_ORDER: 'dealerOrder',
       DEALER_SHIPMENT: 'dealerShipment',
       DEALER_GRN: 'dealerGoodsReceipt',
@@ -121,7 +119,6 @@ export class DocumentSequenceService {
       PURCHASE_RETURN: 'PR-',
       CUSTOMER_RECEIPT: 'REC-',
       SUPPLIER_PAYMENT: 'PAY-',
-      STOCK_ADJUSTMENT: 'ADJ-',
       DEALER_ORDER: 'DO-',
       DEALER_SHIPMENT: 'SHP-',
       DEALER_GRN: 'GR-',

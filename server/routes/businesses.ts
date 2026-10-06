@@ -474,6 +474,266 @@ router.post('/:id/deactivate', authenticateToken, requireSuperAdmin, async (req:
 });
 
 /**
+ * Helper: Check if business has operational dependencies or is active session
+ */
+async function checkBusinessDeletionSafety(
+  queryable: any,
+  bizId: string,
+  currentBusinessId: string,
+  allDeletingIds: Set<string> = new Set()
+) {
+  if (bizId === currentBusinessId) {
+    return {
+      canDelete: false,
+      reason: 'Cannot delete the business you are currently logged into. Please switch to another business first.',
+      dependencies: [] as Array<{ table: string; label: string; count: number }>,
+    };
+  }
+
+  // Check if any other business references this business as its parent warehouse
+  const childBranchesQuery = await queryable.query(
+    `SELECT id, name FROM businesses WHERE parent_business_id = $1`,
+    [bizId]
+  );
+  const nonDeletingChildren = childBranchesQuery.rows.filter((row: any) => !allDeletingIds.has(row.id));
+  if (nonDeletingChildren.length > 0) {
+    return {
+      canDelete: false,
+      reason: `Referenced as parent warehouse by ${nonDeletingChildren.length} dealer branch(es): ${nonDeletingChildren.map((r: any) => r.name).join(', ')}. Delete or reassign those branches first.`,
+      dependencies: [{ table: 'businesses', label: 'Associated Dealer Branches', count: nonDeletingChildren.length }],
+    };
+  }
+
+  // Perform exhaustive dependency check across operational tables
+  const checkTables = [
+    { table: 'unique_items', label: 'Stock Items' },
+    { table: 'optical_batches', label: 'Optical Batches' },
+    { table: 'stock_ledger', label: 'Stock Ledger Entries' },
+    { table: 'stock_reservations', label: 'Stock Reservations' },
+    { table: 'parties', label: 'Parties / Customers / Suppliers' },
+    { table: 'sales_orders', label: 'Sales Orders' },
+    { table: 'sales_invoices', label: 'Sales Invoices' },
+    { table: 'sales_returns', label: 'Sales Returns' },
+    { table: 'purchase_orders', label: 'Purchase Orders' },
+    { table: 'purchase_invoices', label: 'Purchase Invoices' },
+    { table: 'purchase_returns', label: 'Purchase Returns' },
+    { table: 'payments', label: 'Payment Records' },
+    { table: 'customer_ledgers', label: 'Customer Ledgers' },
+    { table: 'supplier_ledgers', label: 'Supplier Ledgers' },
+    { table: 'dealer_order_history', label: 'Dealer Warehouse Orders' },
+    { table: 'payment_advices', label: 'Payment Advices' },
+  ];
+
+  const dependenciesFound: Array<{ table: string; label: string; count: number }> = [];
+
+  for (const item of checkTables) {
+    try {
+      let countRes;
+      if (item.table === 'dealer_order_history' || item.table === 'payment_advices') {
+        countRes = await queryable.query(
+          `SELECT COUNT(*)::int as cnt FROM "${item.table}" WHERE main_business_id = $1 OR dealer_business_id = $1`,
+          [bizId]
+        );
+      } else {
+        countRes = await queryable.query(
+          `SELECT COUNT(*)::int as cnt FROM "${item.table}" WHERE business_id = $1`,
+          [bizId]
+        );
+      }
+      const cnt = countRes.rows[0]?.cnt || 0;
+      if (cnt > 0) {
+        dependenciesFound.push({ table: item.table, label: item.label, count: cnt });
+      }
+    } catch {
+      // Table might not exist or schema variation; continue safely
+    }
+  }
+
+  if (dependenciesFound.length > 0) {
+    return {
+      canDelete: false,
+      reason: 'This business contains accounting, inventory, party, or transaction records and cannot be permanently deleted. Deactivate the business instead.',
+      dependencies: dependenciesFound,
+    };
+  }
+
+  return {
+    canDelete: true,
+    reason: null,
+    dependencies: [] as Array<{ table: string; label: string; count: number }>,
+  };
+}
+
+/**
+ * Helper: Safely delete business entity and its access records in a transaction
+ */
+async function executeDeleteBusiness(client: any, bizId: string, bizName: string, req: Request) {
+  await client.query(`DELETE FROM role_permissions WHERE role_id IN (SELECT id FROM roles WHERE business_id = $1)`, [bizId]);
+  await client.query(`DELETE FROM user_roles WHERE business_id = $1`, [bizId]);
+  await client.query(`DELETE FROM roles WHERE business_id = $1`, [bizId]);
+  await client.query(`DELETE FROM user_business_access WHERE business_id = $1`, [bizId]);
+  await client.query(`DELETE FROM business_settings WHERE business_id = $1`, [bizId]);
+  await client.query(`DELETE FROM businesses WHERE id = $1`, [bizId]);
+
+  await recordAuditLog({
+    businessId: req.user!.currentBusinessId,
+    userId: req.user!.id,
+    action: 'BUSINESS_DELETED',
+    module: 'BUSINESS',
+    entityType: 'Business',
+    entityId: bizId,
+    previousValue: { id: bizId, name: bizName },
+    req,
+  });
+}
+
+/**
+ * POST /api/businesses/bulk-delete
+ * Delete multiple businesses with dependency safety checks (Super Admin only)
+ */
+router.post('/bulk-delete', authenticateToken, requireSuperAdmin, async (req: Request, res: Response): Promise<void> => {
+  try {
+    const { ids } = req.body;
+    if (!Array.isArray(ids) || ids.length === 0) {
+      res.status(400).json({ error: 'Please provide an array of Business IDs to delete.' });
+      return;
+    }
+
+    const deletingIdsSet = new Set<string>(ids);
+    const deletedIds: string[] = [];
+    const blockedBusinesses: Array<{
+      id: string;
+      name: string;
+      reason: string;
+      dependencies?: Array<{ table: string; label: string; count: number }>;
+    }> = [];
+    const errors: string[] = [];
+
+    // Query all requested businesses
+    const bizRows = await pool.query(
+      `SELECT id, name, parent_business_id, business_type FROM businesses WHERE id = ANY($1::uuid[])`,
+      [ids]
+    );
+    const bizMap = new Map<string, any>();
+    for (const row of bizRows.rows) {
+      bizMap.set(row.id, row);
+    }
+
+    // Sort to process child dealer businesses before parent warehouses if both are being deleted
+    const sortedIds = [...ids].sort((a, b) => {
+      const bizA = bizMap.get(a);
+      const bizB = bizMap.get(b);
+      if (bizA?.parent_business_id && !bizB?.parent_business_id) return -1;
+      if (!bizA?.parent_business_id && bizB?.parent_business_id) return 1;
+      return 0;
+    });
+
+    for (const bizId of sortedIds) {
+      const biz = bizMap.get(bizId);
+      if (!biz) {
+        errors.push(`Business with ID ${bizId} not found.`);
+        continue;
+      }
+
+      const safety = await checkBusinessDeletionSafety(pool, bizId, req.user!.currentBusinessId, deletingIdsSet);
+      if (!safety.canDelete) {
+        blockedBusinesses.push({
+          id: bizId,
+          name: biz.name,
+          reason: safety.reason || 'Deletion blocked by safety checks.',
+          dependencies: safety.dependencies,
+        });
+        continue;
+      }
+
+      const client = await pool.connect();
+      try {
+        await client.query('BEGIN');
+        await executeDeleteBusiness(client, bizId, biz.name, req);
+        await client.query('COMMIT');
+        deletedIds.push(bizId);
+        deletingIdsSet.delete(bizId);
+      } catch (delErr: any) {
+        await client.query('ROLLBACK');
+        errors.push(`Failed to delete business '${biz.name}': ${delErr.message}`);
+      } finally {
+        client.release();
+      }
+    }
+
+    const deletedCount = deletedIds.length;
+    const failedCount = blockedBusinesses.length + errors.length;
+
+    let message = '';
+    if (deletedCount === ids.length) {
+      message = `Successfully deleted ${deletedCount} business(es).`;
+    } else if (deletedCount > 0) {
+      message = `Deleted ${deletedCount} of ${ids.length} business(es). ${failedCount} business(es) could not be deleted.`;
+    } else {
+      message = `None of the selected businesses could be deleted due to safety constraints or active session.`;
+    }
+
+    res.json({
+      success: deletedCount > 0 || ids.length === 0,
+      totalRequested: ids.length,
+      deletedCount,
+      failedCount,
+      deletedIds,
+      blockedBusinesses,
+      errors,
+      message,
+    });
+  } catch (error: any) {
+    res.status(500).json({ error: error.message || 'Failed to perform bulk delete of businesses' });
+  }
+});
+
+/**
+ * POST /api/businesses/bulk-status
+ * Bulk activate or deactivate multiple businesses (Super Admin only)
+ */
+router.post('/bulk-status', authenticateToken, requireSuperAdmin, async (req: Request, res: Response): Promise<void> => {
+  try {
+    const { ids, status } = req.body;
+    if (!Array.isArray(ids) || ids.length === 0) {
+      res.status(400).json({ error: 'Please provide an array of Business IDs.' });
+      return;
+    }
+    if (status !== 'ACTIVE' && status !== 'INACTIVE' && status !== 'SUSPENDED' && status !== 'ARCHIVED') {
+      res.status(400).json({ error: 'Status must be ACTIVE, INACTIVE, SUSPENDED, or ARCHIVED.' });
+      return;
+    }
+
+    const result = await pool.query(
+      `UPDATE businesses SET status = $1, updated_at = NOW() WHERE id = ANY($2::uuid[]) RETURNING id, name, status`,
+      [status, ids]
+    );
+
+    for (const row of result.rows) {
+      await recordAuditLog({
+        businessId: row.id,
+        userId: req.user!.id,
+        action: status === 'ACTIVE' ? 'BUSINESS_ACTIVATED' : 'BUSINESS_DEACTIVATED',
+        module: 'BUSINESS',
+        entityType: 'Business',
+        entityId: row.id,
+        newValue: { status },
+        req,
+      });
+    }
+
+    res.json({
+      success: true,
+      updatedCount: result.rows.length,
+      businesses: result.rows,
+      message: `Successfully set status to ${status} for ${result.rows.length} business(es).`,
+    });
+  } catch (error: any) {
+    res.status(500).json({ error: error.message || 'Failed to update business statuses' });
+  }
+});
+
+/**
  * DELETE /api/businesses/:id
  * Permanent deletion strictly guarded by dependency checks
  */
@@ -481,70 +741,25 @@ router.delete('/:id', authenticateToken, requireSuperAdmin, async (req: Request,
   try {
     const bizId = req.params.id;
 
-    if (req.user!.currentBusinessId === bizId) {
-      res.status(400).json({
-        error: 'Cannot delete the business you are currently logged into. Please switch to another business first.',
-      });
-      return;
-    }
-
     const [existing] = await db.select().from(businesses).where(eq(businesses.id, bizId)).limit(1);
     if (!existing) {
       res.status(404).json({ error: 'Business not found' });
       return;
     }
 
-    // Perform exhaustive dependency check across operational tables
-    const checkTables = [
-      { table: 'unique_items', label: 'Stock Items' },
-      { table: 'optical_batches', label: 'Optical Batches' },
-      { table: 'stock_ledger', label: 'Stock Ledger Entries' },
-      { table: 'stock_reservations', label: 'Stock Reservations' },
-      { table: 'parties', label: 'Parties / Customers / Suppliers' },
-      { table: 'sales_orders', label: 'Sales Orders' },
-      { table: 'sales_invoices', label: 'Sales Invoices' },
-      { table: 'sales_returns', label: 'Sales Returns' },
-      { table: 'purchase_orders', label: 'Purchase Orders' },
-      { table: 'purchase_invoices', label: 'Purchase Invoices' },
-      { table: 'purchase_returns', label: 'Purchase Returns' },
-      { table: 'payments', label: 'Payment Records' },
-      { table: 'customer_ledgers', label: 'Customer Ledgers' },
-      { table: 'supplier_ledgers', label: 'Supplier Ledgers' },
-    ];
-
-    const dependenciesFound: Array<{ table: string; label: string; count: number }> = [];
-
-    for (const item of checkTables) {
-      try {
-        const countRes = await pool.query(
-          `SELECT COUNT(*)::int as cnt FROM "${item.table}" WHERE business_id = $1`,
-          [bizId]
-        );
-        const cnt = countRes.rows[0]?.cnt || 0;
-        if (cnt > 0) {
-          dependenciesFound.push({ table: item.table, label: item.label, count: cnt });
-        }
-      } catch (err: any) {
-        // Table might not exist or schema variation; continue safely
-      }
-    }
-
-    if (dependenciesFound.length > 0) {
+    const safety = await checkBusinessDeletionSafety(pool, bizId, req.user!.currentBusinessId);
+    if (!safety.canDelete) {
       res.status(400).json({
-        error: 'This business contains accounting, inventory, party, or transaction records and cannot be permanently deleted. Deactivate the business instead.',
-        dependencies: dependenciesFound,
+        error: safety.reason || 'This business cannot be permanently deleted. Deactivate the business instead.',
+        dependencies: safety.dependencies,
       });
       return;
     }
 
-    // Business is empty of operational data; perform clean permanent deletion in transaction
     const client = await pool.connect();
     try {
       await client.query('BEGIN');
-      await client.query(`DELETE FROM user_roles WHERE business_id = $1`, [bizId]);
-      await client.query(`DELETE FROM user_business_access WHERE business_id = $1`, [bizId]);
-      await client.query(`DELETE FROM business_settings WHERE business_id = $1`, [bizId]);
-      await client.query(`DELETE FROM businesses WHERE id = $1`, [bizId]);
+      await executeDeleteBusiness(client, bizId, existing.name, req);
       await client.query('COMMIT');
     } catch (txErr: any) {
       await client.query('ROLLBACK');
@@ -552,17 +767,6 @@ router.delete('/:id', authenticateToken, requireSuperAdmin, async (req: Request,
     } finally {
       client.release();
     }
-
-    await recordAuditLog({
-      businessId: req.user!.currentBusinessId,
-      userId: req.user!.id,
-      action: 'BUSINESS_DELETED',
-      module: 'BUSINESS',
-      entityType: 'Business',
-      entityId: bizId,
-      previousValue: existing,
-      req,
-    });
 
     res.json({
       success: true,

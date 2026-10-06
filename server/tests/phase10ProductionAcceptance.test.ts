@@ -461,46 +461,10 @@ export async function runPhase10ProductionAcceptanceSuite() {
   recordScorecard('Stock', 'PASS', 'Multi-lot tracking preserves historical purchase lot rates while updating stock and item LPP', 'Section 4 verified');
 
   // -------------------------------------------------------------------------
-  // SECTION 5: OPENING / STOCK ADJUSTMENT TEST
+  // SECTION 5: STOCK INTEGRITY (STOCK ADJUSTMENT RETIRED)
   // -------------------------------------------------------------------------
-  await assertTest('5. Stock Adjustment Test (+2.0 adjustment then -1.0 adjustment)', async () => {
-    // 1. Positive adjustment (+2.0)
-    await StockService.adjustStock(bizAId, {
-      batchId: batchSV2Id,
-      adjustmentType: 'INCREASE',
-      quantity: 2.0,
-      reason: 'Physical inventory audit surplus',
-    }, adminUserId);
-
-    let [stock] = await db
-      .select()
-      .from(opticalStocks)
-      .where(and(
-        eq(opticalStocks.businessId, bizAId),
-        eq(opticalStocks.batchId, batchSV2Id)
-      ));
-    // 15 + 2 = 17
-    if (Number(stock.physicalStock) !== 17) throw new Error(`Expected stock 17 after +2, got ${stock.physicalStock}`);
-
-    // 2. Negative adjustment (-1.0)
-    await StockService.adjustStock(bizAId, {
-      batchId: batchSV2Id,
-      adjustmentType: 'DECREASE',
-      quantity: 1.0,
-      reason: 'Damaged lens written off',
-    }, adminUserId);
-
-    [stock] = await db
-      .select()
-      .from(opticalStocks)
-      .where(and(
-        eq(opticalStocks.businessId, bizAId),
-        eq(opticalStocks.batchId, batchSV2Id)
-      ));
-    // 17 - 1 = 16
-    if (Number(stock.physicalStock) !== 16) throw new Error(`Expected stock 16 after -1, got ${stock.physicalStock}`);
-
-    // Verify stock ledger has distinct immutable rows for both adjustments
+  await assertTest('5. Stock Adjustment Retired & Inward Purchase lot (+1.0 -> Stock=16)', async () => {
+    // 1. Verify no stock adjustments exist in stock ledger
     const adjLedgers = await db
       .select()
       .from(stockLedger)
@@ -509,7 +473,42 @@ export async function runPhase10ProductionAcceptanceSuite() {
         eq(stockLedger.batchId, batchSV2Id),
         eq(stockLedger.transactionType, 'STOCK_ADJUSTMENT')
       ));
-    if (adjLedgers.length !== 2) throw new Error(`Expected 2 adjustment ledger entries, got ${adjLedgers.length}`);
+    if (adjLedgers.length !== 0) throw new Error(`Expected 0 adjustment ledger entries, got ${adjLedgers.length}`);
+
+    // 2. Inward 1.0 pr via standard Purchase Invoice (replacing retired stock adjustment)
+    const p3Result = await PurchaseService.createPurchaseInvoice(bizAId, {
+      supplierPartyId: supplierPartyId,
+      supplierInvoiceNumber: `INV-SUP-P10-003-${Date.now()}`,
+      invoiceDate: new Date(),
+      dueDate: new Date(Date.now() + 30 * 86400000),
+      lines: [
+        {
+          uniqueItemId: itemHCSVId,
+          quantity: 1.0,
+          rate: 110.0,
+          gstRate: 5.0,
+          batches: [
+            {
+              batchId: batchSV2Id,
+              quantity: 1.0,
+              rate: 110.0,
+            },
+          ],
+        },
+      ],
+    }, adminUserId);
+
+    await PurchaseService.postPurchaseInvoice(bizAId, p3Result.id, adminUserId);
+
+    const [stock] = await db
+      .select()
+      .from(opticalStocks)
+      .where(and(
+        eq(opticalStocks.businessId, bizAId),
+        eq(opticalStocks.batchId, batchSV2Id)
+      ));
+    // 15 + 1 = 16
+    if (Number(stock.physicalStock) !== 16) throw new Error(`Expected stock 16 after inward, got ${stock.physicalStock}`);
   });
 
   // -------------------------------------------------------------------------

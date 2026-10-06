@@ -2131,7 +2131,7 @@ router.delete(['/unique-items/:id', '/stock-items/:id'], requireAnyPermission(['
 
     if (Number(total_physical_stock) !== 0) {
       res.status(400).json({
-        error: `Cannot delete Stock Item "${current.name}" (${current.code}): Item currently holds active inventory stock (${total_physical_stock}). Adjust or transfer stock to 0, or mark the item INACTIVE.`
+        error: `Cannot delete Stock Item "${current.name}" (${current.code}): Item currently holds active inventory stock (${total_physical_stock}). Transfer stock to 0, or mark the item INACTIVE.`
       });
       return;
     }
@@ -2854,7 +2854,7 @@ router.get('/batches/:id/dependencies', requireAnyPermission(['master:view', 'in
   }
 });
 
-router.delete('/batches/:id', requireAnyPermission(['master:delete', 'master:edit']), async (req: Request, res: Response): Promise<void> => {
+router.delete('/batches/:id', requireAnyPermission(['master:delete', 'master.delete', 'master:edit', 'master.edit', 'master:manage', 'inventory:delete', 'inventory:manage']), async (req: Request, res: Response): Promise<void> => {
   try {
     const bizId = req.user!.currentBusinessId;
     const { id } = req.params;
@@ -2928,7 +2928,7 @@ router.delete('/batches/:id', requireAnyPermission(['master:delete', 'master:edi
   }
 });
 
-router.post('/batches/bulk-delete', requireAnyPermission(['master:delete', 'master:edit']), async (req: Request, res: Response): Promise<void> => {
+router.post('/batches/bulk-delete', requireAnyPermission(['master:delete', 'master.delete', 'master:edit', 'master.edit', 'master:manage', 'inventory:delete', 'inventory:manage']), async (req: Request, res: Response): Promise<void> => {
   try {
     const bizId = req.user!.currentBusinessId;
     const { ids } = req.body;

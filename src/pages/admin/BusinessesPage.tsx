@@ -40,7 +40,7 @@ interface BusinessUserRecord {
 }
 
 export const BusinessesPage: React.FC = () => {
-  const { user: currentUser, currentBusiness } = useAuth();
+  const { user: currentUser, currentBusiness, refreshUser } = useAuth();
   const [businessesList, setBusinessesList] = useState<Business[]>([]);
   const [allRoles, setAllRoles] = useState<Role[]>([]);
   const [allUsers, setAllUsers] = useState<User[]>([]);
@@ -49,6 +49,29 @@ export const BusinessesPage: React.FC = () => {
   const [statusFilter, setStatusFilter] = useState<'ALL' | 'ACTIVE' | 'INACTIVE'>('ALL');
   const [error, setError] = useState<string | null>(null);
   const [successMsg, setSuccessMsg] = useState<string | null>(null);
+
+  // Multi-Selection State for Bulk Actions
+  const [selectedBizIds, setSelectedBizIds] = useState<Set<string>>(new Set());
+  const [showBulkDeleteModal, setShowBulkDeleteModal] = useState<boolean>(false);
+  const [isBulkDeleting, setIsBulkDeleting] = useState<boolean>(false);
+  const [bulkDeleteResult, setBulkDeleteResult] = useState<{
+    totalRequested: number;
+    deletedCount: number;
+    failedCount: number;
+    deletedIds: string[];
+    blockedBusinesses: Array<{
+      id: string;
+      name: string;
+      reason: string;
+      dependencies?: Array<{ table: string; label: string; count: number }>;
+    }>;
+    errors: string[];
+    message: string;
+  } | null>(null);
+  const [isBulkUpdatingStatus, setIsBulkUpdatingStatus] = useState<boolean>(false);
+
+  // Single Delete Confirmation State
+  const [singleDeleteCandidate, setSingleDeleteCandidate] = useState<Business | null>(null);
 
   // Add / Edit Business Modal State
   const [isFormModalOpen, setIsFormModalOpen] = useState<boolean>(false);
@@ -301,30 +324,6 @@ export const BusinessesPage: React.FC = () => {
     }
   };
 
-  const handleDeleteBusiness = async (biz: Business) => {
-    setDeleteTargetBiz(biz);
-    setDeleteBlockedError(null);
-    setIsDeleting(true);
-    try {
-      await apiRequest(`/api/businesses/${biz.id}`, { method: 'DELETE' });
-      setSuccessMsg(`Business '${biz.name}' permanently deleted.`);
-      setDeleteTargetBiz(null);
-      await fetchBusinessesAndData();
-    } catch (err: any) {
-      if (err.dependencies && Array.isArray(err.dependencies)) {
-        setDeleteBlockedError({
-          message: err.message || err.error || 'Deletion blocked due to existing operational records.',
-          dependencies: err.dependencies,
-        });
-      } else {
-        setError(err.message || 'Failed to delete business');
-        setDeleteTargetBiz(null);
-      }
-    } finally {
-      setIsDeleting(false);
-    }
-  };
-
   const filteredBusinesses = businessesList.filter(b => {
     const matchesSearch =
       b.name.toLowerCase().includes(search.toLowerCase()) ||
@@ -342,6 +341,198 @@ export const BusinessesPage: React.FC = () => {
 
     return matchesSearch && matchesStatus;
   });
+
+  // Selectable businesses on the current view (cannot select currently logged-in business)
+  const selectableFilteredBusinesses = filteredBusinesses.filter(b => b.id !== currentBusiness?.id);
+
+  const allVisibleSelected =
+    selectableFilteredBusinesses.length > 0 &&
+    selectableFilteredBusinesses.every(b => selectedBizIds.has(b.id));
+
+  const someVisibleSelected =
+    selectableFilteredBusinesses.some(b => selectedBizIds.has(b.id));
+
+  const isIndeterminate = someVisibleSelected && !allVisibleSelected;
+
+  const handleToggleSelectAll = () => {
+    if (allVisibleSelected) {
+      setSelectedBizIds(prev => {
+        const next = new Set(prev);
+        selectableFilteredBusinesses.forEach(b => next.delete(b.id));
+        return next;
+      });
+    } else {
+      setSelectedBizIds(prev => {
+        const next = new Set(prev);
+        selectableFilteredBusinesses.forEach(b => next.add(b.id));
+        return next;
+      });
+    }
+  };
+
+  const handleToggleSelectBusiness = (bizId: string) => {
+    if (bizId === currentBusiness?.id) return;
+    setSelectedBizIds(prev => {
+      const next = new Set(prev);
+      if (next.has(bizId)) next.delete(bizId);
+      else next.add(bizId);
+      return next;
+    });
+  };
+
+  const handleClearSelection = () => {
+    setSelectedBizIds(new Set());
+  };
+
+  // Open Bulk Delete Modal
+  const handleOpenBulkDelete = () => {
+    if (selectedBizIds.size === 0) return;
+    setBulkDeleteResult(null);
+    setShowBulkDeleteModal(true);
+  };
+
+  // Confirm Bulk Delete
+  const handleConfirmBulkDelete = async () => {
+    const ids = Array.from(selectedBizIds);
+    if (ids.length === 0) return;
+
+    setIsBulkDeleting(true);
+    try {
+      const res = await apiRequest<{
+        success: boolean;
+        totalRequested: number;
+        deletedCount: number;
+        failedCount: number;
+        deletedIds: string[];
+        blockedBusinesses: Array<{
+          id: string;
+          name: string;
+          reason: string;
+          dependencies?: Array<{ table: string; label: string; count: number }>;
+        }>;
+        errors: string[];
+        message: string;
+      }>('/api/businesses/bulk-delete', {
+        method: 'POST',
+        body: JSON.stringify({ ids }),
+      });
+
+      setBulkDeleteResult(res);
+
+      if (res.deletedCount > 0) {
+        const deletedSet = new Set(res.deletedIds);
+        setBusinessesList(prev => prev.filter(b => !deletedSet.has(b.id)));
+        setSelectedBizIds(prev => {
+          const next = new Set(prev);
+          res.deletedIds.forEach(id => next.delete(id));
+          return next;
+        });
+        await fetchBusinessesAndData();
+        await refreshUser();
+      }
+
+      if (res.failedCount === 0) {
+        setSuccessMsg(res.message || `Successfully deleted ${res.deletedCount} business(es).`);
+        setShowBulkDeleteModal(false);
+        setBulkDeleteResult(null);
+        setSelectedBizIds(new Set());
+      }
+    } catch (err: any) {
+      setError(err.message || 'Failed to bulk delete businesses');
+    } finally {
+      setIsBulkDeleting(false);
+    }
+  };
+
+  // Bulk Deactivate Action
+  const handleBulkDeactivate = async () => {
+    const ids = Array.from(selectedBizIds);
+    if (ids.length === 0) return;
+
+    if (!window.confirm(`Are you sure you want to deactivate ${ids.length} selected business(es)? Users will have their access paused.`)) {
+      return;
+    }
+
+    setIsBulkUpdatingStatus(true);
+    try {
+      const res = await apiRequest<{ success: boolean; updatedCount: number; message: string }>(
+        '/api/businesses/bulk-status',
+        {
+          method: 'POST',
+          body: JSON.stringify({ ids, status: 'INACTIVE' }),
+        }
+      );
+      setSuccessMsg(res.message || `Successfully deactivated ${res.updatedCount} business(es).`);
+      setSelectedBizIds(new Set());
+      await fetchBusinessesAndData();
+      await refreshUser();
+    } catch (err: any) {
+      setError(err.message || 'Failed to deactivate businesses');
+    } finally {
+      setIsBulkUpdatingStatus(false);
+    }
+  };
+
+  // Deactivate Blocked Businesses from Bulk Deletion Result
+  const handleDeactivateBlockedBusinesses = async (blockedIds: string[]) => {
+    if (!blockedIds.length) return;
+    setIsBulkUpdatingStatus(true);
+    try {
+      const res = await apiRequest<{ success: boolean; updatedCount: number; message: string }>(
+        '/api/businesses/bulk-status',
+        {
+          method: 'POST',
+          body: JSON.stringify({ ids: blockedIds, status: 'INACTIVE' }),
+        }
+      );
+      setSuccessMsg(`Deactivated ${res.updatedCount} blocked business(es) successfully.`);
+      setShowBulkDeleteModal(false);
+      setBulkDeleteResult(null);
+      setSelectedBizIds(new Set());
+      await fetchBusinessesAndData();
+      await refreshUser();
+    } catch (err: any) {
+      setError(err.message || 'Failed to deactivate blocked businesses');
+    } finally {
+      setIsBulkUpdatingStatus(false);
+    }
+  };
+
+  // Confirm Single Delete
+  const handleConfirmSingleDelete = async () => {
+    if (!singleDeleteCandidate) return;
+    const biz = singleDeleteCandidate;
+    setDeleteTargetBiz(biz);
+    setDeleteBlockedError(null);
+    setIsDeleting(true);
+    try {
+      await apiRequest(`/api/businesses/${biz.id}`, { method: 'DELETE' });
+      setSuccessMsg(`Business '${biz.name}' permanently deleted.`);
+      setSingleDeleteCandidate(null);
+      setDeleteTargetBiz(null);
+      setBusinessesList(prev => prev.filter(b => b.id !== biz.id));
+      setSelectedBizIds(prev => {
+        const next = new Set(prev);
+        next.delete(biz.id);
+        return next;
+      });
+      await fetchBusinessesAndData();
+      await refreshUser();
+    } catch (err: any) {
+      setSingleDeleteCandidate(null);
+      if (err.dependencies && Array.isArray(err.dependencies)) {
+        setDeleteBlockedError({
+          message: err.message || err.error || 'Deletion blocked due to existing operational records.',
+          dependencies: err.dependencies,
+        });
+      } else {
+        setError(err.message || 'Failed to delete business');
+        setDeleteTargetBiz(null);
+      }
+    } finally {
+      setIsDeleting(false);
+    }
+  };
 
   const activeCount = businessesList.filter(b => b.status === 'ACTIVE').length;
   const inactiveCount = businessesList.filter(b => b.status !== 'ACTIVE').length;
@@ -418,6 +609,51 @@ export const BusinessesPage: React.FC = () => {
         </div>
       )}
 
+      {/* Floating Selection Bar for Multi-Delete and Status */}
+      {selectedBizIds.size > 0 && isSuperAdmin && (
+        <div className="bg-amber-50 border border-amber-200 rounded-2xl p-3.5 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 shadow-xs animate-in slide-in-from-top-1">
+          <div className="flex items-center gap-2.5 text-xs text-amber-900 font-medium">
+            <span className="px-2.5 py-0.5 bg-amber-200 rounded-full font-bold font-mono text-amber-950">
+              {selectedBizIds.size}
+            </span>
+            <span>business entity/entities selected for administrative action</span>
+          </div>
+
+          <div className="flex items-center gap-2 flex-wrap">
+            <button
+              type="button"
+              onClick={handleClearSelection}
+              className="text-xs font-semibold text-slate-600 hover:text-slate-900 px-3 py-1.5 rounded-xl hover:bg-amber-100 transition-colors cursor-pointer"
+            >
+              Clear Selection
+            </button>
+
+            <button
+              type="button"
+              onClick={handleBulkDeactivate}
+              disabled={isBulkUpdatingStatus}
+              className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold text-amber-800 bg-amber-100 hover:bg-amber-200 border border-amber-300 rounded-xl transition-colors cursor-pointer disabled:opacity-50"
+              title="Deactivate all selected businesses"
+            >
+              <PowerOff className="w-3.5 h-3.5" />
+              <span>Deactivate Selected</span>
+            </button>
+
+            <button
+              type="button"
+              id="btn-bulk-delete-businesses"
+              onClick={handleOpenBulkDelete}
+              disabled={isBulkDeleting}
+              className="inline-flex items-center gap-1.5 px-3.5 py-1.5 text-xs font-semibold text-white bg-red-600 hover:bg-red-700 rounded-xl shadow-xs transition-colors cursor-pointer disabled:opacity-50"
+              title="Delete all selected businesses"
+            >
+              <Trash2 className="w-3.5 h-3.5" />
+              <span>Delete Selected ({selectedBizIds.size})</span>
+            </button>
+          </div>
+        </div>
+      )}
+
       {/* Main Table Card */}
       <div className="bg-white border border-slate-200 rounded-2xl shadow-xs overflow-hidden">
         <div className="p-4 border-b border-slate-100 flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-3">
@@ -478,6 +714,20 @@ export const BusinessesPage: React.FC = () => {
           <table className="w-full text-left text-xs text-slate-600">
             <thead className="bg-slate-50/80 text-slate-700 border-b border-slate-100 uppercase tracking-wider text-[10px] font-semibold">
               <tr>
+                {isSuperAdmin && (
+                  <th className="px-4 py-3.5 w-10 text-center">
+                    <input
+                      type="checkbox"
+                      checked={allVisibleSelected}
+                      ref={input => {
+                        if (input) input.indeterminate = isIndeterminate;
+                      }}
+                      onChange={handleToggleSelectAll}
+                      className="rounded border-slate-300 text-blue-600 focus:ring-blue-500 h-3.5 w-3.5 cursor-pointer"
+                      title="Select all deletable businesses on this view"
+                    />
+                  </th>
+                )}
                 <th className="px-5 py-3.5">Business Name & Trade Name</th>
                 <th className="px-5 py-3.5">Type & Hierarchy</th>
                 <th className="px-5 py-3.5">Tax / GSTIN / PAN</th>
@@ -490,14 +740,14 @@ export const BusinessesPage: React.FC = () => {
             <tbody className="divide-y divide-slate-100">
               {loading ? (
                 <tr>
-                  <td colSpan={7} className="px-5 py-8 text-center text-slate-400">
+                  <td colSpan={isSuperAdmin ? 8 : 7} className="px-5 py-8 text-center text-slate-400">
                     <RefreshCw className="w-5 h-5 animate-spin mx-auto mb-2 text-blue-600" />
                     Loading businesses from PostgreSQL...
                   </td>
                 </tr>
               ) : filteredBusinesses.length === 0 ? (
                 <tr>
-                  <td colSpan={7} className="px-5 py-8 text-center text-slate-400">
+                  <td colSpan={isSuperAdmin ? 8 : 7} className="px-5 py-8 text-center text-slate-400">
                     No businesses found matching your filter criteria.
                   </td>
                 </tr>
@@ -506,9 +756,33 @@ export const BusinessesPage: React.FC = () => {
                   const isCurrent = currentBusiness?.id === b.id;
                   const isActive = b.status === 'ACTIVE';
                   const isDealer = b.businessType === 'DEALER';
+                  const isSelected = selectedBizIds.has(b.id);
 
                   return (
-                    <tr key={b.id} className="hover:bg-slate-50/60 transition-colors">
+                    <tr key={b.id} className={`hover:bg-slate-50/60 transition-colors ${isSelected ? 'bg-blue-50/40' : ''}`}>
+                      {/* Selection Checkbox */}
+                      {isSuperAdmin && (
+                        <td className="px-4 py-3.5 text-center">
+                          {isCurrent ? (
+                            <span title="Currently logged in business cannot be deleted">
+                              <input
+                                type="checkbox"
+                                disabled
+                                className="rounded border-slate-200 text-slate-300 h-3.5 w-3.5 cursor-not-allowed opacity-30"
+                              />
+                            </span>
+                          ) : (
+                            <input
+                              type="checkbox"
+                              checked={isSelected}
+                              onChange={() => handleToggleSelectBusiness(b.id)}
+                              className="rounded border-slate-300 text-blue-600 focus:ring-blue-500 h-3.5 w-3.5 cursor-pointer"
+                              title={`Select '${b.name}'`}
+                            />
+                          )}
+                        </td>
+                      )}
+
                       {/* Name & Trade Name */}
                       <td className="px-5 py-3.5">
                         <div className="flex items-start gap-2.5">
@@ -634,8 +908,8 @@ export const BusinessesPage: React.FC = () => {
                               </button>
 
                               <button
-                                onClick={() => handleDeleteBusiness(b)}
-                                className="p-1.5 rounded-lg border border-red-200 hover:bg-red-50 text-red-600"
+                                onClick={() => setSingleDeleteCandidate(b)}
+                                className="p-1.5 rounded-lg border border-red-200 hover:bg-red-50 text-red-600 cursor-pointer"
                                 title="Delete Business (with safety checks)"
                               >
                                 <Trash2 className="w-3.5 h-3.5" />
@@ -1058,6 +1332,265 @@ export const BusinessesPage: React.FC = () => {
               >
                 Close
               </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* MODAL: Single Delete Confirmation */}
+      {singleDeleteCandidate && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-xs animate-in fade-in">
+          <div className="bg-white border border-slate-200 rounded-2xl w-full max-w-md shadow-xl overflow-hidden p-6 space-y-4">
+            <div className="flex items-start gap-3 text-red-600">
+              <AlertTriangle className="w-6 h-6 shrink-0 mt-0.5" />
+              <div>
+                <h3 className="text-sm font-bold text-slate-900">Delete Business Entity</h3>
+                <p className="text-xs text-slate-500 mt-0.5">
+                  Are you sure you want to permanently delete this business?
+                </p>
+              </div>
+            </div>
+
+            <div className="p-3.5 bg-slate-50 rounded-xl border border-slate-200 text-xs space-y-2">
+              <div className="flex justify-between items-center">
+                <span className="font-semibold text-slate-500">Business Name:</span>
+                <span className="font-bold text-slate-900">{singleDeleteCandidate.name}</span>
+              </div>
+              {singleDeleteCandidate.tradeName && (
+                <div className="flex justify-between items-center">
+                  <span className="font-semibold text-slate-500">Trade Name:</span>
+                  <span className="text-slate-700">{singleDeleteCandidate.tradeName}</span>
+                </div>
+              )}
+              <div className="flex justify-between items-center">
+                <span className="font-semibold text-slate-500">Entity Type:</span>
+                <span className="font-medium text-slate-700">
+                  {singleDeleteCandidate.businessType === 'DEALER' ? 'Dealer Branch' : 'Main Warehouse'}
+                </span>
+              </div>
+              <div className="flex justify-between items-center">
+                <span className="font-semibold text-slate-500">Status:</span>
+                <span className="px-2 py-0.5 rounded-full text-[10px] font-semibold bg-slate-200 text-slate-700">
+                  {singleDeleteCandidate.status}
+                </span>
+              </div>
+            </div>
+
+            <div className="p-3 bg-amber-50 border border-amber-200 rounded-xl text-[11px] text-amber-800">
+              <strong>ERP Safety Verification:</strong> Permanent deletion will only proceed if the business has zero accounting journals, stock batches, invoices, or customer ledgers.
+            </div>
+
+            <div className="flex items-center justify-end gap-2 pt-2 border-t border-slate-100">
+              <button
+                type="button"
+                onClick={() => setSingleDeleteCandidate(null)}
+                disabled={isDeleting}
+                className="px-4 py-2 rounded-xl border border-slate-200 text-slate-600 hover:bg-slate-50 text-xs font-medium cursor-pointer"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={handleConfirmSingleDelete}
+                disabled={isDeleting}
+                className="px-4 py-2 rounded-xl bg-red-600 hover:bg-red-700 text-white font-medium text-xs shadow-md shadow-red-600/20 flex items-center gap-1.5 cursor-pointer disabled:opacity-50"
+              >
+                {isDeleting ? (
+                  <>
+                    <RefreshCw className="w-3.5 h-3.5 animate-spin" />
+                    <span>Verifying & Deleting...</span>
+                  </>
+                ) : (
+                  <>
+                    <Trash2 className="w-3.5 h-3.5" />
+                    <span>Confirm Delete</span>
+                  </>
+                )}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* MODAL: Bulk Delete Confirmation & Results */}
+      {showBulkDeleteModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-xs animate-in fade-in">
+          <div className="bg-white border border-slate-200 rounded-2xl w-full max-w-lg shadow-xl overflow-hidden flex flex-col max-h-[90vh]">
+            <div className="p-5 border-b border-slate-100 flex items-center justify-between">
+              <div className="flex items-center gap-2.5 text-red-600">
+                <Trash2 className="w-5 h-5" />
+                <h3 className="font-bold text-sm text-slate-900">
+                  Bulk Delete Businesses ({selectedBizIds.size} Selected)
+                </h3>
+              </div>
+              <button
+                type="button"
+                onClick={() => {
+                  setShowBulkDeleteModal(false);
+                  setBulkDeleteResult(null);
+                }}
+                disabled={isBulkDeleting}
+                className="text-slate-400 hover:text-slate-600 font-bold p-1 cursor-pointer"
+              >
+                ✕
+              </button>
+            </div>
+
+            <div className="p-5 space-y-4 overflow-y-auto text-xs">
+              {!bulkDeleteResult ? (
+                <>
+                  <p className="text-slate-600">
+                    You have selected <strong className="text-slate-900 font-mono">{selectedBizIds.size}</strong> business entities for deletion:
+                  </p>
+
+                  <div className="max-h-52 overflow-y-auto space-y-1.5 border border-slate-200 rounded-xl p-2.5 bg-slate-50">
+                    {businessesList
+                      .filter(b => selectedBizIds.has(b.id))
+                      .map(b => (
+                        <div
+                          key={b.id}
+                          className="flex items-center justify-between p-2 rounded-lg bg-white border border-slate-200 text-xs"
+                        >
+                          <div>
+                            <div className="font-semibold text-slate-900">{b.name}</div>
+                            <div className="text-[10px] text-slate-500">
+                              {b.businessType === 'DEALER' ? 'Dealer Branch' : 'Main Warehouse'} • {b.city || 'No city'}
+                            </div>
+                          </div>
+                          <span className={`px-2 py-0.5 rounded-full text-[10px] font-semibold ${
+                            b.status === 'ACTIVE' ? 'bg-emerald-100 text-emerald-800' : 'bg-slate-200 text-slate-700'
+                          }`}>
+                            {b.status}
+                          </span>
+                        </div>
+                      ))}
+                  </div>
+
+                  <div className="p-3 bg-amber-50 border border-amber-200 rounded-xl text-[11px] text-amber-800 space-y-1">
+                    <div className="font-semibold flex items-center gap-1.5">
+                      <AlertTriangle className="w-3.5 h-3.5 text-amber-700 shrink-0" />
+                      <span>ERP Multi-Tenant Safeguards</span>
+                    </div>
+                    <p>
+                      Each business will be automatically analyzed before deletion. Any business containing accounting records, inventory stock, sales invoices, or purchase ledgers will be protected from deletion. Clean/unused businesses will be permanently deleted.
+                    </p>
+                  </div>
+                </>
+              ) : (
+                /* Results Display */
+                <div className="space-y-3 animate-in fade-in">
+                  <div
+                    className={`p-3.5 rounded-xl border font-semibold flex items-center gap-2 ${
+                      bulkDeleteResult.failedCount === 0
+                        ? 'bg-emerald-50 border-emerald-200 text-emerald-800'
+                        : 'bg-amber-50 border-amber-200 text-amber-900'
+                    }`}
+                  >
+                    {bulkDeleteResult.failedCount === 0 ? (
+                      <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0" />
+                    ) : (
+                      <AlertTriangle className="w-4 h-4 text-amber-600 shrink-0" />
+                    )}
+                    <span>{bulkDeleteResult.message}</span>
+                  </div>
+
+                  {bulkDeleteResult.deletedCount > 0 && (
+                    <div className="p-3 bg-emerald-50/60 rounded-xl border border-emerald-100 space-y-1">
+                      <div className="text-[11px] font-bold text-emerald-800">
+                        Permanently Deleted ({bulkDeleteResult.deletedCount}):
+                      </div>
+                      <div className="text-[11px] text-emerald-700">
+                        {bulkDeleteResult.deletedIds.length} business entity/entities removed completely.
+                      </div>
+                    </div>
+                  )}
+
+                  {bulkDeleteResult.blockedBusinesses && bulkDeleteResult.blockedBusinesses.length > 0 && (
+                    <div className="space-y-2">
+                      <div className="text-[11px] font-bold text-red-800 flex items-center justify-between">
+                        <span>Blocked from Deletion ({bulkDeleteResult.blockedBusinesses.length}):</span>
+                        <span className="text-[10px] text-slate-500 font-normal">Records detected</span>
+                      </div>
+                      <div className="max-h-48 overflow-y-auto space-y-2">
+                        {bulkDeleteResult.blockedBusinesses.map(b => (
+                          <div key={b.id} className="p-3 rounded-xl bg-red-50 border border-red-200 space-y-1.5">
+                            <div className="flex justify-between items-center font-bold text-slate-900">
+                              <span>{b.name}</span>
+                              <span className="text-[10px] font-semibold text-red-700 bg-red-100 px-2 py-0.5 rounded-full">
+                                Protected
+                              </span>
+                            </div>
+                            <p className="text-[11px] text-red-700">{b.reason}</p>
+                            {b.dependencies && b.dependencies.length > 0 && (
+                              <div className="flex flex-wrap gap-1.5 pt-1">
+                                {b.dependencies.map(dep => (
+                                  <span
+                                    key={dep.table}
+                                    className="px-2 py-0.5 rounded-md bg-white border border-red-200 text-[10px] text-slate-700 font-medium"
+                                  >
+                                    {dep.label}: <strong className="font-mono text-red-700">{dep.count}</strong>
+                                  </span>
+                                ))}
+                              </div>
+                            )}
+                          </div>
+                        ))}
+                      </div>
+
+                      <div className="pt-2">
+                        <button
+                          type="button"
+                          onClick={() =>
+                            handleDeactivateBlockedBusinesses(
+                              bulkDeleteResult.blockedBusinesses.map(b => b.id)
+                            )
+                          }
+                          disabled={isBulkUpdatingStatus}
+                          className="w-full py-2 bg-amber-600 hover:bg-amber-500 text-white rounded-xl font-medium text-xs shadow-xs flex items-center justify-center gap-1.5 cursor-pointer disabled:opacity-50"
+                        >
+                          <PowerOff className="w-3.5 h-3.5" />
+                          <span>Deactivate All {bulkDeleteResult.blockedBusinesses.length} Blocked Businesses Instead</span>
+                        </button>
+                      </div>
+                    </div>
+                  )}
+                </div>
+              )}
+            </div>
+
+            <div className="p-4 bg-slate-50 border-t border-slate-100 flex items-center justify-end gap-2">
+              <button
+                type="button"
+                onClick={() => {
+                  setShowBulkDeleteModal(false);
+                  setBulkDeleteResult(null);
+                }}
+                disabled={isBulkDeleting}
+                className="px-4 py-2 rounded-xl border border-slate-200 text-slate-600 hover:bg-white text-xs font-medium cursor-pointer"
+              >
+                {bulkDeleteResult ? 'Close' : 'Cancel'}
+              </button>
+
+              {!bulkDeleteResult && (
+                <button
+                  type="button"
+                  onClick={handleConfirmBulkDelete}
+                  disabled={isBulkDeleting}
+                  className="px-4 py-2 rounded-xl bg-red-600 hover:bg-red-700 text-white font-medium text-xs shadow-md shadow-red-600/20 flex items-center gap-1.5 cursor-pointer disabled:opacity-50"
+                >
+                  {isBulkDeleting ? (
+                    <>
+                      <RefreshCw className="w-3.5 h-3.5 animate-spin" />
+                      <span>Deleting {selectedBizIds.size} Businesses...</span>
+                    </>
+                  ) : (
+                    <>
+                      <Trash2 className="w-3.5 h-3.5" />
+                      <span>Delete {selectedBizIds.size} Selected Businesses</span>
+                    </>
+                  )}
+                </button>
+              )}
             </div>
           </div>
         </div>

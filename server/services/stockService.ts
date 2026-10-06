@@ -11,18 +11,7 @@ import {
 } from '../db/schema.js';
 import { eq, and, sql, desc, inArray } from 'drizzle-orm';
 import { AuditService } from './auditService.js';
-
-export type StockAdjustmentType = 'INCREASE' | 'DECREASE';
-
-export type StockAdjustmentReason =
-  | 'PHYSICAL_COUNT'
-  | 'DAMAGED'
-  | 'LOST'
-  | 'FOUND'
-  | 'DATA_CORRECTION'
-  | 'OPENING_CORRECTION'
-  | 'EXPIRED'
-  | 'OTHER';
+import { formatOpticalBatchName } from '../utils/searchNormalization.js';
 
 export type ReservationStatus = 'ACTIVE' | 'RELEASED' | 'CONVERTED' | 'CANCELLED';
 
@@ -31,16 +20,6 @@ export interface OpeningStockInput {
   quantity: number; // pairs
   date?: string | Date;
   reason?: string;
-}
-
-export interface StockAdjustmentInput {
-  batchId: string;
-  adjustmentType: StockAdjustmentType;
-  quantity: number; // pairs (positive)
-  reason: StockAdjustmentReason | string;
-  remarks?: string;
-  referenceType?: string;
-  referenceId?: string;
 }
 
 export interface CreateReservationInput {
@@ -196,7 +175,7 @@ export class StockService {
 
       if (existingOpening.rows.length > 0) {
         throw new Error(
-          'Opening stock has already been initialized for this Optical Batch. Please use Stock Adjustment to make quantity corrections.'
+          'Opening stock has already been initialized for this Optical Batch.'
         );
       }
 
@@ -272,122 +251,7 @@ export class StockService {
   }
 
   /**
-   * 2. STOCK ADJUSTMENT (INCREASE / DECREASE)
-   * Mandatory reason. Negative resulting physical stock IS allowed.
-   */
-  static async adjustStock(businessId: string, input: StockAdjustmentInput, userId?: string) {
-    const { batchId, adjustmentType, reason, remarks, referenceType, referenceId } = input;
-    const quantity = round2(input.quantity);
-
-    if (!isValidOpticalQuantity(quantity)) {
-      throw new Error('Adjustment quantity must be a positive number.');
-    }
-
-    if (!reason || reason.trim() === '') {
-      throw new Error('Stock adjustment reason is mandatory (e.g., PHYSICAL_COUNT, DAMAGED, LOST, FOUND, DATA_CORRECTION).');
-    }
-
-    if (adjustmentType !== 'INCREASE' && adjustmentType !== 'DECREASE') {
-      throw new Error('Adjustment type must be either INCREASE or DECREASE.');
-    }
-
-    const client = await pool.connect();
-    try {
-      await client.query('BEGIN');
-
-      const stock = await this.lockAndGetStock(client, businessId, batchId);
-
-      let newPhysical: number;
-      let qtyIn: number;
-      let qtyOut: number;
-
-      if (adjustmentType === 'INCREASE') {
-        newPhysical = round2(stock.physicalStock + quantity);
-        qtyIn = quantity;
-        qtyOut = 0;
-      } else {
-        // DECREASE: Negative physical stock IS allowed
-        newPhysical = round2(stock.physicalStock - quantity);
-        qtyIn = 0;
-        qtyOut = quantity;
-      }
-
-      const newAvailable = round2(newPhysical - stock.reservedStock);
-
-      // Update optical_stocks
-      await client.query(
-        `UPDATE optical_stocks 
-         SET physical_stock = $1, available_stock = $2, updated_at = NOW() 
-         WHERE id = $3`,
-        [newPhysical.toFixed(2), newAvailable.toFixed(2), stock.stockId]
-      );
-
-      const fullReasonText = remarks ? `${reason}: ${remarks.trim()}` : reason;
-
-      // Write Stock Ledger
-      const ledgerRes = await client.query(
-        `INSERT INTO stock_ledger (
-          business_id, batch_id, transaction_type, reference_type, reference_id,
-          quantity_in, quantity_out, reserved_in, reserved_out, balance,
-          reason, created_by, created_at
-        ) VALUES ($1, $2, 'STOCK_ADJUSTMENT', $3, $4, $5, $6, '0.00', '0.00', $7, $8, $9, NOW())
-        RETURNING *`,
-        [
-          businessId,
-          batchId,
-          referenceType || 'MANUAL_ADJUSTMENT',
-          referenceId || null,
-          qtyIn.toFixed(2),
-          qtyOut.toFixed(2),
-          newPhysical.toFixed(2),
-          fullReasonText,
-          userId || null,
-        ]
-      );
-
-      await client.query('COMMIT');
-
-      // Audit Log
-      await AuditService.log({
-        businessId,
-        userId,
-        module: 'inventory',
-        action: adjustmentType === 'INCREASE' ? 'STOCK_INCREASE' : 'STOCK_DECREASE',
-        entityType: 'StockLedger',
-        entityId: ledgerRes.rows[0].id,
-        newValue: {
-          batchId,
-          adjustmentType,
-          quantity,
-          previousPhysical: stock.physicalStock,
-          newPhysical,
-          previousAvailable: stock.availableStock,
-          newAvailable,
-          reason: fullReasonText,
-        },
-      });
-
-      return {
-        success: true,
-        batchId,
-        adjustmentType,
-        quantity,
-        previousPhysical: stock.physicalStock,
-        physicalStock: newPhysical,
-        reservedStock: stock.reservedStock,
-        availableStock: newAvailable,
-        ledgerEntry: ledgerRes.rows[0],
-      };
-    } catch (err) {
-      await client.query('ROLLBACK');
-      throw err;
-    } finally {
-      client.release();
-    }
-  }
-
-  /**
-   * 3. CREATE STOCK RESERVATION
+   * 2. CREATE STOCK RESERVATION
    * Does NOT reduce physical stock. Increases reserved stock, reducing available stock.
    * Rejects if requested quantity exceeds current available stock.
    */
@@ -828,6 +692,315 @@ export class StockService {
   }
 
   /**
+   * 6B. GET RESERVATION BY ID
+   */
+  static async getReservationById(businessId: string, reservationId: string) {
+    const rows = await db
+      .select({
+        reservation: stockReservations,
+        batch: opticalBatches,
+        uniqueItem: uniqueItems,
+        primaryItem: primaryItems,
+        category: categories,
+        stock: opticalStocks,
+      })
+      .from(stockReservations)
+      .innerJoin(opticalBatches, eq(stockReservations.batchId, opticalBatches.id))
+      .innerJoin(uniqueItems, eq(opticalBatches.uniqueItemId, uniqueItems.id))
+      .leftJoin(primaryItems, eq(uniqueItems.primaryItemId, primaryItems.id))
+      .innerJoin(categories, eq(opticalBatches.categoryId, categories.id))
+      .leftJoin(opticalStocks, eq(stockReservations.batchId, opticalStocks.batchId))
+      .where(and(eq(stockReservations.id, reservationId), eq(stockReservations.businessId, businessId)))
+      .limit(1);
+
+    if (rows.length === 0) {
+      return null;
+    }
+
+    const r = rows[0];
+    return {
+      id: r.reservation.id,
+      batchId: r.batch.id,
+      barcode: r.batch.barcode,
+      identityKey: r.batch.identityKey,
+      categoryName: r.category.name,
+      primaryItemName: r.primaryItem?.name || null,
+      uniqueItemName: r.uniqueItem.name,
+      sph: parseFloat(r.batch.sph),
+      cyl: parseFloat(r.batch.cyl),
+      axis: parseFloat(r.batch.axis),
+      add: parseFloat(r.batch.add),
+      side: r.batch.side,
+      quantity: parseFloat(r.reservation.quantity),
+      status: r.reservation.status as ReservationStatus,
+      referenceType: r.reservation.referenceType,
+      referenceId: r.reservation.referenceId,
+      notes: r.reservation.notes,
+      createdBy: r.reservation.createdBy,
+      createdAt: r.reservation.createdAt,
+      releasedAt: r.reservation.releasedAt,
+      convertedAt: r.reservation.convertedAt,
+      cancelledAt: r.reservation.cancelledAt,
+      physicalStock: r.stock ? parseFloat(r.stock.physicalStock) : 0,
+      reservedStock: r.stock ? parseFloat(r.stock.reservedStock) : 0,
+      availableStock: r.stock ? parseFloat(r.stock.availableStock) : 0,
+    };
+  }
+
+  /**
+   * 6C. UPDATE STOCK RESERVATION
+   * Supports modifying quantity (validates available stock for increases), notes, and reference.
+   */
+  static async updateReservation(
+    businessId: string,
+    reservationId: string,
+    updates: {
+      quantity?: number;
+      notes?: string;
+      referenceType?: string;
+      referenceId?: string;
+    },
+    userId?: string
+  ) {
+    const client = await pool.connect();
+    try {
+      await client.query('BEGIN');
+
+      const resQuery = await client.query(
+        `SELECT * FROM stock_reservations WHERE id = $1 AND business_id = $2 FOR UPDATE`,
+        [reservationId, businessId]
+      );
+
+      if (resQuery.rows.length === 0) {
+        throw new Error(`Reservation not found with ID ${reservationId}`);
+      }
+
+      const reservation = resQuery.rows[0];
+      const oldQty = round2(parseFloat(reservation.quantity));
+      let newQty = oldQty;
+
+      if (updates.quantity !== undefined && updates.quantity !== null) {
+        newQty = round2(updates.quantity);
+        if (!isValidOpticalQuantity(newQty) || newQty <= 0) {
+          throw new Error('Reserved quantity must be a positive number.');
+        }
+
+        if (newQty !== oldQty) {
+          if (reservation.status !== 'ACTIVE') {
+            throw new Error(`Cannot change quantity of reservation because its status is '${reservation.status}'. Only ACTIVE reservations can have their quantity modified.`);
+          }
+
+          const diff = round2(newQty - oldQty);
+          const stock = await this.lockAndGetStock(client, businessId, reservation.batch_id);
+
+          if (diff > 0 && diff > stock.availableStock) {
+            throw new Error(`Cannot increase reservation by ${diff} pairs. Only ${stock.availableStock} pairs are currently available.`);
+          }
+
+          const newReserved = Math.max(0, round2(stock.reservedStock + diff));
+          const newAvailable = round2(stock.physicalStock - newReserved);
+
+          await client.query(
+            `UPDATE optical_stocks 
+             SET reserved_stock = $1, available_stock = $2, updated_at = NOW() 
+             WHERE id = $3`,
+            [newReserved.toFixed(2), newAvailable.toFixed(2), stock.stockId]
+          );
+
+          // Write ledger audit record for reservation change
+          await client.query(
+            `INSERT INTO stock_ledger (
+              business_id, batch_id, transaction_type, reference_type, reference_id,
+              quantity_in, quantity_out, reserved_in, reserved_out, balance,
+              reason, created_by, created_at
+            ) VALUES ($1, $2, 'RESERVATION', $3, $4, '0.00', '0.00', $5, $6, $7, $8, $9, NOW())`,
+            [
+              businessId,
+              reservation.batch_id,
+              updates.referenceType || reservation.reference_type,
+              reservationId,
+              diff > 0 ? diff.toFixed(2) : '0.00',
+              diff < 0 ? Math.abs(diff).toFixed(2) : '0.00',
+              stock.physicalStock.toFixed(2),
+              `Reservation quantity adjusted from ${oldQty} to ${newQty}`,
+              userId || null,
+            ]
+          );
+        }
+      }
+
+      await client.query(
+        `UPDATE stock_reservations
+         SET quantity = $1,
+             notes = COALESCE($2, notes),
+             reference_type = COALESCE($3, reference_type),
+             reference_id = COALESCE($4, reference_id)
+         WHERE id = $5 AND business_id = $6`,
+        [
+          newQty.toFixed(2),
+          updates.notes !== undefined ? updates.notes : null,
+          updates.referenceType || null,
+          updates.referenceId !== undefined ? updates.referenceId : null,
+          reservationId,
+          businessId,
+        ]
+      );
+
+      await client.query('COMMIT');
+
+      await AuditService.log({
+        businessId,
+        userId,
+        module: 'inventory',
+        action: 'RESERVATION_UPDATED',
+        entityType: 'StockReservation',
+        entityId: reservationId,
+        previousValue: {
+          quantity: oldQty,
+          notes: reservation.notes,
+          referenceType: reservation.reference_type,
+          referenceId: reservation.reference_id,
+        },
+        newValue: {
+          quantity: newQty,
+          notes: updates.notes ?? reservation.notes,
+          referenceType: updates.referenceType ?? reservation.reference_type,
+          referenceId: updates.referenceId ?? reservation.reference_id,
+        },
+      });
+
+      return await this.getReservationById(businessId, reservationId);
+    } catch (err) {
+      await client.query('ROLLBACK');
+      throw err;
+    } finally {
+      client.release();
+    }
+  }
+
+  /**
+   * 6D. DELETE STOCK RESERVATION
+   * Safely deletes a reservation. If ACTIVE, automatically decrements reserved stock and restores available stock.
+   */
+  static async deleteReservation(businessId: string, reservationId: string, userId?: string) {
+    const client = await pool.connect();
+    try {
+      await client.query('BEGIN');
+
+      const resQuery = await client.query(
+        `SELECT * FROM stock_reservations WHERE id = $1 AND business_id = $2 FOR UPDATE`,
+        [reservationId, businessId]
+      );
+
+      if (resQuery.rows.length === 0) {
+        throw new Error(`Reservation not found with ID ${reservationId}`);
+      }
+
+      const reservation = resQuery.rows[0];
+
+      if (reservation.status === 'CONVERTED') {
+        throw new Error(`Cannot delete reservation ${reservationId} because it was already CONVERTED into fulfilled sales inventory.`);
+      }
+
+      // If reservation is ACTIVE, release hold
+      if (reservation.status === 'ACTIVE') {
+        const quantity = round2(parseFloat(reservation.quantity));
+        const stock = await this.lockAndGetStock(client, businessId, reservation.batch_id);
+
+        const newReserved = Math.max(0, round2(stock.reservedStock - quantity));
+        const newAvailable = round2(stock.physicalStock - newReserved);
+
+        await client.query(
+          `UPDATE optical_stocks 
+           SET reserved_stock = $1, available_stock = $2, updated_at = NOW() 
+           WHERE id = $3`,
+          [newReserved.toFixed(2), newAvailable.toFixed(2), stock.stockId]
+        );
+
+        // Record release in ledger
+        await client.query(
+          `INSERT INTO stock_ledger (
+            business_id, batch_id, transaction_type, reference_type, reference_id,
+            quantity_in, quantity_out, reserved_in, reserved_out, balance,
+            reason, created_by, created_at
+          ) VALUES ($1, $2, 'RESERVATION_RELEASE', $3, $4, '0.00', '0.00', '0.00', $5, $6, $7, $8, NOW())`,
+          [
+            businessId,
+            reservation.batch_id,
+            reservation.reference_type,
+            reservation.id,
+            quantity.toFixed(2),
+            stock.physicalStock.toFixed(2),
+            `Hold released upon deletion of Reservation (${reservation.reference_type || 'MANUAL'})`,
+            userId || null,
+          ]
+        );
+      }
+
+      // Delete reservation record
+      await client.query(
+        `DELETE FROM stock_reservations WHERE id = $1 AND business_id = $2`,
+        [reservationId, businessId]
+      );
+
+      await client.query('COMMIT');
+
+      await AuditService.log({
+        businessId,
+        userId,
+        module: 'inventory',
+        action: 'RESERVATION_DELETED',
+        entityType: 'StockReservation',
+        entityId: reservationId,
+        previousValue: reservation,
+      });
+
+      return {
+        success: true,
+        reservationId,
+        message: `Stock Reservation deleted successfully${reservation.status === 'ACTIVE' ? ' and reserved stock released' : ''}.`,
+      };
+    } catch (err) {
+      await client.query('ROLLBACK');
+      throw err;
+    } finally {
+      client.release();
+    }
+  }
+
+  /**
+   * 6E. BULK DELETE STOCK RESERVATIONS
+   */
+  static async bulkDeleteReservations(businessId: string, ids: string[], userId?: string) {
+    if (!Array.isArray(ids) || ids.length === 0) {
+      throw new Error('Please provide an array of Reservation IDs.');
+    }
+
+    let deletedCount = 0;
+    const errors: string[] = [];
+
+    for (const id of ids) {
+      try {
+        await this.deleteReservation(businessId, id, userId);
+        deletedCount++;
+      } catch (err: any) {
+        errors.push(`Reservation ${id}: ${err.message}`);
+      }
+    }
+
+    return {
+      success: true,
+      totalRequested: ids.length,
+      deletedCount,
+      failedCount: errors.length,
+      errors,
+      message: deletedCount === ids.length
+        ? `Successfully deleted ${deletedCount} reservation(s).`
+        : `Deleted ${deletedCount} of ${ids.length} reservation(s). ${errors.length} failed.`,
+    };
+  }
+
+  /**
    * 7. BARCODE-BASED STOCK LOOKUP
    * Resolves optical batch, unique item, category, powers, and real-time stock balances by barcode.
    */
@@ -1186,7 +1359,7 @@ export class StockService {
    */
   static async getOpeningStockHistory(
     businessId: string,
-    filters: { limit?: number; offset?: number } = {}
+    filters: { limit?: number; offset?: number; search?: string; categoryId?: string } = {}
   ) {
     const limit = Math.min(filters.limit || 50, 100);
     const offset = filters.offset || 0;
@@ -1198,12 +1371,14 @@ export class StockService {
         uniqueItem: uniqueItems,
         primaryItem: primaryItems,
         category: categories,
+        stock: opticalStocks,
       })
       .from(stockLedger)
       .innerJoin(opticalBatches, eq(stockLedger.batchId, opticalBatches.id))
       .innerJoin(uniqueItems, eq(opticalBatches.uniqueItemId, uniqueItems.id))
       .leftJoin(primaryItems, eq(uniqueItems.primaryItemId, primaryItems.id))
       .innerJoin(categories, eq(opticalBatches.categoryId, categories.id))
+      .leftJoin(opticalStocks, eq(stockLedger.batchId, opticalStocks.batchId))
       .where(
         and(
           eq(stockLedger.businessId, businessId),
@@ -1212,25 +1387,64 @@ export class StockService {
       )
       .orderBy(desc(stockLedger.createdAt));
 
-    const total = rows.length;
-    const paginated = rows.slice(offset, offset + limit).map((r) => ({
-      id: r.ledger.id,
-      batchId: r.batch.id,
-      barcode: r.batch.barcode,
-      identityKey: r.batch.identityKey,
-      categoryName: r.category.name,
-      primaryItemName: r.primaryItem?.name || null,
-      uniqueItemName: r.uniqueItem.name,
-      sph: parseFloat(r.batch.sph),
-      cyl: parseFloat(r.batch.cyl),
-      axis: parseFloat(r.batch.axis),
-      add: parseFloat(r.batch.add),
-      side: r.batch.side,
-      quantityIn: parseFloat(r.ledger.quantityIn),
-      balance: parseFloat(r.ledger.balance),
-      reason: r.ledger.reason,
-      createdAt: r.ledger.createdAt,
-    }));
+    let mapped = rows.map((r) => {
+      const catCode = (r.uniqueItem.opticalCategory || r.category.code || 'SV').toUpperCase();
+      const formattedName = formatOpticalBatchName({
+        sph: r.batch.sph,
+        cyl: r.batch.cyl,
+        axis: r.batch.axis,
+        add: r.batch.add,
+        side: r.batch.side,
+        categoryCode: catCode,
+      });
+
+      return {
+        id: r.ledger.id,
+        batchId: r.batch.id,
+        barcode: r.batch.barcode,
+        identityKey: r.batch.identityKey,
+        formattedName,
+        categoryId: r.category.id,
+        categoryName: r.category.name,
+        categoryCode: catCode,
+        primaryItemName: r.primaryItem?.name || null,
+        uniqueItemId: r.uniqueItem.id,
+        uniqueItemName: r.uniqueItem.name,
+        uniqueItemCode: r.uniqueItem.code,
+        sph: parseFloat(r.batch.sph),
+        cyl: parseFloat(r.batch.cyl),
+        axis: parseFloat(r.batch.axis),
+        add: parseFloat(r.batch.add),
+        side: r.batch.side,
+        quantityIn: parseFloat(r.ledger.quantityIn),
+        balance: parseFloat(r.ledger.balance),
+        reason: r.ledger.reason,
+        createdAt: r.ledger.createdAt,
+        physicalStock: r.stock ? parseFloat(r.stock.physicalStock) : 0,
+        reservedStock: r.stock ? parseFloat(r.stock.reservedStock) : 0,
+        availableStock: r.stock ? parseFloat(r.stock.availableStock) : 0,
+      };
+    });
+
+    if (filters.categoryId && filters.categoryId !== 'ALL') {
+      mapped = mapped.filter((r) => r.categoryId === filters.categoryId || r.categoryCode === filters.categoryId);
+    }
+
+    if (filters.search && filters.search.trim()) {
+      const s = filters.search.trim().toLowerCase();
+      mapped = mapped.filter(
+        (r) =>
+          r.barcode.toLowerCase().includes(s) ||
+          r.formattedName.toLowerCase().includes(s) ||
+          r.uniqueItemName.toLowerCase().includes(s) ||
+          (r.reason && r.reason.toLowerCase().includes(s)) ||
+          r.sph.toString().includes(s) ||
+          r.cyl.toString().includes(s)
+      );
+    }
+
+    const total = mapped.length;
+    const paginated = mapped.slice(offset, offset + limit);
 
     return {
       items: paginated,
@@ -1241,15 +1455,9 @@ export class StockService {
   }
 
   /**
-   * 12. LIST STOCK ADJUSTMENT HISTORY
+   * 12B. GET OPENING STOCK BY ID
    */
-  static async getAdjustmentHistory(
-    businessId: string,
-    filters: { limit?: number; offset?: number } = {}
-  ) {
-    const limit = Math.min(filters.limit || 50, 100);
-    const offset = filters.offset || 0;
-
+  static async getOpeningStockById(businessId: string, ledgerId: string) {
     const rows = await db
       .select({
         ledger: stockLedger,
@@ -1257,52 +1465,307 @@ export class StockService {
         uniqueItem: uniqueItems,
         primaryItem: primaryItems,
         category: categories,
+        stock: opticalStocks,
       })
       .from(stockLedger)
       .innerJoin(opticalBatches, eq(stockLedger.batchId, opticalBatches.id))
       .innerJoin(uniqueItems, eq(opticalBatches.uniqueItemId, uniqueItems.id))
       .leftJoin(primaryItems, eq(uniqueItems.primaryItemId, primaryItems.id))
       .innerJoin(categories, eq(opticalBatches.categoryId, categories.id))
+      .leftJoin(opticalStocks, eq(stockLedger.batchId, opticalStocks.batchId))
       .where(
         and(
+          eq(stockLedger.id, ledgerId),
           eq(stockLedger.businessId, businessId),
-          eq(stockLedger.transactionType, 'STOCK_ADJUSTMENT')
+          eq(stockLedger.transactionType, 'OPENING_STOCK')
         )
       )
-      .orderBy(desc(stockLedger.createdAt));
+      .limit(1);
 
-    const total = rows.length;
-    const paginated = rows.slice(offset, offset + limit).map((r) => {
-      const qtyIn = parseFloat(r.ledger.quantityIn);
-      const qtyOut = parseFloat(r.ledger.quantityOut);
-      const isIncrease = qtyIn > 0;
+    if (rows.length === 0) return null;
 
-      return {
-        id: r.ledger.id,
-        batchId: r.batch.id,
-        barcode: r.batch.barcode,
-        identityKey: r.batch.identityKey,
-        categoryName: r.category.name,
-        primaryItemName: r.primaryItem?.name || null,
-        uniqueItemName: r.uniqueItem.name,
-        sph: parseFloat(r.batch.sph),
-        cyl: parseFloat(r.batch.cyl),
-        axis: parseFloat(r.batch.axis),
-        add: parseFloat(r.batch.add),
-        side: r.batch.side,
-        adjustmentType: isIncrease ? 'INCREASE' : 'DECREASE',
-        quantity: isIncrease ? qtyIn : qtyOut,
-        balance: parseFloat(r.ledger.balance),
-        reason: r.ledger.reason,
-        createdAt: r.ledger.createdAt,
-      };
+    const r = rows[0];
+    const catCode = (r.uniqueItem.opticalCategory || r.category.code || 'SV').toUpperCase();
+    const formattedName = formatOpticalBatchName({
+      sph: r.batch.sph,
+      cyl: r.batch.cyl,
+      axis: r.batch.axis,
+      add: r.batch.add,
+      side: r.batch.side,
+      categoryCode: catCode,
     });
 
     return {
-      items: paginated,
-      total,
-      limit,
-      offset,
+      id: r.ledger.id,
+      batchId: r.batch.id,
+      barcode: r.batch.barcode,
+      identityKey: r.batch.identityKey,
+      formattedName,
+      categoryId: r.category.id,
+      categoryName: r.category.name,
+      categoryCode: catCode,
+      primaryItemName: r.primaryItem?.name || null,
+      uniqueItemId: r.uniqueItem.id,
+      uniqueItemName: r.uniqueItem.name,
+      uniqueItemCode: r.uniqueItem.code,
+      sph: parseFloat(r.batch.sph),
+      cyl: parseFloat(r.batch.cyl),
+      axis: parseFloat(r.batch.axis),
+      add: parseFloat(r.batch.add),
+      side: r.batch.side,
+      quantityIn: parseFloat(r.ledger.quantityIn),
+      balance: parseFloat(r.ledger.balance),
+      reason: r.ledger.reason,
+      createdAt: r.ledger.createdAt,
+      physicalStock: r.stock ? parseFloat(r.stock.physicalStock) : 0,
+      reservedStock: r.stock ? parseFloat(r.stock.reservedStock) : 0,
+      availableStock: r.stock ? parseFloat(r.stock.availableStock) : 0,
+    };
+  }
+
+  /**
+   * 12C. UPDATE OPENING STOCK
+   * Modifies the starting opening stock quantity and recalculates batch balances and ledger history.
+   */
+  static async updateOpeningStock(
+    businessId: string,
+    ledgerId: string,
+    updates: { quantity: number; reason?: string; date?: string },
+    userId?: string
+  ) {
+    const newQty = round2(updates.quantity);
+    if (!isValidOpticalQuantity(newQty) || newQty <= 0) {
+      throw new Error('Opening stock quantity must be a positive number.');
+    }
+
+    const client = await pool.connect();
+    try {
+      await client.query('BEGIN');
+
+      const ledgerRes = await client.query(
+        `SELECT * FROM stock_ledger 
+         WHERE id = $1 AND business_id = $2 AND transaction_type = 'OPENING_STOCK'
+         FOR UPDATE`,
+        [ledgerId, businessId]
+      );
+
+      if (ledgerRes.rows.length === 0) {
+        throw new Error(`Opening stock entry not found with ID ${ledgerId}`);
+      }
+
+      const ledgerRow = ledgerRes.rows[0];
+      const oldQty = round2(parseFloat(ledgerRow.quantity_in));
+      const diff = round2(newQty - oldQty);
+      const batchId = ledgerRow.batch_id;
+
+      // Lock current stock
+      const stock = await this.lockAndGetStock(client, businessId, batchId);
+
+      // If reducing opening stock, verify subsequent transactions did not already consume it
+      if (diff < 0) {
+        const potentialPhysical = round2(stock.physicalStock + diff);
+        const potentialAvailable = round2(stock.availableStock + diff);
+        if (potentialPhysical < 0 || potentialAvailable < 0) {
+          throw new Error(
+            `Cannot reduce opening stock by ${Math.abs(diff)} pairs. ` +
+            `Current physical stock is ${stock.physicalStock} pairs (${stock.availableStock} available). ` +
+            `Subsequent sales or reservations have already consumed this stock.`
+          );
+        }
+      }
+
+      const newPhysical = round2(stock.physicalStock + diff);
+      const newAvailable = round2(newPhysical - stock.reservedStock);
+
+      // Update optical_stocks
+      await client.query(
+        `UPDATE optical_stocks 
+         SET physical_stock = $1, available_stock = $2, updated_at = NOW() 
+         WHERE id = $3`,
+        [newPhysical.toFixed(2), newAvailable.toFixed(2), stock.stockId]
+      );
+
+      // Update the OPENING_STOCK entry
+      await client.query(
+        `UPDATE stock_ledger
+         SET quantity_in = $1,
+             reason = COALESCE($2, reason),
+             created_at = COALESCE($3, created_at)
+         WHERE id = $4 AND business_id = $5`,
+        [
+          newQty.toFixed(2),
+          updates.reason || null,
+          updates.date ? new Date(updates.date) : null,
+          ledgerId,
+          businessId,
+        ]
+      );
+
+      // Recalculate running balances
+      await client.query(
+        `WITH calculated AS (
+          SELECT id,
+            SUM(quantity_in::numeric - quantity_out::numeric) OVER (
+              PARTITION BY batch_id ORDER BY created_at ASC, id ASC
+            ) as calc_balance
+          FROM stock_ledger
+          WHERE batch_id = $1
+        )
+        UPDATE stock_ledger sl
+        SET balance = calculated.calc_balance
+        FROM calculated
+        WHERE sl.id = calculated.id`,
+        [batchId]
+      );
+
+      await client.query('COMMIT');
+
+      await AuditService.log({
+        businessId,
+        userId,
+        module: 'inventory',
+        action: 'OPENING_STOCK_UPDATED',
+        entityType: 'StockLedger',
+        entityId: ledgerId,
+        previousValue: { quantity: oldQty, reason: ledgerRow.reason },
+        newValue: { quantity: newQty, reason: updates.reason, newPhysical, newAvailable },
+      });
+
+      return await this.getOpeningStockById(businessId, ledgerId);
+    } catch (err) {
+      await client.query('ROLLBACK');
+      throw err;
+    } finally {
+      client.release();
+    }
+  }
+
+  /**
+   * 12D. DELETE OPENING STOCK
+   * Removes initial opening stock. Validates that current inventory balance can safely cover the deduction.
+   */
+  static async deleteOpeningStock(businessId: string, ledgerId: string, userId?: string) {
+    const client = await pool.connect();
+    try {
+      await client.query('BEGIN');
+
+      const ledgerRes = await client.query(
+        `SELECT * FROM stock_ledger 
+         WHERE id = $1 AND business_id = $2 AND transaction_type = 'OPENING_STOCK'
+         FOR UPDATE`,
+        [ledgerId, businessId]
+      );
+
+      if (ledgerRes.rows.length === 0) {
+        throw new Error(`Opening stock entry not found with ID ${ledgerId}`);
+      }
+
+      const ledgerRow = ledgerRes.rows[0];
+      const quantity = round2(parseFloat(ledgerRow.quantity_in));
+      const batchId = ledgerRow.batch_id;
+
+      // Lock current stock
+      const stock = await this.lockAndGetStock(client, businessId, batchId);
+
+      // Check safety: can we remove this initial quantity without making stock negative?
+      const potentialPhysical = round2(stock.physicalStock - quantity);
+      const potentialAvailable = round2(stock.availableStock - quantity);
+      if (potentialPhysical < 0 || potentialAvailable < 0) {
+        throw new Error(
+          `Cannot delete opening stock of ${quantity} pairs. ` +
+          `Current physical stock is ${stock.physicalStock} pairs (${stock.availableStock} available). ` +
+          `Later sales, orders, or reservations have already consumed this inventory.`
+        );
+      }
+
+      const newPhysical = potentialPhysical;
+      const newAvailable = round2(newPhysical - stock.reservedStock);
+
+      // Update optical_stocks
+      await client.query(
+        `UPDATE optical_stocks 
+         SET physical_stock = $1, available_stock = $2, updated_at = NOW() 
+         WHERE id = $3`,
+        [newPhysical.toFixed(2), newAvailable.toFixed(2), stock.stockId]
+      );
+
+      // Delete the OPENING_STOCK row
+      await client.query(
+        `DELETE FROM stock_ledger WHERE id = $1 AND business_id = $2`,
+        [ledgerId, businessId]
+      );
+
+      // Recalculate running balances
+      await client.query(
+        `WITH calculated AS (
+          SELECT id,
+            SUM(quantity_in::numeric - quantity_out::numeric) OVER (
+              PARTITION BY batch_id ORDER BY created_at ASC, id ASC
+            ) as calc_balance
+          FROM stock_ledger
+          WHERE batch_id = $1
+        )
+        UPDATE stock_ledger sl
+        SET balance = calculated.calc_balance
+        FROM calculated
+        WHERE sl.id = calculated.id`,
+        [batchId]
+      );
+
+      await client.query('COMMIT');
+
+      await AuditService.log({
+        businessId,
+        userId,
+        module: 'inventory',
+        action: 'OPENING_STOCK_DELETED',
+        entityType: 'StockLedger',
+        entityId: ledgerId,
+        previousValue: ledgerRow,
+      });
+
+      return {
+        success: true,
+        ledgerId,
+        message: `Opening stock entry deleted successfully and batch balance recalculated.`,
+      };
+    } catch (err) {
+      await client.query('ROLLBACK');
+      throw err;
+    } finally {
+      client.release();
+    }
+  }
+
+  /**
+   * 12E. BULK DELETE OPENING STOCK
+   */
+  static async bulkDeleteOpeningStock(businessId: string, ids: string[], userId?: string) {
+    if (!Array.isArray(ids) || ids.length === 0) {
+      throw new Error('Please provide an array of Opening Stock IDs.');
+    }
+
+    let deletedCount = 0;
+    const errors: string[] = [];
+
+    for (const id of ids) {
+      try {
+        await this.deleteOpeningStock(businessId, id, userId);
+        deletedCount++;
+      } catch (err: any) {
+        errors.push(`Opening stock ${id}: ${err.message}`);
+      }
+    }
+
+    return {
+      success: true,
+      totalRequested: ids.length,
+      deletedCount,
+      failedCount: errors.length,
+      errors,
+      message: deletedCount === ids.length
+        ? `Successfully deleted ${deletedCount} opening stock entry/entries.`
+        : `Deleted ${deletedCount} of ${ids.length} opening stock entries. ${errors.length} failed.`,
     };
   }
 }

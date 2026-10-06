@@ -31,6 +31,7 @@ import {
   Sparkles,
   Store,
   ShoppingBag,
+  BookmarkCheck,
 } from 'lucide-react';
 import { useAuth } from '../../context/AuthContext.js';
 
@@ -95,6 +96,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
         { id: 'dealer-orders-list', label: 'My Warehouse Orders', icon: ShoppingBag, path: '/dealer/orders', permission: 'sales:view' },
         { id: 'master-stock-items', label: 'Stock Items', icon: QrCode, path: '/master/stock-items', permission: 'master:view' },
         { id: 'master-batches', label: 'Optical Batches & Powers', icon: Barcode, path: '/master/batches', permission: 'master:view' },
+        { id: 'master-opening-stock', label: 'Opening Stock', icon: Boxes, path: '/master/opening-stock', permission: 'master:view' },
       ],
     },
     {
@@ -116,6 +118,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
         { id: 'sales-invoices', label: 'Sales Invoices Register', icon: Receipt, path: '/sales/invoices', permission: 'sales:view' },
         { id: 'sales-orders', label: 'Sales Orders', icon: ShoppingCart, path: '/sales/orders', permission: 'sales:view' },
         { id: 'sales-returns', label: 'Sales Returns', icon: RotateCcw, path: '/sales/returns', permission: 'sales:view' },
+        { id: 'sales-reservations', label: 'Stock Reservations', icon: BookmarkCheck, path: '/sales/reservations', permission: 'sales:view' },
         { id: 'sales-ledger', label: 'Customer Ledger', icon: BookOpen, path: '/sales/customer-ledger', permission: 'sales:view' },
       ],
     },

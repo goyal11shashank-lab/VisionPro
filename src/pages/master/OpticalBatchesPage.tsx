@@ -2,7 +2,7 @@ import React, { useState, useEffect, useCallback } from 'react';
 import { 
   Barcode, Plus, Search, RefreshCw, CheckCircle2, XCircle, Trash2, 
   AlertTriangle, ShieldAlert, Filter, Sparkles, Eye, Layers, Copy, 
-  Check, Edit3, FileSpreadsheet, BookOpen, ExternalLink, Info 
+  Check, Edit3, FileSpreadsheet, BookOpen, ExternalLink, Info, Boxes
 } from 'lucide-react';
 import { apiRequest } from '../../api/client.js';
 import { OpticalBatch, UniqueItem, Category } from '../../types/index.js';
@@ -12,8 +12,10 @@ import { StockItemLedgerModal } from '../../components/inventory/StockItemLedger
 import { StockItemsListView } from '../../components/inventory/StockItemsListView.js';
 import { StockItemBatchesView } from '../../components/inventory/StockItemBatchesView.js';
 import { BatchLedgerView } from '../../components/inventory/BatchLedgerView.js';
+import { AllBatchesListView } from '../../components/inventory/AllBatchesListView.js';
+import { OpeningStockPage } from '../inventory/OpeningStockPage.js';
 
-type ViewMode = 'STOCK_ITEMS' | 'BATCHES' | 'BATCH_LEDGER';
+type ViewMode = 'STOCK_ITEMS' | 'ALL_BATCHES' | 'OPENING_STOCK' | 'BATCHES' | 'BATCH_LEDGER';
 
 interface OpticalBatchesPageProps {
   onNavigate?: (path: string) => void;
@@ -468,6 +470,55 @@ export const OpticalBatchesPage: React.FC<OpticalBatchesPageProps> = ({ onNaviga
         </div>
       )}
 
+      {/* Top Level View Selector */}
+      {(viewMode === 'STOCK_ITEMS' || viewMode === 'ALL_BATCHES' || viewMode === 'OPENING_STOCK') && (
+        <div className="flex items-center gap-2 border-b border-slate-200 pb-2">
+          <button
+            type="button"
+            onClick={() => setViewMode('STOCK_ITEMS')}
+            className={`px-3 py-1.5 rounded-lg text-xs font-semibold flex items-center gap-1.5 transition-colors cursor-pointer ${
+              viewMode === 'STOCK_ITEMS'
+                ? 'bg-blue-600 text-white shadow-xs'
+                : 'text-slate-600 hover:text-slate-900 hover:bg-slate-100'
+            }`}
+          >
+            <Layers className="h-3.5 w-3.5" />
+            <span>By Stock Item</span>
+            <span className={`px-1.5 py-0.2 rounded-full text-[10px] ${
+              viewMode === 'STOCK_ITEMS' ? 'bg-blue-700 text-white' : 'bg-slate-200 text-slate-700'
+            }`}>
+              {uniqueItems.length}
+            </span>
+          </button>
+
+          <button
+            type="button"
+            onClick={() => setViewMode('ALL_BATCHES')}
+            className={`px-3 py-1.5 rounded-lg text-xs font-semibold flex items-center gap-1.5 transition-colors cursor-pointer ${
+              viewMode === 'ALL_BATCHES'
+                ? 'bg-blue-600 text-white shadow-xs'
+                : 'text-slate-600 hover:text-slate-900 hover:bg-slate-100'
+            }`}
+          >
+            <Barcode className="h-3.5 w-3.5" />
+            <span>All Optical Batches (Bulk Actions)</span>
+          </button>
+
+          <button
+            type="button"
+            onClick={() => setViewMode('OPENING_STOCK')}
+            className={`px-3 py-1.5 rounded-lg text-xs font-semibold flex items-center gap-1.5 transition-colors cursor-pointer ${
+              viewMode === 'OPENING_STOCK'
+                ? 'bg-blue-600 text-white shadow-xs'
+                : 'text-slate-600 hover:text-slate-900 hover:bg-slate-100'
+            }`}
+          >
+            <Boxes className="h-3.5 w-3.5" />
+            <span>Opening Stock Register</span>
+          </button>
+        </div>
+      )}
+
       {/* Main Hierarchical View Router */}
       {viewMode === 'STOCK_ITEMS' && (
         <StockItemsListView
@@ -480,6 +531,22 @@ export const OpticalBatchesPage: React.FC<OpticalBatchesPageProps> = ({ onNaviga
           onCreateBatch={() => handleOpenCreateBatch()}
           onOpenImportModal={() => setShowImportModal(true)}
         />
+      )}
+
+      {viewMode === 'ALL_BATCHES' && (
+        <AllBatchesListView
+          categories={categories}
+          onSelectBatch={handleSelectBatch}
+          onEditBatch={handleOpenEdit}
+          onRefreshParent={() => {
+            fetchStockItems();
+            setBatchesRefreshKey(k => k + 1);
+          }}
+        />
+      )}
+
+      {viewMode === 'OPENING_STOCK' && (
+        <OpeningStockPage onNavigate={onNavigate} />
       )}
 
       {viewMode === 'BATCHES' && selectedStockItem && (

@@ -441,18 +441,6 @@ export class ImportPostingService {
                     },
                     userId
                   );
-                } else {
-                  await StockService.adjustStock(
-                    businessId,
-                    {
-                      batchId: batch.id,
-                      adjustmentType: 'INCREASE',
-                      quantity: openingQty,
-                      reason: 'OPENING_CORRECTION',
-                      remarks: row.resolvedData?.remarks || `Bulk Optical Batch Excel Import Incremental (${session.fileName})`,
-                    },
-                    userId
-                  );
                 }
               }
 

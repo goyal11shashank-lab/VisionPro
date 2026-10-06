@@ -451,14 +451,14 @@ export const opticalStocks = pgTable('optical_stocks', {
 
 /**
  * 17. Stock Ledger
- * Immutable audit trail of every stock entry, exit, adjustment, and reservation.
+ * Immutable audit trail of every stock entry, exit, and reservation.
  */
 export const stockLedger = pgTable('stock_ledger', {
   id: uuid('id').defaultRandom().primaryKey(),
   businessId: uuid('business_id').references(() => businesses.id, { onDelete: 'cascade' }).notNull(),
   batchId: uuid('batch_id').references(() => opticalBatches.id, { onDelete: 'cascade' }).notNull(),
-  transactionType: varchar('transaction_type', { length: 50 }).notNull(), // OPENING_STOCK, PURCHASE, PURCHASE_RETURN, SALE, SALES_RETURN, STOCK_ADJUSTMENT, STOCK_TRANSFER, RESERVATION, RESERVATION_RELEASE, RESERVATION_CONVERSION, CANCELLATION_REVERSAL
-  referenceType: varchar('reference_type', { length: 50 }), // INVOICE, BILL, MANUAL, TRANSFER, ADJUSTMENT
+  transactionType: varchar('transaction_type', { length: 50 }).notNull(), // OPENING_STOCK, PURCHASE, PURCHASE_RETURN, SALE, SALES_RETURN, STOCK_TRANSFER, RESERVATION, RESERVATION_RELEASE, RESERVATION_CONVERSION, CANCELLATION_REVERSAL
+  referenceType: varchar('reference_type', { length: 50 }), // INVOICE, BILL, MANUAL, TRANSFER
   referenceId: varchar('reference_id', { length: 100 }),
   quantityIn: numeric('quantity_in', { precision: 12, scale: 2 }).default('0.00').notNull(),
   quantityOut: numeric('quantity_out', { precision: 12, scale: 2 }).default('0.00').notNull(),

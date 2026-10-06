@@ -141,8 +141,6 @@ export const BatchLedgerView: React.FC<BatchLedgerViewProps> = ({
         list = list.filter(t => t.transactionType === 'SALES_RETURN' || t.transactionType === 'PURCHASE_RETURN');
       } else if (txTypeFilter === 'RESERVATION') {
         list = list.filter(t => t.transactionType.includes('RESERV'));
-      } else if (txTypeFilter === 'ADJUSTMENT') {
-        list = list.filter(t => t.transactionType === 'STOCK_ADJUSTMENT');
       }
     }
 
@@ -468,7 +466,6 @@ export const BatchLedgerView: React.FC<BatchLedgerViewProps> = ({
                     <th className="py-3 px-3 text-right">Purchase Return</th>
                     <th className="py-3 px-3 text-right">Sales Qty</th>
                     <th className="py-3 px-3 text-right">Sales Return</th>
-                    <th className="py-3 px-3 text-right">Adjustment</th>
                     <th className="py-3 px-3 text-right">Closing Stock</th>
                     <th className="py-3 px-3 text-right">Purchase Value (₹)</th>
                     <th className="py-3 px-4 text-right">Sales Value (₹)</th>
@@ -477,21 +474,21 @@ export const BatchLedgerView: React.FC<BatchLedgerViewProps> = ({
                 <tbody className="divide-y divide-slate-100 text-slate-800">
                   {loading && monthlySummaries.length === 0 ? (
                     <tr>
-                      <td colSpan={10} className="py-16 text-center text-slate-500">
+                      <td colSpan={9} className="py-16 text-center text-slate-500">
                         <div className="inline-block animate-spin rounded-full h-8 w-8 border-b-2 border-slate-700 mb-2"></div>
                         <p className="text-xs font-medium">Reconstructing continuous monthly ledger...</p>
                       </td>
                     </tr>
                   ) : error ? (
                     <tr>
-                      <td colSpan={10} className="py-12 text-center text-rose-600">
+                      <td colSpan={9} className="py-12 text-center text-rose-600">
                         <AlertTriangle className="h-8 w-8 mx-auto mb-2 text-rose-500" />
                         <p className="font-semibold text-xs">{error}</p>
                       </td>
                     </tr>
                   ) : monthlySummaries.length === 0 ? (
                     <tr>
-                      <td colSpan={10} className="py-16 text-center text-slate-400">
+                      <td colSpan={9} className="py-16 text-center text-slate-400">
                         <p className="font-semibold text-slate-600">No transactions found for this Batch.</p>
                         <p className="text-xs text-slate-400 mt-1">
                           Current Stock balance is {batchData?.stock ?? 0} {stockItemData?.unit || 'PRS'}.
@@ -566,11 +563,6 @@ export const BatchLedgerView: React.FC<BatchLedgerViewProps> = ({
                               {m.returnIn > 0 ? `+${formatQuantity(m.returnIn)}` : '—'}
                             </td>
 
-                            {/* Adjustment */}
-                            <td className="py-3 px-3 text-right font-mono text-slate-600">
-                              {m.adjustment !== 0 ? (m.adjustment > 0 ? `+${formatQuantity(m.adjustment)}` : formatQuantity(m.adjustment)) : '—'}
-                            </td>
-
                             {/* Closing Stock */}
                             <td className={`py-3 px-3 text-right font-mono font-bold ${
                               closing < 0 ? 'text-rose-600 bg-rose-50/30' : 'text-slate-900 bg-slate-50/50'
@@ -592,7 +584,7 @@ export const BatchLedgerView: React.FC<BatchLedgerViewProps> = ({
                           {/* Inline Expanded Vouchers for this Month */}
                           {isExpanded && (
                             <tr>
-                              <td colSpan={10} className="p-0 bg-slate-50/90 border-y border-blue-100">
+                              <td colSpan={9} className="p-0 bg-slate-50/90 border-y border-blue-100">
                                 <div className="p-3.5 space-y-2">
                                   <div className="flex items-center justify-between">
                                     <span className="text-xs font-bold text-slate-800 uppercase tracking-wider flex items-center gap-1.5">
@@ -726,7 +718,6 @@ export const BatchLedgerView: React.FC<BatchLedgerViewProps> = ({
                 <option value="SALE">Sales</option>
                 <option value="RETURN">Returns</option>
                 <option value="RESERVATION">Reservations</option>
-                <option value="ADJUSTMENT">Adjustments</option>
               </select>
 
               <button

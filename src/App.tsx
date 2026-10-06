@@ -38,6 +38,8 @@ import { CustomerReceiptsPage } from './pages/accounts/CustomerReceiptsPage.js';
 import { SupplierPaymentsPage } from './pages/accounts/SupplierPaymentsPage.js';
 import { OutstandingAgingPage } from './pages/accounts/OutstandingAgingPage.js';
 import { ReportsCenterPage } from './pages/reports/ReportsCenterPage.js';
+import { StockReservationsPage } from './pages/sales/StockReservationsPage.js';
+import { OpeningStockPage } from './pages/inventory/OpeningStockPage.js';
 import { RefreshCw, ShieldCheck, Building2, LogOut } from 'lucide-react';
 
 const AppContent: React.FC = () => {
@@ -176,6 +178,12 @@ const AppContent: React.FC = () => {
         return 'Sales Invoices & Orders';
       case '/sales/returns':
         return 'Sales Returns & Credit Notes';
+      case '/sales/reservations':
+      case '/sales/stock-reservations':
+        return 'Stock Reservations Management';
+      case '/inventory/opening-stock':
+      case '/master/opening-stock':
+        return 'Opening Stock Management';
       case '/purchases/orders':
       case '/purchase/orders':
         return 'Purchase Orders';
@@ -395,6 +403,12 @@ const AppContent: React.FC = () => {
         return <SalesReturnsPage />;
       case '/sales/customer-ledger':
         return <CustomerLedgerPage />;
+      case '/sales/reservations':
+      case '/sales/stock-reservations':
+        return <StockReservationsPage onNavigate={setCurrentPath} />;
+      case '/inventory/opening-stock':
+      case '/master/opening-stock':
+        return <OpeningStockPage onNavigate={setCurrentPath} />;
 
       case '/sales/prescriptions':
         return (

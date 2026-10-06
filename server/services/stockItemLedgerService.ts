@@ -296,15 +296,6 @@ export class StockItemLedgerService {
           rate = defaultPurchaseRate;
           break;
 
-        case 'STOCK_ADJUSTMENT':
-          transactionLabel = 'Stock Adjustment';
-          voucherNo = 'STK-ADJ';
-          voucherId = null;
-          partyName = 'Physical Verification';
-          partyType = 'INTERNAL';
-          rate = defaultPurchaseRate;
-          break;
-
         case 'CANCELLATION_REVERSAL':
           transactionLabel = 'Cancellation Reversal';
           voucherNo = r.sales_invoice_number || r.purchase_invoice_number || 'REVERSAL';
@@ -517,7 +508,7 @@ export class StockItemLedgerService {
         mData.returnOut += tx.quantityOut;
       } else if (tx.transactionType === 'OPENING_STOCK') {
         mData.openingStockEntry += tx.quantityIn;
-      } else if (tx.transactionType === 'STOCK_ADJUSTMENT' || tx.transactionType === 'CANCELLATION_REVERSAL') {
+      } else if (tx.transactionType === 'CANCELLATION_REVERSAL') {
         mData.adjustment += (tx.quantityIn - tx.quantityOut);
       }
     }

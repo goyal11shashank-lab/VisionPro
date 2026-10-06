@@ -38,7 +38,7 @@ export const VoucherDetailModal: React.FC<VoucherDetailModalProps> = ({
     }
 
     if (!voucherId) {
-      // Opening stock or manual adjustment entry
+      // Opening stock entry
       setVoucherData({
         isManual: true,
         voucherNo,
@@ -208,7 +208,7 @@ export const VoucherDetailModal: React.FC<VoucherDetailModalProps> = ({
                 <span>System Initialization / Direct Stock Posting</span>
               </div>
               <p className="text-xs text-blue-700 leading-relaxed">
-                This transaction was generated as an Opening Stock entry or direct inventory adjustment.
+                This transaction was generated as an Opening Stock entry.
                 It establishes baseline physical stock and valuation without requiring a commercial party invoice.
               </p>
               <div className="grid grid-cols-2 gap-4 pt-2 border-t border-blue-200/60 text-xs">
