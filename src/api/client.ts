@@ -67,7 +67,7 @@ export function getAuthHeaders(customBizId?: string): Record<string, string> {
 export async function apiRequest<T = any>(
   endpoint: string,
   options: RequestInit = {},
-  retries = 3
+  retries = 5
 ): Promise<T> {
   const token = getStoredToken();
   const bizId = getStoredBusinessId();
@@ -107,14 +107,14 @@ export async function apiRequest<T = any>(
         // If the server is warming up or restarting and returned HTML, retry up to `retries` times
         if (isHtml && attempt <= retries) {
           console.warn(`[API Client] Endpoint ${endpoint} returned HTML (server warming up). Retrying attempt ${attempt}/${retries}...`);
-          await new Promise((resolve) => setTimeout(resolve, attempt * 500));
+          await new Promise((resolve) => setTimeout(resolve, Math.min(attempt * 600, 2500)));
           continue;
         }
 
         if (!response.ok) {
           if ((response.status === 502 || response.status === 503 || response.status === 504) && attempt <= retries) {
             console.warn(`[API Client] Gateway ${response.status} on ${endpoint}. Retrying attempt ${attempt}/${retries}...`);
-            await new Promise((resolve) => setTimeout(resolve, attempt * 500));
+            await new Promise((resolve) => setTimeout(resolve, Math.min(attempt * 600, 2500)));
             continue;
           }
           const err: any = new Error(`HTTP ${response.status}: Request failed`);
@@ -124,6 +124,11 @@ export async function apiRequest<T = any>(
         }
 
         if (isHtml) {
+          if (attempt <= retries) {
+            console.warn(`[API Client] Endpoint ${endpoint} returned HTML. Retrying attempt ${attempt}/${retries}...`);
+            await new Promise((resolve) => setTimeout(resolve, Math.min(attempt * 600, 2500)));
+            continue;
+          }
           const err: any = new Error(`API endpoint ${endpoint} returned HTML instead of JSON. The server may still be initializing.`);
           err.status = 502;
           err.data = text;
@@ -134,7 +139,7 @@ export async function apiRequest<T = any>(
       if (!response.ok) {
         if ((response.status === 502 || response.status === 503 || response.status === 504) && attempt <= retries) {
           console.warn(`[API Client] Gateway error HTTP ${response.status} on ${endpoint}. Retrying attempt ${attempt}/${retries}...`);
-          await new Promise((resolve) => setTimeout(resolve, attempt * 500));
+          await new Promise((resolve) => setTimeout(resolve, Math.min(attempt * 600, 2500)));
           continue;
         }
         const errorMsg = data.message || data.error || `HTTP ${response.status}: Request failed`;
@@ -146,9 +151,9 @@ export async function apiRequest<T = any>(
 
       return data as T;
     } catch (networkErr: any) {
-      if (attempt <= retries && (networkErr.message?.includes('Failed to fetch') || networkErr.status === 502)) {
-        console.warn(`[API Client] Network error on ${endpoint}. Retrying attempt ${attempt}/${retries}...`);
-        await new Promise((resolve) => setTimeout(resolve, attempt * 500));
+      if (attempt <= retries && (networkErr.message?.includes('Failed to fetch') || networkErr.status === 502 || networkErr.name === 'TypeError')) {
+        console.warn(`[API Client] Network or initialization error on ${endpoint}. Retrying attempt ${attempt}/${retries}...`);
+        await new Promise((resolve) => setTimeout(resolve, Math.min(attempt * 600, 2500)));
         continue;
       }
       throw networkErr;
