@@ -83,6 +83,8 @@ export const StockItemBatchesView: React.FC<StockItemBatchesViewProps> = ({
   const [singleDeleting, setSingleDeleting] = useState<boolean>(false);
   const [singleDeleteError, setSingleDeleteError] = useState<string | null>(null);
   const [singleDeleteBlocked, setSingleDeleteBlocked] = useState<any | null>(null);
+  const [singleDeleteSafetyLoading, setSingleDeleteSafetyLoading] = useState<boolean>(false);
+  const [singleDeleteSafetyInfo, setSingleDeleteSafetyInfo] = useState<any | null>(null);
 
   // Status mutation state
   const [markingInactive, setMarkingInactive] = useState<boolean>(false);
@@ -325,6 +327,27 @@ export const StockItemBatchesView: React.FC<StockItemBatchesViewProps> = ({
     setSingleBatchToDelete(batch);
     setSingleDeleteError(null);
     setSingleDeleteBlocked(null);
+    setSingleDeleteSafetyInfo(null);
+    setSingleDeleteSafetyLoading(true);
+
+    apiRequest<{ success: boolean; data: any }>(`/api/optical-master/batches/${batch.id}/dependencies`)
+      .then(res => {
+        setSingleDeleteSafetyInfo(res.data);
+      })
+      .catch(err => {
+        setSingleDeleteSafetyInfo({
+          canDelete: false,
+          error: err.message || 'Failed to check batch dependencies',
+          references: [],
+          stockInfo: {
+            physicalStock: Number(batch.stock || 0),
+            openingQuantity: Number(batch.openingStock || 0),
+          }
+        });
+      })
+      .finally(() => {
+        setSingleDeleteSafetyLoading(false);
+      });
   };
 
   const handleConfirmSingleDelete = async () => {
@@ -1036,16 +1059,16 @@ export const StockItemBatchesView: React.FC<StockItemBatchesViewProps> = ({
                       You are about to delete <span className="font-bold text-slate-900">{selectedBatchIds.size}</span> selected optical batch records from the database.
                     </p>
 
-                    <div className="mt-3 p-3 bg-amber-50 border border-amber-200 rounded-xl text-xs text-amber-900 space-y-1">
-                      <p className="font-semibold flex items-center gap-1.5">
-                        <ShieldAlert className="h-4 w-4 text-amber-600 shrink-0" />
-                        <span>Accounting & Inventory Safeguards</span>
+                    <div className="mt-3 p-3 bg-blue-50 border border-blue-200 rounded-xl text-xs text-blue-900 space-y-1">
+                      <p className="font-semibold flex items-center gap-1.5 text-blue-950">
+                        <ShieldAlert className="h-4 w-4 text-blue-600 shrink-0" />
+                        <span>Deletion Policy &amp; Accounting Safeguards</span>
                       </p>
-                      <p className="text-[11px] text-amber-800 leading-normal">
-                        Only batches with <strong>zero stock</strong>, <strong>zero reservations</strong>, and <strong>zero transaction history</strong> (invoices, orders, returns, ledger entries) will be permanently deleted.
+                      <p className="text-[11px] text-blue-800 leading-normal">
+                        Opening stock does not prevent deletion. A batch can be deleted if it has not been used in a posted Sales Invoice or Purchase Invoice and has no other blocking dependencies.
                       </p>
-                      <p className="text-[11px] text-amber-800 leading-normal">
-                        Batches with existing transaction records or physical stock will be protected to maintain unbroken audit trails.
+                      <p className="text-[11px] text-blue-800 leading-normal">
+                        Batches with posted invoice usage or active trading dependencies will be protected to maintain unbroken audit trails.
                       </p>
                     </div>
 
@@ -1216,37 +1239,145 @@ export const StockItemBatchesView: React.FC<StockItemBatchesViewProps> = ({
 
       {/* Single Batch Delete Modal */}
       {singleBatchToDelete && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/60 backdrop-blur-xs p-4">
-          <div className="bg-white rounded-2xl max-w-md w-full p-6 shadow-2xl border border-rose-100 animate-in fade-in zoom-in-95 duration-150">
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/60 backdrop-blur-xs p-4 overflow-y-auto">
+          <div className="bg-white rounded-2xl max-w-lg w-full p-6 shadow-2xl border border-rose-100 animate-in fade-in zoom-in-95 duration-150">
             <div className="flex items-start gap-3">
               <div className="p-2.5 bg-rose-100 text-rose-600 rounded-full shrink-0">
-                <AlertTriangle className="h-6 w-6" />
+                <Trash2 className="h-6 w-6" />
               </div>
-              <div>
+              <div className="flex-1">
                 <h3 className="text-base font-bold text-slate-900">Delete Optical Batch</h3>
                 <p className="text-xs text-slate-500 font-mono mt-0.5">
-                  Barcode: {singleBatchToDelete.barcode} • {singleBatchToDelete.formattedName || `${singleBatchToDelete.sph}/${singleBatchToDelete.cyl}`}
+                  Barcode: <span className="font-semibold text-slate-800">{singleBatchToDelete.barcode}</span>
                 </p>
               </div>
             </div>
 
-            <p className="text-xs text-slate-600 mt-3 leading-relaxed">
-              If this batch has existing transaction records or physical inventory, deletion will be blocked to maintain audit and accounting integrity.
-            </p>
+            {/* Core Explanation as required by Phase 6 */}
+            <div className="mt-3 p-3 bg-blue-50 border border-blue-200 rounded-xl text-xs text-blue-900 space-y-1">
+              <p className="font-semibold flex items-center gap-1.5 text-blue-950">
+                <ShieldAlert className="h-4 w-4 text-blue-600 shrink-0" />
+                <span>Deletion Policy</span>
+              </p>
+              <p className="text-[11px] text-blue-800 leading-relaxed">
+                Opening stock does not prevent deletion. A batch can be deleted if it has not been used in a posted Sales Invoice or Purchase Invoice and has no other blocking dependencies.
+              </p>
+            </div>
 
+            {/* Batch & Inventory Identity Card */}
+            <div className="mt-3.5 border border-slate-200 bg-slate-50/70 rounded-xl p-3 text-xs space-y-2">
+              <div className="grid grid-cols-2 gap-2 text-[11px]">
+                <div>
+                  <span className="text-slate-500 block">Stock Item:</span>
+                  <span className="font-bold text-slate-900 truncate block">
+                    {stockItem.name}
+                  </span>
+                  <span className="text-[10px] text-slate-500 font-mono">
+                    ({stockItem.code})
+                  </span>
+                </div>
+                <div>
+                  <span className="text-slate-500 block">Batch Powers:</span>
+                  <span className="font-mono font-bold text-slate-900 block">
+                    SPH {formatPowerVal(singleBatchToDelete.sph)} • CYL {formatPowerVal(singleBatchToDelete.cyl)}
+                  </span>
+                  <span className="text-[10px] text-slate-500 font-mono">
+                    {singleBatchToDelete.add ? `ADD +${formatPowerVal(singleBatchToDelete.add)}` : ''} {singleBatchToDelete.side && singleBatchToDelete.side !== 'NONE' ? `• SIDE: ${singleBatchToDelete.side}` : ''}
+                  </span>
+                </div>
+                <div className="pt-1 border-t border-slate-200/80">
+                  <span className="text-slate-500 block">Opening Quantity:</span>
+                  <span className="font-bold font-mono text-slate-900">
+                    {singleDeleteSafetyLoading ? 'Checking...' : `${singleDeleteSafetyInfo?.stockInfo?.openingQuantity ?? singleBatchToDelete.openingStock ?? 0} ${stockItem.unit || 'PRS'}`}
+                  </span>
+                </div>
+                <div className="pt-1 border-t border-slate-200/80">
+                  <span className="text-slate-500 block">Current On-Hand Stock:</span>
+                  <span className={`font-bold font-mono ${(singleDeleteSafetyInfo?.stockInfo?.physicalStock ?? singleBatchToDelete.stock ?? 0) > 0 ? 'text-amber-800' : 'text-slate-900'}`}>
+                    {singleDeleteSafetyLoading ? 'Checking...' : `${singleDeleteSafetyInfo?.stockInfo?.physicalStock ?? singleBatchToDelete.stock ?? 0} ${stockItem.unit || 'PRS'}`}
+                  </span>
+                </div>
+              </div>
+            </div>
+
+            {/* Dependency loading state */}
+            {singleDeleteSafetyLoading && (
+              <div className="mt-3 p-2.5 bg-slate-100 rounded-xl text-center text-xs text-slate-600 flex items-center justify-center gap-2">
+                <RefreshCw className="h-3.5 w-3.5 animate-spin text-slate-500" />
+                <span>Verifying invoice and trading dependencies...</span>
+              </div>
+            )}
+
+            {/* Safe to delete badge */}
+            {!singleDeleteSafetyLoading && singleDeleteSafetyInfo && singleDeleteSafetyInfo.canDelete && !singleDeleteError && (
+              <div className="mt-3 p-2.5 bg-emerald-50 border border-emerald-200 rounded-xl text-xs text-emerald-800 flex items-center gap-2">
+                <CheckCircle2 className="h-4 w-4 text-emerald-600 shrink-0" />
+                <span>Safe to delete. No posted Sales or Purchase Invoices reference this batch.</span>
+              </div>
+            )}
+
+            {/* Error / Blocked Reason Message */}
             {singleDeleteError && (
-              <div className="mt-3 p-3 bg-rose-50 border border-rose-200 rounded-xl text-xs text-rose-800 space-y-1">
-                <p className="font-semibold">{singleDeleteError}</p>
-                {singleDeleteBlocked?.references && (
-                  <p className="text-[11px] text-rose-700">
-                    Found {singleDeleteBlocked.references.length} document reference(s). Consider marking this batch as INACTIVE instead.
-                  </p>
+              <div className="mt-3 p-3 bg-rose-50 border border-rose-200 rounded-xl text-xs text-rose-800 space-y-1.5">
+                <p className="font-bold flex items-center gap-1.5 text-rose-900">
+                  <AlertTriangle className="h-4 w-4 text-rose-600 shrink-0" />
+                  <span>Deletion Blocked</span>
+                </p>
+                <p className="font-medium text-[11px] leading-relaxed">{singleDeleteError}</p>
+                {singleDeleteBlocked?.references && singleDeleteBlocked.references.length > 0 && (
+                  <div className="mt-2 pt-2 border-t border-rose-200/70">
+                    <p className="text-[10px] font-bold uppercase tracking-wider text-rose-900 mb-1">
+                      Related Document(s) Blocking Deletion:
+                    </p>
+                    <div className="max-h-28 overflow-y-auto divide-y divide-rose-200/50 bg-white/80 rounded border border-rose-200 text-[11px]">
+                      {singleDeleteBlocked.references.map((ref: any, idx: number) => (
+                        <div key={idx} className="p-1.5 flex items-center justify-between">
+                          <span className="font-medium">
+                            {ref.typeLabel} #{ref.documentNumber || ref.documentId}
+                          </span>
+                          <span className="font-mono text-rose-700">
+                            {ref.quantity ? `${ref.quantity} PRS` : ''} • {ref.status}
+                          </span>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
                 )}
               </div>
             )}
 
+            {!singleDeleteError && singleDeleteSafetyInfo && !singleDeleteSafetyInfo.canDelete && (
+              <div className="mt-3 p-3 bg-rose-50 border border-rose-200 rounded-xl text-xs text-rose-800 space-y-1.5">
+                <p className="font-bold flex items-center gap-1.5 text-rose-900">
+                  <AlertTriangle className="h-4 w-4 text-rose-600 shrink-0" />
+                  <span>Deletion Blocked</span>
+                </p>
+                <p className="font-medium text-[11px] leading-relaxed">{singleDeleteSafetyInfo.error}</p>
+                {singleDeleteSafetyInfo.references && singleDeleteSafetyInfo.references.length > 0 && (
+                  <div className="mt-2 pt-2 border-t border-rose-200/70">
+                    <p className="text-[10px] font-bold uppercase tracking-wider text-rose-900 mb-1">
+                      Related Document(s) Blocking Deletion:
+                    </p>
+                    <div className="max-h-28 overflow-y-auto divide-y divide-rose-200/50 bg-white/80 rounded border border-rose-200 text-[11px]">
+                      {singleDeleteSafetyInfo.references.map((ref: any, idx: number) => (
+                        <div key={idx} className="p-1.5 flex items-center justify-between">
+                          <span className="font-medium">
+                            {ref.typeLabel} #{ref.documentNumber || ref.documentId}
+                          </span>
+                          <span className="font-mono text-rose-700">
+                            {ref.quantity ? `${ref.quantity} PRS` : ''} • {ref.status}
+                          </span>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
+              </div>
+            )}
+
+            {/* Action Buttons */}
             <div className="flex items-center justify-between gap-2 mt-5 pt-3 border-t border-slate-100">
-              {singleDeleteBlocked && canEdit ? (
+              {(singleDeleteBlocked || (singleDeleteSafetyInfo && !singleDeleteSafetyInfo.canDelete)) && canEdit ? (
                 <button
                   type="button"
                   onClick={handleSingleSetInactive}
@@ -1257,13 +1388,14 @@ export const StockItemBatchesView: React.FC<StockItemBatchesViewProps> = ({
                 </button>
               ) : <div />}
 
-              <div className="flex items-center gap-2">
+              <div className="flex items-center gap-2 ml-auto">
                 <button
                   type="button"
                   onClick={() => {
                     setSingleBatchToDelete(null);
                     setSingleDeleteBlocked(null);
                     setSingleDeleteError(null);
+                    setSingleDeleteSafetyInfo(null);
                   }}
                   className="px-3 py-1.5 text-xs font-semibold text-slate-600 hover:bg-slate-100 rounded-lg cursor-pointer"
                 >
@@ -1272,10 +1404,20 @@ export const StockItemBatchesView: React.FC<StockItemBatchesViewProps> = ({
                 <button
                   type="button"
                   onClick={handleConfirmSingleDelete}
-                  disabled={singleDeleting}
-                  className="px-3 py-1.5 text-xs font-semibold text-white bg-rose-600 hover:bg-rose-700 rounded-lg shadow-2xs cursor-pointer"
+                  disabled={singleDeleting || singleDeleteSafetyLoading || (singleDeleteSafetyInfo && !singleDeleteSafetyInfo.canDelete)}
+                  className="inline-flex items-center gap-1.5 px-3.5 py-1.5 text-xs font-semibold text-white bg-rose-600 hover:bg-rose-700 disabled:opacity-50 disabled:cursor-not-allowed rounded-lg shadow-2xs cursor-pointer"
                 >
-                  {singleDeleting ? 'Deleting...' : 'Confirm Delete'}
+                  {singleDeleting ? (
+                    <>
+                      <RefreshCw className="h-3.5 w-3.5 animate-spin" />
+                      <span>Deleting...</span>
+                    </>
+                  ) : (
+                    <>
+                      <Trash2 className="h-3.5 w-3.5" />
+                      <span>Confirm Delete</span>
+                    </>
+                  )}
                 </button>
               </div>
             </div>

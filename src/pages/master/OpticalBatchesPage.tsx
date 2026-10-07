@@ -76,6 +76,8 @@ export const OpticalBatchesPage: React.FC<OpticalBatchesPageProps> = ({ onNaviga
   const [batchToDelete, setBatchToDelete] = useState<OpticalBatch | null>(null);
   const [deleting, setDeleting] = useState<boolean>(false);
   const [deleteError, setDeleteError] = useState<string | null>(null);
+  const [deleteSafetyLoading, setDeleteSafetyLoading] = useState<boolean>(false);
+  const [deleteSafetyInfo, setDeleteSafetyInfo] = useState<any>(null);
   const [deleteBlockedInfo, setDeleteBlockedInfo] = useState<{
     canDelete?: boolean;
     reasonSummary?: string;
@@ -90,6 +92,40 @@ export const OpticalBatchesPage: React.FC<OpticalBatchesPageProps> = ({ onNaviga
       date: string;
     }>;
   } | null>(null);
+
+  useEffect(() => {
+    if (!batchToDelete) {
+      setDeleteSafetyInfo(null);
+      setDeleteError(null);
+      setDeleteBlockedInfo(null);
+      return;
+    }
+    let isMounted = true;
+    setDeleteSafetyLoading(true);
+    setDeleteError(null);
+    setDeleteBlockedInfo(null);
+    apiRequest<{ success: boolean; data: any }>(`/api/optical-master/batches/${batchToDelete.id}/dependencies`)
+      .then(res => {
+        if (isMounted) {
+          setDeleteSafetyInfo(res.data);
+          if (res.data && res.data.canDelete === false) {
+            setDeleteBlockedInfo(res.data);
+            setDeleteError(res.data.error || res.data.reasonSummary);
+          }
+        }
+      })
+      .catch(err => {
+        if (isMounted) {
+          setDeleteSafetyInfo(null);
+        }
+      })
+      .finally(() => {
+        if (isMounted) setDeleteSafetyLoading(false);
+      });
+    return () => {
+      isMounted = false;
+    };
+  }, [batchToDelete]);
 
   // 6. Inspect Dependencies Modal
   const [inspectBatch, setInspectBatch] = useState<OpticalBatch | null>(null);
@@ -952,42 +988,115 @@ export const OpticalBatchesPage: React.FC<OpticalBatchesPageProps> = ({ onNaviga
 
       {/* Modal 5: Delete Batch Safe Confirmation */}
       {batchToDelete && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/60 backdrop-blur-xs p-4">
-          <div className="bg-white rounded-2xl max-w-md w-full p-6 shadow-2xl border border-rose-100 animate-in fade-in zoom-in-95 duration-150">
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/60 backdrop-blur-xs p-4 overflow-y-auto">
+          <div className="bg-white rounded-2xl max-w-lg w-full p-6 shadow-2xl border border-rose-100 animate-in fade-in zoom-in-95 duration-150">
             <div className="flex items-start gap-3">
               <div className="p-2.5 bg-rose-100 text-rose-600 rounded-full shrink-0">
-                <AlertTriangle className="h-6 w-6" />
+                <Trash2 className="h-6 w-6" />
               </div>
-              <div>
+              <div className="flex-1">
                 <h3 className="text-base font-bold text-slate-900">Delete Optical Batch</h3>
-                <p className="text-xs text-slate-500 font-mono mt-0.5">Barcode: {batchToDelete.barcode}</p>
+                <p className="text-xs text-slate-500 font-mono mt-0.5">
+                  Barcode: <span className="font-semibold text-slate-800">{batchToDelete.barcode}</span>
+                </p>
               </div>
             </div>
 
-            <p className="text-xs text-slate-600 mt-3 leading-relaxed">
-              If this batch has existing transaction records or inventory stock, deletion will be blocked to maintain accounting integrity.
-            </p>
+            {/* Core Explanation as required by Phase 6 */}
+            <div className="mt-3 p-3 bg-blue-50 border border-blue-200 rounded-xl text-xs text-blue-900 space-y-1">
+              <p className="font-semibold flex items-center gap-1.5 text-blue-950">
+                <ShieldAlert className="h-4 w-4 text-blue-600 shrink-0" />
+                <span>Deletion Policy</span>
+              </p>
+              <p className="text-[11px] text-blue-800 leading-relaxed">
+                Opening stock does not prevent deletion. A batch can be deleted if it has not been used in a posted Sales Invoice or Purchase Invoice and has no other blocking dependencies.
+              </p>
+            </div>
 
+            {/* Batch & Inventory Identity Card */}
+            <div className="mt-3.5 border border-slate-200 bg-slate-50/70 rounded-xl p-3 text-xs space-y-2">
+              <div className="grid grid-cols-2 gap-2 text-[11px]">
+                <div>
+                  <span className="text-slate-500 block">Stock Item:</span>
+                  <span className="font-bold text-slate-900 truncate block">
+                    {batchToDelete.itemName || selectedStockItem?.name || deleteSafetyInfo?.batch?.itemName || '—'}
+                  </span>
+                  <span className="text-[10px] text-slate-500 font-mono">
+                    ({batchToDelete.itemCode || selectedStockItem?.code || deleteSafetyInfo?.batch?.itemCode || '—'})
+                  </span>
+                </div>
+                <div>
+                  <span className="text-slate-500 block">Batch Powers:</span>
+                  <span className="font-mono font-bold text-slate-900 block">
+                    SPH {formatPowerVal(batchToDelete.sph)} • CYL {formatPowerVal(batchToDelete.cyl)}
+                  </span>
+                  <span className="text-[10px] text-slate-500 font-mono">
+                    {batchToDelete.add ? `ADD +${formatPowerVal(batchToDelete.add)}` : ''} {batchToDelete.side && batchToDelete.side !== 'NONE' ? `• SIDE: ${batchToDelete.side}` : ''}
+                  </span>
+                </div>
+                <div className="pt-1 border-t border-slate-200/80">
+                  <span className="text-slate-500 block">Opening Quantity:</span>
+                  <span className="font-bold font-mono text-slate-900">
+                    {deleteSafetyLoading ? 'Checking...' : `${deleteSafetyInfo?.stockInfo?.openingQuantity ?? batchToDelete.openingStock ?? 0} ${batchToDelete.unit || selectedStockItem?.unit || 'PRS'}`}
+                  </span>
+                </div>
+                <div className="pt-1 border-t border-slate-200/80">
+                  <span className="text-slate-500 block">Current On-Hand Stock:</span>
+                  <span className={`font-bold font-mono ${(deleteSafetyInfo?.stockInfo?.physicalStock ?? batchToDelete.physicalStock ?? 0) > 0 ? 'text-amber-800' : 'text-slate-900'}`}>
+                    {deleteSafetyLoading ? 'Checking...' : `${deleteSafetyInfo?.stockInfo?.physicalStock ?? batchToDelete.physicalStock ?? batchToDelete.stock ?? 0} ${batchToDelete.unit || selectedStockItem?.unit || 'PRS'}`}
+                  </span>
+                </div>
+              </div>
+            </div>
+
+            {/* Dependency loading state */}
+            {deleteSafetyLoading && (
+              <div className="mt-3 p-2.5 bg-slate-100 rounded-xl text-center text-xs text-slate-600 flex items-center justify-center gap-2">
+                <RefreshCw className="h-3.5 w-3.5 animate-spin text-slate-500" />
+                <span>Verifying invoice and trading dependencies...</span>
+              </div>
+            )}
+
+            {/* Error / Blocked Reason Message */}
             {deleteError && (
-              <div className="mt-3 p-3 bg-rose-50 border border-rose-200 rounded-xl text-xs text-rose-800 space-y-1">
-                <p className="font-semibold">{deleteError}</p>
-                {deleteBlockedInfo?.references && (
-                  <p className="text-[11px] text-rose-700">
-                    Found {deleteBlockedInfo.references.length} document reference(s). Consider marking this batch as INACTIVE instead.
-                  </p>
+              <div className="mt-3 p-3 bg-rose-50 border border-rose-200 rounded-xl text-xs text-rose-800 space-y-1.5">
+                <p className="font-bold flex items-center gap-1.5 text-rose-900">
+                  <AlertTriangle className="h-4 w-4 text-rose-600 shrink-0" />
+                  <span>Deletion Blocked</span>
+                </p>
+                <p className="font-medium text-[11px] leading-relaxed">{deleteError}</p>
+                {deleteBlockedInfo?.references && deleteBlockedInfo.references.length > 0 && (
+                  <div className="mt-2 pt-2 border-t border-rose-200/70">
+                    <p className="text-[10px] font-bold uppercase tracking-wider text-rose-900 mb-1">
+                      Related Document(s) Blocking Deletion:
+                    </p>
+                    <div className="max-h-28 overflow-y-auto divide-y divide-rose-200/50 bg-white/80 rounded border border-rose-200 text-[11px]">
+                      {deleteBlockedInfo.references.map((ref, idx) => (
+                        <div key={idx} className="p-1.5 flex items-center justify-between">
+                          <span className="font-medium">
+                            {ref.typeLabel} #{ref.documentNumber || ref.documentId}
+                          </span>
+                          <span className="font-mono text-rose-700">
+                            {ref.quantity ? `${ref.quantity} PRS` : ''} • {ref.status}
+                          </span>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
                 )}
               </div>
             )}
 
+            {/* Action Buttons */}
             <div className="flex items-center justify-between gap-2 mt-5 pt-3 border-t border-slate-100">
               {deleteBlockedInfo && (
                 <button
                   type="button"
                   onClick={() => handleSetBatchInactive(batchToDelete.id)}
                   disabled={deleting}
-                  className="px-3 py-1.5 text-xs font-semibold text-amber-800 bg-amber-50 hover:bg-amber-100 border border-amber-200 rounded-lg"
+                  className="px-3 py-1.5 text-xs font-semibold text-amber-800 bg-amber-50 hover:bg-amber-100 border border-amber-200 rounded-lg cursor-pointer"
                 >
-                  Set Inactive
+                  Set Inactive Instead
                 </button>
               )}
               <div className="flex items-center gap-2 ml-auto">
@@ -996,18 +1105,30 @@ export const OpticalBatchesPage: React.FC<OpticalBatchesPageProps> = ({ onNaviga
                   onClick={() => {
                     setBatchToDelete(null);
                     setDeleteBlockedInfo(null);
+                    setDeleteError(null);
+                    setDeleteSafetyInfo(null);
                   }}
-                  className="px-3 py-1.5 text-xs font-semibold text-slate-600 hover:bg-slate-100 rounded-lg"
+                  className="px-3 py-1.5 text-xs font-semibold text-slate-600 hover:bg-slate-100 rounded-lg cursor-pointer"
                 >
                   Cancel
                 </button>
                 <button
                   type="button"
                   onClick={handleConfirmDelete}
-                  disabled={deleting}
-                  className="px-3 py-1.5 text-xs font-semibold text-white bg-rose-600 hover:bg-rose-700 rounded-lg shadow-sm"
+                  disabled={deleting || deleteSafetyLoading || (deleteSafetyInfo && deleteSafetyInfo.canDelete === false)}
+                  className="inline-flex items-center gap-1.5 px-3.5 py-1.5 text-xs font-semibold text-white bg-rose-600 hover:bg-rose-700 disabled:opacity-50 disabled:cursor-not-allowed rounded-lg shadow-sm cursor-pointer"
                 >
-                  {deleting ? 'Deleting...' : 'Confirm Delete'}
+                  {deleting ? (
+                    <>
+                      <RefreshCw className="h-3.5 w-3.5 animate-spin" />
+                      <span>Deleting...</span>
+                    </>
+                  ) : (
+                    <>
+                      <Trash2 className="h-3.5 w-3.5" />
+                      <span>Confirm Delete</span>
+                    </>
+                  )}
                 </button>
               </div>
             </div>

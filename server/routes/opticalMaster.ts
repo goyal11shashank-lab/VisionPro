@@ -2570,14 +2570,27 @@ interface BatchDeletionSafetyResult {
     availableStock: number;
     hasLedgerHistory: boolean;
     ledgerCount: number;
+    openingStockOnly?: boolean;
+    openingQuantity?: number;
   };
 }
 
-async function checkBatchDeletionSafety(batchId: string): Promise<BatchDeletionSafetyResult> {
+/**
+ * Check whether an optical batch can be safely deleted.
+ * 
+ * Rules:
+ * Rule A: Opening stock alone is NOT a deletion blocker.
+ * Rule B: Block deletion when used in a posted Sales Invoice.
+ * Rule C: Block deletion when used in a posted Purchase Invoice or Purchase Lot.
+ * Rule D: Orders are not invoices. Active orders block deletion, cancelled/draft orders do not.
+ * Rule E: Posted Sales/Purchase Returns block deletion to preserve financial/inventory history.
+ * Rule F: Active stock reservations, active dealer orders, or live trading movements in stock_ledger block deletion.
+ */
+async function checkBatchDeletionSafety(batchId: string, queryable: any = pool): Promise<BatchDeletionSafetyResult> {
   const references: BatchReferenceItem[] = [];
 
-  // 1. Sales Invoices referencing this batch
-  const salesInvRes = await pool.query(
+  // 1. Sales Invoices referencing this batch (Rule B)
+  const salesInvRes = await queryable.query(
     `SELECT 
       si.id AS doc_id,
       si.invoice_number AS doc_number,
@@ -2605,8 +2618,8 @@ async function checkBatchDeletionSafety(batchId: string): Promise<BatchDeletionS
     });
   }
 
-  // 2. Purchase Invoices referencing this batch
-  const purchInvRes = await pool.query(
+  // 2. Purchase Invoices referencing this batch (Rule C)
+  const purchInvRes = await queryable.query(
     `SELECT 
       pi.id AS doc_id,
       pi.invoice_number AS doc_number,
@@ -2634,8 +2647,8 @@ async function checkBatchDeletionSafety(batchId: string): Promise<BatchDeletionS
     });
   }
 
-  // 3. Purchase Lots
-  const lotsRes = await pool.query(
+  // 3. Purchase Lots (Rule C)
+  const lotsRes = await queryable.query(
     `SELECT 
       pl.id AS doc_id,
       COALESCE(pi.invoice_number, 'LOT-' || SUBSTRING(pl.id::text, 1, 8)) AS doc_number,
@@ -2659,8 +2672,8 @@ async function checkBatchDeletionSafety(batchId: string): Promise<BatchDeletionS
     });
   }
 
-  // 4. Sales Returns
-  const salesRetRes = await pool.query(
+  // 4. Sales Returns (Rule E)
+  const salesRetRes = await queryable.query(
     `SELECT 
       sr.id AS doc_id,
       sr.return_number AS doc_number,
@@ -2688,8 +2701,8 @@ async function checkBatchDeletionSafety(batchId: string): Promise<BatchDeletionS
     });
   }
 
-  // 5. Purchase Returns
-  const purchRetRes = await pool.query(
+  // 5. Purchase Returns (Rule E)
+  const purchRetRes = await queryable.query(
     `SELECT 
       pr.id AS doc_id,
       pr.return_number AS doc_number,
@@ -2717,8 +2730,8 @@ async function checkBatchDeletionSafety(batchId: string): Promise<BatchDeletionS
     });
   }
 
-  // 6. Sales Orders
-  const salesOrdRes = await pool.query(
+  // 6. Sales Orders (Rule D - Orders are not invoices)
+  const salesOrdRes = await queryable.query(
     `SELECT 
       so.id AS doc_id,
       so.order_number AS doc_number,
@@ -2746,15 +2759,146 @@ async function checkBatchDeletionSafety(batchId: string): Promise<BatchDeletionS
     });
   }
 
-  // 7. Stock Ledger Records Count
-  const ledgerCountRes = await pool.query(
-    `SELECT COUNT(*)::int AS count FROM stock_ledger WHERE batch_id = $1`,
+  // 6B. Purchase Orders (Rule D)
+  const purchOrdRes = await queryable.query(
+    `SELECT 
+      po.id AS doc_id,
+      po.order_number AS doc_number,
+      po.status AS doc_status,
+      po.order_date AS doc_date,
+      polb.quantity,
+      p.name AS party_name
+    FROM purchase_order_line_batches polb
+    JOIN purchase_order_lines pol ON polb.purchase_order_line_id = pol.id
+    JOIN purchase_orders po ON pol.purchase_order_id = po.id
+    LEFT JOIN parties p ON po.supplier_party_id = p.id
+    WHERE polb.batch_id = $1`,
     [batchId]
   );
-  const ledgerCount = ledgerCountRes.rows[0]?.count || 0;
+  for (const r of purchOrdRes.rows) {
+    references.push({
+      type: 'PURCHASE_ORDER',
+      typeLabel: 'Purchase Order',
+      documentId: r.doc_id,
+      documentNumber: r.doc_number,
+      status: r.doc_status,
+      date: r.doc_date ? new Date(r.doc_date).toISOString() : null,
+      quantity: parseFloat(r.quantity) || 0,
+      partyName: r.party_name || 'Supplier',
+    });
+  }
 
-  // 8. Stock Levels & Reservations
-  const stockRes = await pool.query(
+  // 6C. Dealer Logistics & Transfers (Rule F)
+  const dealerShipRes = await queryable.query(
+    `SELECT 
+      ds.id AS doc_id,
+      ds.shipment_number AS doc_number,
+      ds.status AS doc_status,
+      ds.dispatch_date AS doc_date,
+      dsl.dispatched_quantity AS quantity
+    FROM dealer_shipment_lines dsl
+    JOIN dealer_shipments ds ON dsl.dealer_shipment_id = ds.id
+    WHERE dsl.main_batch_id = $1`,
+    [batchId]
+  );
+  for (const r of dealerShipRes.rows) {
+    references.push({
+      type: 'DEALER_SHIPMENT',
+      typeLabel: 'Dealer Shipment',
+      documentId: r.doc_id,
+      documentNumber: r.doc_number,
+      status: r.doc_status,
+      date: r.doc_date ? new Date(r.doc_date).toISOString() : null,
+      quantity: parseFloat(r.quantity) || 0,
+      partyName: 'Dealer Branch',
+    });
+  }
+
+  const dealerGrnRes = await queryable.query(
+    `SELECT 
+      dgr.id AS doc_id,
+      dgr.receipt_number AS doc_number,
+      dgr.status AS doc_status,
+      dgr.receipt_date AS doc_date,
+      dgrl.received_quantity AS quantity
+    FROM dealer_goods_receipt_lines dgrl
+    JOIN dealer_goods_receipts dgr ON dgrl.goods_receipt_id = dgr.id
+    WHERE dgrl.main_batch_id = $1 OR dgrl.dealer_batch_id = $1`,
+    [batchId]
+  );
+  for (const r of dealerGrnRes.rows) {
+    references.push({
+      type: 'DEALER_GRN',
+      typeLabel: 'Dealer Goods Receipt',
+      documentId: r.doc_id,
+      documentNumber: r.doc_number,
+      status: r.doc_status,
+      date: r.doc_date ? new Date(r.doc_date).toISOString() : null,
+      quantity: parseFloat(r.quantity) || 0,
+      partyName: 'Dealer Branch',
+    });
+  }
+
+  const dealerRetRes = await queryable.query(
+    `SELECT 
+      dr.id AS doc_id,
+      dr.return_number AS doc_number,
+      dr.status AS doc_status,
+      dr.created_at AS doc_date,
+      drl.sent_quantity AS quantity
+    FROM dealer_return_lines drl
+    JOIN dealer_returns dr ON drl.dealer_return_id = dr.id
+    WHERE drl.main_batch_id = $1 OR drl.dealer_batch_id = $1`,
+    [batchId]
+  );
+  for (const r of dealerRetRes.rows) {
+    references.push({
+      type: 'DEALER_RETURN',
+      typeLabel: 'Dealer Return',
+      documentId: r.doc_id,
+      documentNumber: r.doc_number,
+      status: r.doc_status,
+      date: r.doc_date ? new Date(r.doc_date).toISOString() : null,
+      quantity: parseFloat(r.quantity) || 0,
+      partyName: 'Dealer Branch',
+    });
+  }
+
+  // 7. Stock Ledger Records Inspection
+  const ledgerRowsRes = await queryable.query(
+    `SELECT id, transaction_type, reference_type, reference_id, quantity_in, quantity_out, balance, reason, created_at
+     FROM stock_ledger 
+     WHERE batch_id = $1 
+     ORDER BY created_at ASC`,
+    [batchId]
+  );
+  const ledgerRows = ledgerRowsRes.rows;
+  const ledgerCount = ledgerRows.length;
+
+  // Filter for live trading movements (SALE, PURCHASE, RETURNS, TRANSFERS, FULFILLMENT)
+  const liveTradingLedgerRows = ledgerRows.filter((sl: any) => {
+    const type = sl.transaction_type;
+    return (
+      type === 'SALE' ||
+      type === 'SALES_RETURN' ||
+      type === 'PURCHASE' ||
+      type === 'PURCHASE_RETURN' ||
+      type === 'STOCK_TRANSFER' ||
+      type === 'RESERVATION_CONVERSION' ||
+      (sl.reference_type && ['INVOICE', 'BILL', 'TRANSFER'].includes(sl.reference_type))
+    );
+  });
+
+  // Calculate opening stock quantity if present
+  let totalOpeningQty = 0;
+  for (const sl of ledgerRows) {
+    if (sl.transaction_type === 'OPENING_STOCK' || (sl.transaction_type === 'STOCK_ADJUSTMENT' && (!sl.reference_type || ['MANUAL_ENTRY', 'MANUAL_ADJUSTMENT', 'IMPORT'].includes(sl.reference_type)))) {
+      totalOpeningQty += parseFloat(sl.quantity_in) || 0;
+    }
+  }
+
+  // 8. Stock Levels & Active Reservations
+  const stockRes = await queryable.query(
     `SELECT 
       COALESCE(physical_stock, 0) AS physical_stock,
       COALESCE(reserved_stock, 0) AS reserved_stock,
@@ -2767,73 +2911,133 @@ async function checkBatchDeletionSafety(batchId: string): Promise<BatchDeletionS
   const reservedStock = parseFloat(stockRes.rows[0]?.reserved_stock) || 0;
   const availableStock = parseFloat(stockRes.rows[0]?.available_stock) || 0;
 
-  const resCountRes = await pool.query(
-    `SELECT COUNT(*)::int AS count FROM stock_reservations WHERE batch_id = $1`,
+  // Check active reservations (only ACTIVE reservations block deletion; RELEASED/CANCELLED do not)
+  const activeResCountRes = await queryable.query(
+    `SELECT COUNT(*)::int AS count FROM stock_reservations WHERE batch_id = $1 AND status = 'ACTIVE'`,
     [batchId]
   );
-  const reservationCount = resCountRes.rows[0]?.count || 0;
+  const activeReservationCount = activeResCountRes.rows[0]?.count || 0;
 
   const stockInfo = {
     physicalStock,
     reservedStock,
     availableStock,
-    hasLedgerHistory: ledgerCount > 0,
+    hasLedgerHistory: liveTradingLedgerRows.length > 0,
     ledgerCount,
+    openingStockOnly: liveTradingLedgerRows.length === 0 && ledgerCount > 0,
+    openingQuantity: totalOpeningQty,
   };
 
-  // Determine if can delete safely
-  if (references.length > 0) {
-    const docSummary = references
-      .slice(0, 3)
-      .map(ref => `${ref.typeLabel} ${ref.documentNumber} (${ref.status})`)
-      .join(', ');
-    const more = references.length > 3 ? ` and ${references.length - 3} more` : '';
+  // CHECK BLOCKING RULES:
 
+  // Rule B Check: Posted Sales Invoice
+  const salesInvoices = references.filter(r => r.type === 'SALES_INVOICE');
+  if (salesInvoices.length > 0) {
+    const docSummary = salesInvoices.slice(0, 3).map(r => r.documentNumber || r.documentId).join(', ');
+    const more = salesInvoices.length > 3 ? ` and ${salesInvoices.length - 3} more` : '';
     return {
       canDelete: false,
-      reasonSummary: 'Batch has active document line references',
-      error: `Cannot delete this batch because it is referenced by ${docSummary}${more}.`,
+      reasonSummary: 'Batch has been used in a Sales Invoice',
+      error: `This batch cannot be deleted because it has been used in a Sales Invoice (${docSummary}${more}). Open the related voucher to review the transaction.`,
       references,
       stockInfo,
     };
   }
 
-  if (ledgerCount > 0) {
-    const slSample = await pool.query(
-      `SELECT transaction_type, reason, created_at, GREATEST(quantity_in, quantity_out) as qty
-       FROM stock_ledger WHERE batch_id = $1 ORDER BY created_at DESC LIMIT 3`,
-      [batchId]
-    );
-    const ledgerRefs: BatchReferenceItem[] = slSample.rows.map(sl => ({
-      type: 'STOCK_LEDGER',
-      typeLabel: sl.transaction_type.replace(/_/g, ' '),
-      documentId: batchId,
-      documentNumber: sl.reason || sl.transaction_type,
-      status: 'RECORDED',
-      date: sl.created_at ? new Date(sl.created_at).toISOString() : null,
-      quantity: parseFloat(sl.qty) || 0,
-      details: sl.reason || undefined,
-    }));
-
+  // Rule C Check: Posted Purchase Invoice or Purchase Lot
+  const purchInvoices = references.filter(r => r.type === 'PURCHASE_INVOICE' || r.type === 'PURCHASE_LOT');
+  if (purchInvoices.length > 0) {
+    const docSummary = purchInvoices.slice(0, 3).map(r => r.documentNumber || r.documentId).join(', ');
+    const more = purchInvoices.length > 3 ? ` and ${purchInvoices.length - 3} more` : '';
     return {
       canDelete: false,
-      reasonSummary: 'Batch has recorded stock ledger history',
-      error: `Cannot delete this batch because it has ${ledgerCount} recorded inventory movement(s) in the stock ledger.`,
-      references: ledgerRefs,
+      reasonSummary: 'Batch has been used in a Purchase Invoice',
+      error: `This batch cannot be deleted because it has been used in a Purchase Invoice (${docSummary}${more}). Open the related voucher to review the transaction.`,
+      references,
       stockInfo,
     };
   }
 
-  if (physicalStock > 0 || reservedStock > 0 || reservationCount > 0) {
+  // Rule E Check: Returns and Reversals
+  const returns = references.filter(r => (r.type === 'SALES_RETURN' || r.type === 'PURCHASE_RETURN') && r.status !== 'DRAFT');
+  if (returns.length > 0) {
+    const docSummary = returns.slice(0, 3).map(r => `${r.typeLabel} ${r.documentNumber || r.documentId}`).join(', ');
+    const more = returns.length > 3 ? ` and ${returns.length - 3} more` : '';
     return {
       canDelete: false,
-      reasonSummary: 'Batch has active inventory or reservations',
-      error: `Cannot delete this batch because it currently has physical stock (${physicalStock}) or reserved stock (${reservedStock}).`,
-      references: [],
+      reasonSummary: 'Batch has transaction history in Sales/Purchase Returns',
+      error: `This batch cannot be deleted because it has been used in return transactions (${docSummary}${more}). Historical transaction records cannot be deleted.`,
+      references,
       stockInfo,
     };
   }
 
+  // Rule D Check: Active Orders (Orders are not invoices)
+  const activeOrders = references.filter(r => {
+    if (r.type === 'SALES_ORDER' || r.type === 'PURCHASE_ORDER' || r.type === 'DEALER_ORDER') {
+      const s = String(r.status || '').toUpperCase();
+      return !['CANCELLED', 'DRAFT', 'CLOSED', 'REJECTED'].includes(s);
+    }
+    return false;
+  });
+  if (activeOrders.length > 0) {
+    const docSummary = activeOrders.slice(0, 3).map(r => `${r.typeLabel} ${r.documentNumber || r.documentId} (${r.status})`).join(', ');
+    const more = activeOrders.length > 3 ? ` and ${activeOrders.length - 3} more` : '';
+    return {
+      canDelete: false,
+      reasonSummary: 'Batch is allocated to active order(s)',
+      error: `This batch cannot be deleted because it is allocated to active order workflow(s): ${docSummary}${more}. Cancel or complete the orders before deleting.`,
+      references,
+      stockInfo,
+    };
+  }
+
+  // Rule F Check: Active Dealer Transfers
+  const activeDealerDocs = references.filter(r => {
+    if (r.type === 'DEALER_SHIPMENT' || r.type === 'DEALER_GRN' || r.type === 'DEALER_RETURN') {
+      const s = String(r.status || '').toUpperCase();
+      return !['CANCELLED', 'REJECTED'].includes(s);
+    }
+    return false;
+  });
+  if (activeDealerDocs.length > 0) {
+    const docSummary = activeDealerDocs.slice(0, 3).map(r => `${r.typeLabel} ${r.documentNumber || r.documentId} (${r.status})`).join(', ');
+    const more = activeDealerDocs.length > 3 ? ` and ${activeDealerDocs.length - 3} more` : '';
+    return {
+      canDelete: false,
+      reasonSummary: 'Batch is referenced by active dealer transfer(s)',
+      error: `This batch cannot be deleted because it is referenced in active dealer transfer records: ${docSummary}${more}. Complete or cancel dealer transfers before deleting.`,
+      references,
+      stockInfo,
+    };
+  }
+
+  // Rule F Check: Active stock reservations
+  if (activeReservationCount > 0 || reservedStock > 0) {
+    return {
+      canDelete: false,
+      reasonSummary: 'Batch has active reservations',
+      error: `Cannot delete this batch because it currently has active stock reservations (${activeReservationCount} hold(s), ${reservedStock} pairs reserved). Release or cancel reservations first.`,
+      references,
+      stockInfo,
+    };
+  }
+
+  // Rule F Check: Live trading activity in stock ledger
+  if (liveTradingLedgerRows.length > 0) {
+    const distinctTypes = Array.from(new Set(liveTradingLedgerRows.map((r: any) => r.transaction_type))).join(', ');
+    return {
+      canDelete: false,
+      reasonSummary: 'Batch has live trading history in stock ledger',
+      error: `Cannot delete this batch because it contains live transaction history (${distinctTypes}) in the stock ledger. Deactivate the batch instead.`,
+      references,
+      stockInfo,
+    };
+  }
+
+  // Rule A: Opening stock alone is NOT a deletion blocker!
+  // If the batch only has opening stock or import-session adjustments without posted invoices, orders, or returns,
+  // deletion is completely safe and permitted.
   return {
     canDelete: true,
     references: [],
@@ -2841,13 +3045,130 @@ async function checkBatchDeletionSafety(batchId: string): Promise<BatchDeletionS
   };
 }
 
+/**
+ * Execute atomic batch deletion within a database transaction.
+ * Safely removes exclusively owned batch records:
+ * - Cancelled/draft order line batch allocations
+ * - Released/cancelled stock reservations
+ * - Opening stock and batch-specific stock ledger records
+ * - Optical stock balance row
+ * - Optical batch master row
+ * NEVER creates duplicate stock adjustments or stock receipts.
+ */
+async function executeDeleteOpticalBatch(
+  client: any,
+  batchId: string,
+  bizId: string,
+  batchRecord: any,
+  req: Request
+) {
+  // 1. Clean up cancelled/draft/closed/rejected sales order line allocations
+  await client.query(
+    `DELETE FROM sales_order_line_batches 
+     WHERE batch_id = $1 
+       AND sales_order_line_id IN (
+         SELECT sol.id FROM sales_order_lines sol
+         JOIN sales_orders so ON sol.sales_order_id = so.id
+         WHERE so.status IN ('CANCELLED', 'DRAFT', 'CLOSED', 'REJECTED')
+       )`,
+    [batchId]
+  );
+
+  // 2. Clean up cancelled/draft/closed/rejected purchase order line allocations
+  await client.query(
+    `DELETE FROM purchase_order_line_batches 
+     WHERE batch_id = $1 
+       AND purchase_order_line_id IN (
+         SELECT pol.id FROM purchase_order_lines pol
+         JOIN purchase_orders po ON pol.purchase_order_id = po.id
+         WHERE po.status IN ('CANCELLED', 'DRAFT', 'CLOSED', 'REJECTED')
+       )`,
+    [batchId]
+  );
+
+  // 2B. Clean up cancelled/rejected dealer return lines
+  await client.query(
+    `DELETE FROM dealer_return_lines 
+     WHERE (main_batch_id = $1 OR dealer_batch_id = $1)
+       AND dealer_return_id IN (
+         SELECT dr.id FROM dealer_returns dr WHERE dr.status IN ('CANCELLED', 'REJECTED')
+       )`,
+    [batchId]
+  );
+
+  // 2C. Clean up cancelled/rejected dealer shipment lines
+  await client.query(
+    `DELETE FROM dealer_shipment_lines 
+     WHERE main_batch_id = $1
+       AND dealer_shipment_id IN (
+         SELECT ds.id FROM dealer_shipments ds WHERE ds.status IN ('CANCELLED', 'REJECTED')
+       )`,
+    [batchId]
+  );
+
+  // 2D. Clean up cancelled/rejected dealer goods receipt lines
+  await client.query(
+    `DELETE FROM dealer_goods_receipt_lines 
+     WHERE (main_batch_id = $1 OR dealer_batch_id = $1)
+       AND goods_receipt_id IN (
+         SELECT dgr.id FROM dealer_goods_receipts dgr WHERE dgr.status IN ('CANCELLED', 'REJECTED')
+       )`,
+    [batchId]
+  );
+
+  // 3. Clean up non-active reservations belonging exclusively to this batch
+  await client.query(
+    `DELETE FROM stock_reservations WHERE batch_id = $1 AND business_id = $2`,
+    [batchId, bizId]
+  );
+
+  // 4. Delete opening stock and batch-specific ledger entries
+  await client.query(
+    `DELETE FROM stock_ledger WHERE batch_id = $1 AND business_id = $2`,
+    [batchId, bizId]
+  );
+
+  // 5. Delete optical stocks balance row
+  await client.query(`DELETE FROM optical_stocks WHERE batch_id = $1`, [batchId]);
+
+  // 6. Delete optical batch master row
+  await client.query(
+    `DELETE FROM optical_batches WHERE id = $1 AND business_id = $2`,
+    [batchId, bizId]
+  );
+
+  // 7. Record audit log
+  await recordAuditLog({
+    businessId: bizId,
+    userId: req.user!.id,
+    action: 'DELETE',
+    module: 'INVENTORY',
+    entityType: 'OpticalBatch',
+    entityId: batchId,
+    previousValue: batchRecord,
+    req,
+  });
+}
+
 router.get('/batches/:id/dependencies', requireAnyPermission(['master:view', 'inventory:view']), async (req: Request, res: Response): Promise<void> => {
   try {
     const { id } = req.params;
+    const bizId = req.user!.currentBusinessId;
+    const batchRes = await pool.query(
+      `SELECT b.id, b.barcode, b.sph, b.cyl, b.axis, b.add, b.side, 
+              b.unique_item_id as "uniqueItemId", u.name as "itemName", u.code as "itemCode", u.unit
+       FROM optical_batches b
+       JOIN unique_items u ON b.unique_item_id = u.id
+       WHERE b.id = $1 AND b.business_id = $2`,
+      [id, bizId]
+    );
     const safetyCheck = await checkBatchDeletionSafety(id);
     res.json({
       success: true,
-      data: safetyCheck,
+      data: {
+        ...safetyCheck,
+        batch: batchRes.rows[0] || null,
+      },
     });
   } catch (error: any) {
     res.status(500).json({ error: error.message || 'Failed to check batch dependencies' });
@@ -2855,36 +3176,38 @@ router.get('/batches/:id/dependencies', requireAnyPermission(['master:view', 'in
 });
 
 router.delete('/batches/:id', requireAnyPermission(['master:delete', 'master.delete', 'master:edit', 'master.edit', 'master:manage', 'inventory:delete', 'inventory:manage']), async (req: Request, res: Response): Promise<void> => {
+  const client = await pool.connect();
   try {
     const bizId = req.user!.currentBusinessId;
     const { id } = req.params;
 
-    const [current] = await db
-      .select({
-        id: opticalBatches.id,
-        barcode: opticalBatches.barcode,
-        sph: opticalBatches.sph,
-        cyl: opticalBatches.cyl,
-        axis: opticalBatches.axis,
-        add: opticalBatches.add,
-        side: opticalBatches.side,
-        uniqueItemId: opticalBatches.uniqueItemId,
-        identityKey: opticalBatches.identityKey,
-        businessId: opticalBatches.businessId,
-      })
-      .from(opticalBatches)
-      .where(and(eq(opticalBatches.id, id), eq(opticalBatches.businessId, bizId)))
-      .limit(1);
+    await client.query('BEGIN');
 
-    if (!current) {
-      res.status(404).json({ error: 'Optical Batch not found' });
+    // Lock the batch row for update to prevent concurrent duplicate deletion
+    const batchRes = await client.query(
+      `SELECT b.id, b.barcode, b.sph, b.cyl, b.axis, b.add, b.side, 
+              b.unique_item_id as "uniqueItemId", b.identity_key as "identityKey", 
+              b.business_id as "businessId", u.name as "itemName", u.code as "itemCode"
+       FROM optical_batches b
+       JOIN unique_items u ON b.unique_item_id = u.id
+       WHERE b.id = $1 AND b.business_id = $2
+       FOR UPDATE`,
+      [id, bizId]
+    );
+
+    if (batchRes.rows.length === 0) {
+      await client.query('ROLLBACK');
+      res.status(404).json({ error: 'Optical Batch not found or already deleted.' });
       return;
     }
 
-    // Check safety of batch deletion
-    const safetyCheck = await checkBatchDeletionSafety(id);
+    const current = batchRes.rows[0];
+
+    // Check safety of batch deletion within the transaction
+    const safetyCheck = await checkBatchDeletionSafety(id, client);
 
     if (!safetyCheck.canDelete) {
+      await client.query('ROLLBACK');
       res.status(400).json({
         success: false,
         canDelete: false,
@@ -2898,33 +3221,27 @@ router.delete('/batches/:id', requireAnyPermission(['master:delete', 'master.del
           sph: current.sph,
           cyl: current.cyl,
           uniqueItemId: current.uniqueItemId,
+          itemName: current.itemName,
         },
       });
       return;
     }
 
-    // Safe to delete: zero stock, zero reservations, zero ledger history, zero document references
-    await pool.query(`DELETE FROM optical_stocks WHERE batch_id = $1`, [id]);
-    await db.delete(opticalBatches).where(and(eq(opticalBatches.id, id), eq(opticalBatches.businessId, bizId)));
+    // Safely delete batch and its opening-stock records
+    await executeDeleteOpticalBatch(client, id, bizId, current, req);
 
-    await recordAuditLog({
-      businessId: bizId,
-      userId: req.user!.id,
-      action: 'DELETE',
-      module: 'INVENTORY',
-      entityType: 'OpticalBatch',
-      entityId: id,
-      previousValue: current,
-      req,
-    });
+    await client.query('COMMIT');
 
     res.json({
       success: true,
       canDelete: true,
-      message: `Optical Batch (${current.barcode}, SPH: ${current.sph}, CYL: ${current.cyl}) deleted successfully from database.`
+      message: `Optical Batch (${current.barcode}, SPH: ${current.sph}, CYL: ${current.cyl}) deleted successfully.`
     });
   } catch (error: any) {
+    await client.query('ROLLBACK');
     res.status(500).json({ error: error.message || 'Failed to delete optical batch' });
+  } finally {
+    client.release();
   }
 });
 
@@ -2942,32 +3259,34 @@ router.post('/batches/bulk-delete', requireAnyPermission(['master:delete', 'mast
     const blockedBatches: any[] = [];
 
     for (const id of ids) {
+      const client = await pool.connect();
       try {
-        const [current] = await db
-          .select({
-            id: opticalBatches.id,
-            barcode: opticalBatches.barcode,
-            sph: opticalBatches.sph,
-            cyl: opticalBatches.cyl,
-            axis: opticalBatches.axis,
-            add: opticalBatches.add,
-            side: opticalBatches.side,
-            uniqueItemId: opticalBatches.uniqueItemId,
-            identityKey: opticalBatches.identityKey,
-            businessId: opticalBatches.businessId,
-          })
-          .from(opticalBatches)
-          .where(and(eq(opticalBatches.id, id), eq(opticalBatches.businessId, bizId)))
-          .limit(1);
+        await client.query('BEGIN');
 
-        if (!current) {
-          errors.push(`Optical Batch ID ${id} not found.`);
+        // Lock batch row
+        const batchRes = await client.query(
+          `SELECT b.id, b.barcode, b.sph, b.cyl, b.axis, b.add, b.side, 
+                  b.unique_item_id as "uniqueItemId", b.identity_key as "identityKey", 
+                  b.business_id as "businessId", u.name as "itemName"
+           FROM optical_batches b
+           JOIN unique_items u ON b.unique_item_id = u.id
+           WHERE b.id = $1 AND b.business_id = $2
+           FOR UPDATE`,
+          [id, bizId]
+        );
+
+        if (batchRes.rows.length === 0) {
+          await client.query('ROLLBACK');
+          errors.push(`Optical Batch ID ${id} not found or already deleted.`);
           continue;
         }
 
-        const safetyCheck = await checkBatchDeletionSafety(id);
+        const current = batchRes.rows[0];
+
+        const safetyCheck = await checkBatchDeletionSafety(id, client);
 
         if (!safetyCheck.canDelete) {
+          await client.query('ROLLBACK');
           errors.push(`"${current.barcode}" (${current.sph}/${current.cyl}): ${safetyCheck.error}`);
           blockedBatches.push({
             batchId: id,
@@ -2975,6 +3294,7 @@ router.post('/batches/bulk-delete', requireAnyPermission(['master:delete', 'mast
             sph: current.sph,
             cyl: current.cyl,
             uniqueItemId: current.uniqueItemId,
+            itemName: current.itemName,
             reason: safetyCheck.reasonSummary,
             error: safetyCheck.error,
             references: safetyCheck.references,
@@ -2983,24 +3303,14 @@ router.post('/batches/bulk-delete', requireAnyPermission(['master:delete', 'mast
           continue;
         }
 
-        // Clean up zero stock and batch record
-        await pool.query(`DELETE FROM optical_stocks WHERE batch_id = $1`, [id]);
-        await db.delete(opticalBatches).where(and(eq(opticalBatches.id, id), eq(opticalBatches.businessId, bizId)));
-
-        await recordAuditLog({
-          businessId: bizId,
-          userId: req.user!.id,
-          action: 'DELETE',
-          module: 'INVENTORY',
-          entityType: 'OpticalBatch',
-          entityId: id,
-          previousValue: current,
-          req,
-        });
-
+        await executeDeleteOpticalBatch(client, id, bizId, current, req);
+        await client.query('COMMIT');
         deletedCount++;
       } catch (itemErr: any) {
+        await client.query('ROLLBACK');
         errors.push(`Failed to delete optical batch ${id}: ${itemErr.message}`);
+      } finally {
+        client.release();
       }
     }
 
@@ -3008,12 +3318,12 @@ router.post('/batches/bulk-delete', requireAnyPermission(['master:delete', 'mast
       success: true,
       totalRequested: ids.length,
       deletedCount,
-      failedCount: errors.length,
+      failedCount: blockedBatches.length + (errors.length - blockedBatches.length),
       errors,
       blockedBatches,
       message: deletedCount === ids.length
         ? `Successfully deleted ${deletedCount} optical batch(es).`
-        : `Deleted ${deletedCount} of ${ids.length} optical batch(es). ${errors.length} item(s) could not be deleted.`
+        : `Deleted ${deletedCount} of ${ids.length} optical batch(es). ${blockedBatches.length} item(s) could not be deleted due to safety constraints.`
     });
   } catch (error: any) {
     res.status(500).json({ error: error.message || 'Failed to perform bulk delete of optical batches' });
