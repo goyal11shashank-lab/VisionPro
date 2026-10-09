@@ -17,6 +17,12 @@ import { OpeningStockPage } from '../inventory/OpeningStockPage.js';
 
 type ViewMode = 'STOCK_ITEMS' | 'ALL_BATCHES' | 'OPENING_STOCK' | 'BATCHES' | 'BATCH_LEDGER';
 
+const formatPowerVal = (val: number | null | undefined) => {
+  if (val === null || val === undefined || isNaN(Number(val))) return '—';
+  const num = Number(val);
+  return num > 0 ? `+${num.toFixed(2)}` : num.toFixed(2);
+};
+
 interface OpticalBatchesPageProps {
   onNavigate?: (path: string) => void;
 }
