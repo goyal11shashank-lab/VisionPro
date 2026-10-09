@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo, useCallback } from 'react';
 import {
   FileSpreadsheet,
   ArrowLeft,
@@ -6,6 +6,9 @@ import {
   CheckCircle2,
   AlertTriangle,
   ShoppingCart,
+  Trash2,
+  XCircle,
+  HelpCircle,
 } from 'lucide-react';
 import { useAuth } from '../../context/AuthContext';
 import { useBusinessSettings } from '../../context/BusinessSettingsContext';
@@ -14,6 +17,10 @@ import { VoucherHeader } from '../../components/voucher/VoucherHeader';
 import { VoucherItemGrid } from '../../components/voucher/VoucherItemGrid';
 import { VoucherFooter } from '../../components/voucher/VoucherFooter';
 import { OpticalBatchModal } from '../../components/voucher/OpticalBatchModal';
+import {
+  TallyContextualPanel,
+  ContextualPanelItem,
+} from '../../components/voucher/TallyContextualPanel';
 import {
   VoucherLineItem,
   ComputedVoucherLine,
@@ -37,7 +44,7 @@ interface Props {
 }
 
 export const NormalSalesVoucherPage: React.FC<Props> = ({ onNavigate, onSuccess, editInvoiceId, orderId, onBack }) => {
-  const { currentBusiness } = useAuth();
+  const { currentBusiness, hasPermission } = useAuth();
   const { settings } = useBusinessSettings();
 
   // Master Data
@@ -103,6 +110,51 @@ export const NormalSalesVoucherPage: React.FC<Props> = ({ onNavigate, onSuccess,
   const [createdInvoice, setCreatedInvoice] = useState<any | null>(null);
   const [showPrintModal, setShowPrintModal] = useState<boolean>(false);
   const [isPrintPreviewOpen, setIsPrintPreviewOpen] = useState<boolean>(false);
+
+  // User Permissions
+  const canDelete = Boolean(
+    hasPermission('sales:delete') ||
+    hasPermission('sales.delete') ||
+    hasPermission('sales:invoice:delete') ||
+    hasPermission('admin')
+  );
+  const canCancel = Boolean(
+    hasPermission('sales:cancel') ||
+    hasPermission('sales.cancel') ||
+    hasPermission('sales:edit') ||
+    hasPermission('sales.edit') ||
+    hasPermission('admin')
+  );
+
+  // Tally Contextual Panel State
+  const [contextualType, setContextualType] = useState<'PARTY' | 'STOCK_ITEM' | 'BATCH' | null>(null);
+  const [contextualRowIndex, setContextualRowIndex] = useState<number | null>(null);
+  const [contextualSearch, setContextualSearch] = useState<string>('');
+  const [contextualSelectedIdx, setContextualSelectedIdx] = useState<number>(0);
+  const [activeGridRow, setActiveGridRow] = useState<number>(0);
+  const [showDeleteConfirm, setShowDeleteConfirm] = useState<boolean>(false);
+  const [showCancelConfirm, setShowCancelConfirm] = useState<boolean>(false);
+  const [actionLoading, setActionLoading] = useState<boolean>(false);
+
+  const openContextualParty = useCallback(() => {
+    setContextualType('PARTY');
+    setContextualRowIndex(null);
+    setContextualSearch('');
+    setContextualSelectedIdx(0);
+  }, []);
+
+  const openContextualItem = useCallback((rowIdx: number) => {
+    setContextualType('STOCK_ITEM');
+    setContextualRowIndex(rowIdx);
+    setActiveGridRow(rowIdx);
+    setContextualSearch('');
+    setContextualSelectedIdx(0);
+  }, []);
+
+  const closeContextualPanel = useCallback(() => {
+    setContextualType(null);
+    setContextualRowIndex(null);
+  }, []);
 
   // Load initial data (parties, items, number preview)
   const loadPrerequisites = async () => {
@@ -830,20 +882,186 @@ export const NormalSalesVoucherPage: React.FC<Props> = ({ onNavigate, onSuccess,
     };
   };
 
+  // Contextual items list calculation
+  const contextualItems: ContextualPanelItem[] = useMemo(() => {
+    if (contextualType === 'PARTY') {
+      const q = contextualSearch.trim().toLowerCase();
+      const filtered = q
+        ? parties.filter(p => {
+            const name = (p.name || '').toLowerCase();
+            const phone = (p.phone || p.mobile || '').toLowerCase();
+            const city = (p.city || '').toLowerCase();
+            return name.includes(q) || phone.includes(q) || city.includes(q);
+          })
+        : parties;
+      return filtered.map(p => {
+        const bal = Number(p.balance ?? p.currentBalance ?? 0);
+        return {
+          id: p.id,
+          title: p.name,
+          subtitle: `${p.phone || p.mobile || ''} ${p.city ? `• ${p.city}` : ''}`.trim() || undefined,
+          badge: p.partyType === 'CUSTOMER' ? 'Sundry Debtors' : p.partyType,
+          badgeColor: 'blue' as const,
+          rightText: bal !== 0 ? `₹${Math.abs(bal).toFixed(2)} ${bal < 0 ? 'Cr' : 'Dr'}` : '₹0.00',
+          rightSubText: p.gstin ? `GST: ${p.gstin}` : undefined,
+          meta: p,
+        };
+      });
+    }
+
+    if (contextualType === 'STOCK_ITEM') {
+      const q = contextualSearch.trim().toLowerCase();
+      const filtered = q
+        ? uniqueItemsList.filter(item => {
+            const name = (item.name || '').toLowerCase();
+            const code = (item.code || '').toLowerCase();
+            return name.includes(q) || code.includes(q);
+          })
+        : uniqueItemsList;
+      return filtered.map(item => {
+        const cat = item.categoryCode || item.category?.code || 'SV';
+        const price = Number(item.mrp || item.standardSellingPrice || 0);
+        return {
+          id: item.id,
+          title: item.name,
+          code: item.code,
+          badge: cat,
+          badgeColor: (cat === 'SV' ? 'blue' : cat === 'KT' ? 'amber' : cat === 'PROG' ? 'purple' : 'slate') as any,
+          rightText: `₹${isNaN(price) ? '0.00' : price.toFixed(2)}`,
+          rightSubText: `Stock: ${item.totalStock || item.stock || 0} ${item.unit || 'PRS'}`,
+          meta: item,
+        };
+      });
+    }
+
+    return [];
+  }, [contextualType, contextualSearch, parties, uniqueItemsList]);
+
+  const handleConfirmContextualSelect = (item: ContextualPanelItem) => {
+    if (contextualType === 'PARTY') {
+      handlePartyChange(item.id);
+      closeContextualPanel();
+      setTimeout(() => {
+        const refInput = document.getElementById('voucher-header-ref-no') as HTMLInputElement;
+        if (refInput) {
+          refInput.focus();
+          refInput.select();
+        } else {
+          setFocusRequest({ row: 0, col: 'item', key: Date.now() });
+        }
+      }, 50);
+    } else if (contextualType === 'STOCK_ITEM' && contextualRowIndex !== null) {
+      const rIdx = contextualRowIndex;
+      handleLineItemChange(rIdx, item.id);
+      closeContextualPanel();
+      const fullItem = item.meta || uniqueItemsList.find(i => i.id === item.id);
+      if (fullItem && fullItem.maintainBatches !== false) {
+        setTimeout(() => {
+          setActiveBatchModalIndex(rIdx);
+          if (lines[rIdx]) setActiveBatchLineId(lines[rIdx].id);
+        }, 60);
+      } else {
+        setFocusRequest({ row: rIdx, col: 'qty', key: Date.now() });
+      }
+    }
+  };
+
+  const handleConfirmDelete = async () => {
+    if (!editInvoiceId) return;
+    try {
+      setActionLoading(true);
+      await apiRequest(`/api/sales/invoices/${editInvoiceId}`, { method: 'DELETE' });
+      setShowDeleteConfirm(false);
+      if (onBack) onBack();
+      else if (onNavigate) onNavigate('/sales/invoices');
+      else window.history.back();
+    } catch (err: any) {
+      setFormError(err.message || 'Failed to delete sales voucher');
+    } finally {
+      setActionLoading(false);
+    }
+  };
+
+  const handleConfirmCancel = async () => {
+    if (!editInvoiceId) return;
+    try {
+      setActionLoading(true);
+      await apiRequest(`/api/sales/invoices/${editInvoiceId}/cancel`, { method: 'POST' });
+      setShowCancelConfirm(false);
+      if (onBack) onBack();
+      else if (onNavigate) onNavigate('/sales/invoices');
+      else window.history.back();
+    } catch (err: any) {
+      setFormError(err.message || 'Failed to cancel sales voucher');
+    } finally {
+      setActionLoading(false);
+    }
+  };
+
+  // Global Keyboard Shortcuts
+  useEffect(() => {
+    const handleGlobalKey = (e: KeyboardEvent) => {
+      // Escape closes contextual panel if open
+      if (e.key === 'Escape') {
+        if (contextualType !== null) {
+          e.preventDefault();
+          closeContextualPanel();
+        }
+      } else if (contextualType !== null) {
+        if (e.key === 'ArrowDown') {
+          e.preventDefault();
+          setContextualSelectedIdx(prev =>
+            Math.min(prev + 1, Math.max(0, contextualItems.length - 1))
+          );
+        } else if (e.key === 'ArrowUp') {
+          e.preventDefault();
+          setContextualSelectedIdx(prev => Math.max(prev - 1, 0));
+        } else if (e.key === 'Enter') {
+          if (contextualItems[contextualSelectedIdx]) {
+            e.preventDefault();
+            handleConfirmContextualSelect(contextualItems[contextualSelectedIdx]);
+          }
+        }
+      } else if (e.altKey && e.key.toLowerCase() === 'd' && editInvoiceId && canDelete) {
+        e.preventDefault();
+        setShowDeleteConfirm(true);
+      } else if (e.altKey && e.key.toLowerCase() === 'x' && editInvoiceId && canCancel) {
+        e.preventDefault();
+        setShowCancelConfirm(true);
+      } else if (e.altKey && e.key.toLowerCase() === 'p') {
+        e.preventDefault();
+        const previewBeforePrint = settings?.print?.previewBeforePrint ?? true;
+        setAutoInvokePrint(!previewBeforePrint);
+        setIsPrintPreviewOpen(true);
+      }
+    };
+    window.addEventListener('keydown', handleGlobalKey);
+    return () => window.removeEventListener('keydown', handleGlobalKey);
+  }, [
+    contextualType,
+    contextualItems,
+    contextualSelectedIdx,
+    editInvoiceId,
+    canDelete,
+    canCancel,
+    closeContextualPanel,
+    settings?.print?.previewBeforePrint,
+  ]);
+
   return (
     <div
       id="normal-sales-voucher-page"
-      className="flex flex-col h-full w-full bg-slate-100 border border-slate-300 rounded-md overflow-hidden select-none font-sans"
+      className="flex flex-col h-full w-full bg-[#f1f5f9] select-none font-sans overflow-hidden"
     >
       {convertingOrderId && (
         <div
           id="so-conversion-banner"
-          className="bg-amber-50 border-b border-amber-200 px-4 py-2 flex items-center justify-between text-xs text-amber-900"
+          className="bg-amber-50 border-b border-amber-200 px-3 py-1 flex items-center justify-between text-xs text-amber-900 shrink-0"
         >
           <div className="flex items-center space-x-2">
-            <ShoppingCart className="w-4 h-4 text-amber-600" />
+            <ShoppingCart className="w-4 h-4 text-amber-600 shrink-0" />
             <span>
-              Converting from Sales Order: <strong className="font-mono font-semibold">{convertedOrderNumber || convertingOrderId}</strong>. Reserved batch allocations have been pre-hydrated.
+              Converting from Sales Order: <strong className="font-mono font-semibold">{convertedOrderNumber || convertingOrderId}</strong>. Reserved batch allocations pre-hydrated.
             </span>
           </div>
           <button
@@ -861,117 +1079,238 @@ export const NormalSalesVoucherPage: React.FC<Props> = ({ onNavigate, onSuccess,
         </div>
       )}
 
-      {/* 1. Tally-style Voucher Header */}
-      <VoucherHeader
-        voucherType="SALES"
-        isEditing={!!editInvoiceId}
-        voucherNumber={invoiceNumber}
-        onVoucherNumberChange={setInvoiceNumber}
-        voucherDate={invoiceDate}
-        onVoucherDateChange={setInvoiceDate}
-        parties={parties}
-        selectedPartyId={selectedPartyId}
-        onPartyChange={handlePartyChange}
-        partyBalance={
-          partyCreditInfo
-            ? {
-                balance: Math.abs(
-                  parseFloat(partyCreditInfo.currentBalance ?? partyCreditInfo.outstandingBalance ?? 0)
-                ),
-                type:
-                  parseFloat(partyCreditInfo.currentBalance ?? partyCreditInfo.outstandingBalance ?? 0) < 0
-                    ? 'Cr'
-                    : 'Dr',
-                isOverLimit: partyCreditInfo.isCreditLimitExceeded,
-                creditLimit: partyCreditInfo.creditLimit,
-              }
-            : undefined
-        }
-        referenceNumber={referenceNumber}
-        onReferenceNumberChange={setReferenceNumber}
-        submitting={submitting}
-        onSavePost={() => handleSaveVoucher('POSTED')}
-        onPrint={() => {
-          const previewBeforePrint = settings?.print?.previewBeforePrint ?? true;
-          setAutoInvokePrint(!previewBeforePrint);
-          setIsPrintPreviewOpen(true);
-        }}
-        onBack={() => (onBack ? onBack() : onNavigate ? onNavigate('/sales/invoices') : window.history.back())}
-      />
+      {/* Main Horizontal Workspace: Voucher on Left, Contextual Panel on Right */}
+      <div className="flex-1 min-h-0 flex flex-row overflow-hidden relative">
+        {/* Left: Complete Voucher Workspace */}
+        <div className="flex-1 min-w-0 flex flex-col h-full overflow-hidden bg-white border border-slate-300 rounded-xs shadow-2xs">
+          {/* 1. Tally-style Voucher Header */}
+          <VoucherHeader
+            voucherType="SALES"
+            isEditing={!!editInvoiceId}
+            voucherNumber={invoiceNumber}
+            onVoucherNumberChange={setInvoiceNumber}
+            voucherDate={invoiceDate}
+            onVoucherDateChange={setInvoiceDate}
+            businessName={currentBusiness?.name}
+            parties={parties}
+            selectedPartyId={selectedPartyId}
+            onPartyChange={handlePartyChange}
+            onPartyFocus={openContextualParty}
+            partyBalance={
+              partyCreditInfo
+                ? {
+                    balance: Math.abs(
+                      parseFloat(partyCreditInfo.currentBalance ?? partyCreditInfo.outstandingBalance ?? 0)
+                    ),
+                    type:
+                      parseFloat(partyCreditInfo.currentBalance ?? partyCreditInfo.outstandingBalance ?? 0) < 0
+                        ? 'Cr'
+                        : 'Dr',
+                    isOverLimit: partyCreditInfo.isCreditLimitExceeded,
+                    creditLimit: partyCreditInfo.creditLimit,
+                  }
+                : undefined
+            }
+            referenceNumber={referenceNumber}
+            onReferenceNumberChange={setReferenceNumber}
+            gstMode={gstMode}
+            onGstModeChange={setGstMode}
+            submitting={submitting}
+            onSavePost={() => handleSaveVoucher('POSTED')}
+            onPrint={() => {
+              const previewBeforePrint = settings?.print?.previewBeforePrint ?? true;
+              setAutoInvokePrint(!previewBeforePrint);
+              setIsPrintPreviewOpen(true);
+            }}
+            onBack={() => (onBack ? onBack() : onNavigate ? onNavigate('/sales/invoices') : window.history.back())}
+          />
 
-      {/* 2. Dominant Item Grid (65-75% screen height) */}
-      <div className="flex-1 min-h-0 p-1 flex flex-col">
-        <VoucherItemGrid
-          voucherType="SALES"
-          lines={lines}
-          computedLines={computedLines}
-          allItems={uniqueItemsList}
-          focusRequest={focusRequest}
-          onItemSelect={handleLineItemChange}
-          onBatchClick={idx => {
-            setActiveBatchModalIndex(idx);
-            if (lines[idx]) {
-              setActiveBatchLineId(lines[idx].id);
+          {/* 2. Dominant Item Grid */}
+          <div className="flex-1 min-h-0 p-1 flex flex-col overflow-hidden">
+            <VoucherItemGrid
+              voucherType="SALES"
+              lines={lines}
+              computedLines={computedLines}
+              allItems={uniqueItemsList}
+              focusRequest={focusRequest}
+              activeRowIndex={activeGridRow}
+              onActiveRowChange={setActiveGridRow}
+              onItemFocus={openContextualItem}
+              onItemSelect={handleLineItemChange}
+              onBatchClick={idx => {
+                setActiveBatchModalIndex(idx);
+                if (lines[idx]) {
+                  setActiveBatchLineId(lines[idx].id);
+                }
+              }}
+              onQuantityChange={(idx, qty) => {
+                setLines(prev =>
+                  prev.map((l, i) =>
+                    i === idx
+                      ? {
+                          ...l,
+                          quantity: qty,
+                          batches:
+                            l.batches.length === 1
+                              ? [{ ...l.batches[0], quantity: qty }]
+                              : l.batches,
+                        }
+                      : l
+                  )
+                );
+              }}
+              onRateChange={(idx, rate) => {
+                setLines(prev =>
+                  prev.map((l, i) => (i === idx ? { ...l, rate: rate } : l))
+                );
+              }}
+              onDiscountChange={(idx, disc) => {
+                setLines(prev =>
+                  prev.map((l, i) => (i === idx ? { ...l, discountValue: disc } : l))
+                );
+              }}
+              onGstRateChange={(idx, gst) => {
+                setLines(prev =>
+                  prev.map((l, i) => (i === idx ? { ...l, gstRate: gst } : l))
+                );
+              }}
+              onRemoveLine={handleRemoveLine}
+              onAddBlankLine={handleAddBlankLine}
+            />
+          </div>
+
+          {/* 3. Tally-style Fixed Footer */}
+          <VoucherFooter
+            voucherType="SALES"
+            totals={totals}
+            gstMode={gstMode}
+            narration={notes}
+            onNarrationChange={setNotes}
+            previousBalance={
+              partyCreditInfo
+                ? {
+                    balance: Math.abs(
+                      parseFloat(partyCreditInfo.currentBalance ?? partyCreditInfo.outstandingBalance ?? 0)
+                    ),
+                    type:
+                      parseFloat(partyCreditInfo.currentBalance ?? partyCreditInfo.outstandingBalance ?? 0) < 0
+                        ? 'Cr'
+                        : 'Dr',
+                  }
+                : undefined
+            }
+            errorMessage={formError}
+            isEditing={!!editInvoiceId}
+            canDelete={canDelete}
+            canCancel={canCancel}
+            submitting={submitting}
+            onSave={() => handleSaveVoucher('POSTED')}
+            onDelete={() => setShowDeleteConfirm(true)}
+            onCancelVoucher={() => setShowCancelConfirm(true)}
+            onPrint={() => {
+              const previewBeforePrint = settings?.print?.previewBeforePrint ?? true;
+              setAutoInvokePrint(!previewBeforePrint);
+              setIsPrintPreviewOpen(true);
+            }}
+            onBack={() => (onBack ? onBack() : onNavigate ? onNavigate('/sales/invoices') : window.history.back())}
+          />
+        </div>
+
+        {/* Right: Tally Contextual Selection Panel */}
+        <TallyContextualPanel
+          isOpen={contextualType !== null}
+          type={contextualType}
+          title={contextualType === 'PARTY' ? 'List of Ledger Accounts' : 'List of Stock Items'}
+          subtitle={
+            contextualType === 'PARTY'
+              ? 'Customer Accounts (Sundry Debtors)'
+              : 'Optical Items Master'
+          }
+          searchQuery={contextualSearch}
+          onSearchChange={setContextualSearch}
+          items={contextualItems}
+          selectedIndex={contextualSelectedIdx}
+          onSelectIndex={setContextualSelectedIdx}
+          onConfirmSelect={handleConfirmContextualSelect}
+          onCreateNew={() => {
+            if (contextualType === 'PARTY') {
+              const btn = document.getElementById('voucher-header-party-select');
+              btn?.click();
+            } else if (contextualType === 'STOCK_ITEM' && contextualRowIndex !== null) {
+              const sel = document.getElementById(`voucher-item-grid-select-${contextualRowIndex}`);
+              sel?.click();
             }
           }}
-          onQuantityChange={(idx, qty) => {
-            setLines(prev =>
-              prev.map((l, i) =>
-                i === idx
-                  ? {
-                      ...l,
-                      quantity: qty,
-                      batches:
-                        l.batches.length === 1
-                          ? [{ ...l.batches[0], quantity: qty }]
-                          : l.batches,
-                    }
-                  : l
-              )
-            );
-          }}
-          onRateChange={(idx, rate) => {
-            setLines(prev =>
-              prev.map((l, i) => (i === idx ? { ...l, rate: rate } : l))
-            );
-          }}
-          onDiscountChange={(idx, disc) => {
-            setLines(prev =>
-              prev.map((l, i) => (i === idx ? { ...l, discountValue: disc } : l))
-            );
-          }}
-          onGstRateChange={(idx, gst) => {
-            setLines(prev =>
-              prev.map((l, i) => (i === idx ? { ...l, gstRate: gst } : l))
-            );
-          }}
-          onRemoveLine={handleRemoveLine}
-          onAddBlankLine={handleAddBlankLine}
+          onClose={closeContextualPanel}
+          isSales={true}
         />
       </div>
 
-      {/* 3. Tally-style Voucher Footer */}
-      <VoucherFooter
-        voucherType="SALES"
-        totals={totals}
-        gstMode={gstMode}
-        narration={notes}
-        onNarrationChange={setNotes}
-        previousBalance={
-          partyCreditInfo
-            ? {
-                balance: Math.abs(
-                  parseFloat(partyCreditInfo.currentBalance ?? partyCreditInfo.outstandingBalance ?? 0)
-                ),
-                type:
-                  parseFloat(partyCreditInfo.currentBalance ?? partyCreditInfo.outstandingBalance ?? 0) < 0
-                    ? 'Cr'
-                    : 'Dr',
-              }
-            : undefined
-        }
-        errorMessage={formError}
-      />
+      {/* Delete Confirmation Modal */}
+      {showDeleteConfirm && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-xs">
+          <div className="bg-white rounded-xl max-w-sm w-full p-5 shadow-2xl border border-rose-200 space-y-3">
+            <div className="flex items-center gap-2 text-rose-600">
+              <Trash2 className="w-5 h-5" />
+              <h3 className="text-sm font-bold text-slate-900">Delete Sales Voucher?</h3>
+            </div>
+            <p className="text-xs text-slate-600">
+              Are you sure you want to delete Voucher #{invoiceNumber}? This will reverse stock and ledger postings.
+            </p>
+            <div className="flex items-center justify-end gap-2 pt-2 border-t border-slate-100">
+              <button
+                type="button"
+                onClick={() => setShowDeleteConfirm(false)}
+                disabled={actionLoading}
+                className="px-3 py-1.5 text-xs font-semibold text-slate-700 bg-slate-100 hover:bg-slate-200 rounded cursor-pointer"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={handleConfirmDelete}
+                disabled={actionLoading}
+                className="px-3.5 py-1.5 text-xs font-bold text-white bg-rose-600 hover:bg-rose-700 rounded shadow-xs cursor-pointer"
+              >
+                {actionLoading ? 'Deleting...' : 'Confirm Delete (Alt+D)'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Cancel Voucher Confirmation Modal */}
+      {showCancelConfirm && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-xs">
+          <div className="bg-white rounded-xl max-w-sm w-full p-5 shadow-2xl border border-amber-200 space-y-3">
+            <div className="flex items-center gap-2 text-amber-600">
+              <XCircle className="w-5 h-5" />
+              <h3 className="text-sm font-bold text-slate-900">Cancel Sales Voucher?</h3>
+            </div>
+            <p className="text-xs text-slate-600">
+              Are you sure you want to cancel Voucher #{invoiceNumber}? Its status will be marked CANCELLED and stock will be returned.
+            </p>
+            <div className="flex items-center justify-end gap-2 pt-2 border-t border-slate-100">
+              <button
+                type="button"
+                onClick={() => setShowCancelConfirm(false)}
+                disabled={actionLoading}
+                className="px-3 py-1.5 text-xs font-semibold text-slate-700 bg-slate-100 hover:bg-slate-200 rounded cursor-pointer"
+              >
+                Close
+              </button>
+              <button
+                type="button"
+                onClick={handleConfirmCancel}
+                disabled={actionLoading}
+                className="px-3.5 py-1.5 text-xs font-bold text-white bg-amber-600 hover:bg-amber-700 rounded shadow-xs cursor-pointer"
+              >
+                {actionLoading ? 'Cancelling...' : 'Confirm Cancel (Alt+X)'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* 4. Optical Batch Power Allocation Modal */}
       {activeBatchModalIndex !== null && activeBatchLine && (

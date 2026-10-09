@@ -12,6 +12,7 @@ import {
   DollarSign,
   Building2,
   Plus,
+  BookOpen,
 } from 'lucide-react';
 import { SearchableMasterSelect, SearchableOption } from '../common/SearchableMasterSelect';
 import { InlinePartyModal } from '../common/InlinePartyModal';
@@ -23,11 +24,13 @@ interface VoucherHeaderProps {
   onVoucherNumberChange?: (val: string) => void;
   voucherDate: string;
   onVoucherDateChange: (val: string) => void;
+  businessName?: string;
   // Party state
   parties: any[];
   selectedPartyId: string;
   onPartyChange: (partyId: string) => void;
   onPartyCreated?: (newParty: any) => void;
+  onPartyFocus?: () => void;
   allowPartyCreate?: boolean;
   partyBalance?: { balance: number; type: 'Dr' | 'Cr'; isOverLimit?: boolean; creditLimit?: number };
   // Secondary voucher fields (optional / compatibility)
@@ -58,12 +61,16 @@ export const VoucherHeader: React.FC<VoucherHeaderProps> = ({
   onVoucherNumberChange,
   voucherDate,
   onVoucherDateChange,
+  businessName,
   parties,
   selectedPartyId,
   onPartyChange,
   onPartyCreated,
+  onPartyFocus,
   allowPartyCreate = true,
   partyBalance,
+  gstMode = 'INTRA_STATE',
+  onGstModeChange,
   referenceNumber = '',
   onReferenceNumberChange,
   supplierInvoiceDate = '',
@@ -77,6 +84,7 @@ export const VoucherHeader: React.FC<VoucherHeaderProps> = ({
   const isSales = voucherType === 'SALES' || voucherType === 'SALES_ORDER';
   const isOrder = voucherType === 'SALES_ORDER' || voucherType === 'PURCHASE_ORDER';
   const partySelectRef = useRef<any>(null);
+  const dateInputRef = useRef<HTMLInputElement>(null);
 
   // Inline Party creation state
   const [isInlinePartyOpen, setIsInlinePartyOpen] = useState(false);
@@ -86,7 +94,7 @@ export const VoucherHeader: React.FC<VoucherHeaderProps> = ({
     id: p.id,
     label: p.name,
     subLabel: `${p.phone || p.mobile || ''} ${p.city ? `• ${p.city}` : ''} ${p.gstin ? `• GST: ${p.gstin}` : ''}`.trim(),
-    tag: p.partyType,
+    tag: p.partyType === 'CUSTOMER' ? 'Sundry Debtors' : 'Sundry Creditors',
     meta: p,
   }));
 
@@ -96,7 +104,7 @@ export const VoucherHeader: React.FC<VoucherHeaderProps> = ({
     }
     onPartyChange(newParty.id);
 
-    // Focus next appropriate field
+    // Focus next field
     setTimeout(() => {
       const refInput = document.getElementById('voucher-header-ref-no') as HTMLInputElement;
       if (refInput) {
@@ -106,16 +114,26 @@ export const VoucherHeader: React.FC<VoucherHeaderProps> = ({
     }, 80);
   };
 
-  // Global hotkeys (Ctrl+A for save, Esc for back)
+  // Keyboard hotkeys:
+  // - Ctrl+A: Save & Post
+  // - F2: Focus Date
+  // - Alt+C: Inline Create Party
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
       if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'a') {
-        // Only trigger if not inside a textarea
         const target = e.target as HTMLElement;
         if (target.tagName !== 'TEXTAREA') {
           e.preventDefault();
           onSavePost();
         }
+      } else if (e.key === 'F2') {
+        e.preventDefault();
+        dateInputRef.current?.focus();
+        dateInputRef.current?.select();
+      } else if (e.altKey && e.key.toLowerCase() === 'c') {
+        // Alt+C triggers inline creation
+        e.preventDefault();
+        setIsInlinePartyOpen(true);
       }
     };
     window.addEventListener('keydown', handleKeyDown);
@@ -125,132 +143,140 @@ export const VoucherHeader: React.FC<VoucherHeaderProps> = ({
   return (
     <div
       id="tally-voucher-header"
-      className="bg-white border-b border-slate-200 shadow-xs px-3 py-2 shrink-0 select-none"
+      className="bg-white border-b border-slate-300 shadow-2xs px-2.5 py-1.5 shrink-0 select-none text-xs font-sans"
     >
-      {/* Topmost strip: Voucher Type & Controls */}
-      <div className="flex items-center justify-between gap-2 pb-2 border-b border-slate-100">
-        <div className="flex items-center gap-2">
+      {/* Topmost Command Strip: Tally Title, Voucher Type, No, Date & Actions */}
+      <div className="flex items-center justify-between gap-2 pb-1.5 border-b border-slate-200">
+        <div className="flex items-center gap-2 min-w-0">
           <button
             type="button"
             onClick={onBack}
-            className="p-1 rounded text-slate-500 hover:text-slate-800 hover:bg-slate-100 transition-colors"
-            title="Back / Exit (Esc)"
+            className="p-1 rounded text-slate-500 hover:text-slate-900 hover:bg-slate-100 transition-colors cursor-pointer"
+            title="Quit Voucher (Esc)"
           >
-            <ArrowLeft className="w-4 h-4" />
+            <ArrowLeft className="w-3.5 h-3.5" />
           </button>
 
-          <div className="flex items-center gap-2">
+          {/* Tally Voucher Type Badge */}
+          <div className="flex items-center gap-1.5 flex-wrap">
             <span
-              className={`px-2.5 py-1 rounded text-xs font-black font-mono uppercase tracking-wider shadow-xs ${
+              className={`px-2 py-0.5 rounded text-[11px] font-black font-mono uppercase tracking-wider shadow-2xs ${
                 isOrder
-                  ? 'bg-blue-700 text-white'
+                  ? 'bg-blue-800 text-white'
                   : isSales
-                  ? 'bg-emerald-700 text-white'
-                  : 'bg-indigo-700 text-white'
+                  ? 'bg-emerald-800 text-white'
+                  : 'bg-indigo-800 text-white'
               }`}
             >
               {isOrder
                 ? voucherType === 'SALES_ORDER'
-                  ? 'Sales Order'
-                  : 'Purchase Order'
+                  ? 'F8: Sales Order'
+                  : 'F9: Purchase Order'
                 : isSales
-                ? 'Sales Invoice'
-                : 'Purchase Invoice'}
+                ? 'F8: Sales'
+                : 'F9: Purchase'}
             </span>
-            <span className="text-[11px] text-slate-800 font-bold font-mono">
-              {isOrder
-                ? isEditing
-                  ? 'Order Alteration (Open / Editable)'
-                  : 'Order Booking'
-                : isEditing
-                ? 'Accounting Voucher Alteration'
-                : 'Actual Transaction Posting'}
+
+            <span className="text-[11px] text-slate-800 font-extrabold tracking-tight font-sans">
+              Accounting Voucher {isEditing ? 'Alteration' : 'Creation'}
             </span>
+
+            {businessName && (
+              <span className="text-[11px] text-slate-500 font-mono hidden md:inline">
+                • Company: <strong className="text-slate-800">{businessName}</strong>
+              </span>
+            )}
           </div>
         </div>
 
-        {/* Voucher Number & Date */}
-        <div className="flex items-center gap-4 text-xs font-mono">
-          <div className="flex items-center gap-1.5">
-            <span className="text-slate-950 font-bold font-sans tracking-tight text-xs uppercase">{isOrder ? 'Order No:' : 'Voucher No:'}</span>
+        {/* Voucher Number, Date & Action Buttons */}
+        <div className="flex items-center gap-3 text-xs shrink-0 font-mono">
+          {/* Voucher No */}
+          <div className="flex items-center gap-1">
+            <span className="text-slate-700 font-bold font-sans uppercase text-[11px]">
+              No.
+            </span>
             {onVoucherNumberChange ? (
               <input
                 type="text"
                 value={voucherNumber ?? ''}
                 onChange={e => onVoucherNumberChange(e.target.value)}
-                className="w-28 px-1.5 py-0.5 text-xs font-black text-slate-950 border border-slate-400 rounded bg-white focus:bg-white focus:ring-1 focus:ring-blue-600 shadow-2xs"
+                className="w-24 px-1.5 py-0.5 text-xs font-black text-slate-900 border border-slate-400 rounded bg-white focus:bg-white focus:ring-1 focus:ring-blue-600 font-mono shadow-2xs"
               />
             ) : (
-              <span className="font-black text-slate-950 bg-slate-100 px-2 py-0.5 rounded border border-slate-300">
+              <span className="font-black text-slate-900 bg-slate-100 px-2 py-0.5 rounded border border-slate-300">
                 {voucherNumber || 'AUTO'}
               </span>
             )}
           </div>
 
-          <div className="flex items-center gap-1.5">
-            <span className="text-slate-950 font-bold font-sans tracking-tight text-xs uppercase">Date:</span>
+          {/* Voucher Date with F2 hint */}
+          <div className="flex items-center gap-1">
+            <span
+              className="text-slate-700 font-bold font-sans uppercase text-[11px] cursor-pointer hover:text-blue-700"
+              onClick={() => dateInputRef.current?.focus()}
+              title="Shortcut: F2"
+            >
+              Date:
+            </span>
             <input
+              ref={dateInputRef}
+              id="voucher-header-date-input"
               type="date"
               value={voucherDate ?? ''}
               onChange={e => onVoucherDateChange(e.target.value)}
-              className="px-1.5 py-0.5 text-xs font-bold text-slate-950 border border-slate-400 rounded bg-white focus:bg-white focus:ring-1 focus:ring-blue-600 font-mono shadow-2xs"
+              className="px-1.5 py-0.5 text-xs font-bold text-slate-900 border border-slate-400 rounded bg-white focus:bg-white focus:ring-1 focus:ring-blue-600 font-mono shadow-2xs"
             />
           </div>
 
-          {/* Action buttons */}
-          <div className="flex items-center gap-1.5 ml-2 font-sans">
+          {/* Quick Action Buttons */}
+          <div className="flex items-center gap-1.5 font-sans">
             {onPrint && (
               <button
                 type="button"
                 id="btn-voucher-header-print"
                 onClick={onPrint}
-                className="px-2.5 py-1 text-xs font-semibold text-slate-700 bg-white hover:bg-slate-100 rounded border border-slate-300 transition-colors flex items-center gap-1.5 shadow-2xs"
-                title="Print or Preview Voucher"
+                className="px-2 py-0.5 text-[11px] font-bold text-slate-700 bg-white hover:bg-slate-100 rounded border border-slate-300 transition-colors flex items-center gap-1 shadow-2xs cursor-pointer"
+                title="Print Voucher (Alt+P)"
               >
-                <Printer className="w-3.5 h-3.5 text-slate-600" />
+                <Printer className="w-3 h-3 text-slate-600" />
                 <span>Print</span>
               </button>
             )}
+
             {onSaveDraft && (
               <button
                 type="button"
                 disabled={submitting}
                 onClick={onSaveDraft}
-                className="px-2.5 py-1 text-xs font-medium text-slate-700 bg-slate-100 hover:bg-slate-200 rounded border border-slate-300 transition-colors disabled:opacity-50"
+                className="px-2 py-0.5 text-[11px] font-medium text-slate-700 bg-slate-100 hover:bg-slate-200 rounded border border-slate-300 transition-colors disabled:opacity-50 cursor-pointer"
               >
                 {isEditing ? 'Update Draft' : 'Draft'}
               </button>
             )}
+
             <button
               type="button"
               disabled={submitting}
               onClick={onSavePost}
-              className={`px-3.5 py-1.5 text-xs font-bold text-white rounded shadow-xs transition-all flex items-center gap-1.5 disabled:opacity-50 ${
+              className={`px-3 py-1 text-xs font-black text-white rounded shadow-2xs transition-all flex items-center gap-1.5 disabled:opacity-50 cursor-pointer ${
                 isOrder
-                  ? 'bg-blue-600 hover:bg-blue-700 shadow-blue-600/20'
+                  ? 'bg-blue-700 hover:bg-blue-800'
                   : isSales
-                  ? 'bg-emerald-600 hover:bg-emerald-700 shadow-emerald-600/20'
-                  : 'bg-indigo-600 hover:bg-indigo-700 shadow-indigo-600/20'
+                  ? 'bg-emerald-700 hover:bg-emerald-800'
+                  : 'bg-indigo-700 hover:bg-indigo-800'
               }`}
-              title={isOrder ? (isEditing ? 'Update Order' : 'Save Order') : (isEditing ? 'Update Invoice' : 'Save & Post Invoice')}
+              title="Accept & Post Voucher (Ctrl+A)"
             >
               {submitting ? (
                 <>
-                  <RefreshCw className="w-3.5 h-3.5 animate-spin" />
-                  <span>{isEditing ? 'Updating...' : 'Saving...'}</span>
+                  <RefreshCw className="w-3 h-3 animate-spin" />
+                  <span>Saving...</span>
                 </>
               ) : (
                 <>
-                  <Send className="w-3.5 h-3.5" />
-                  <span>
-                    {isOrder
-                      ? isEditing
-                        ? 'Update Order'
-                        : 'Save Order'
-                      : isEditing
-                      ? 'Update Invoice'
-                      : 'Save Invoice'}
-                  </span>
+                  <Send className="w-3 h-3" />
+                  <span>{isEditing ? 'Update' : 'Accept (Ctrl+A)'}</span>
                 </>
               )}
             </button>
@@ -258,23 +284,30 @@ export const VoucherHeader: React.FC<VoucherHeaderProps> = ({
         </div>
       </div>
 
-      {/* Second Strip: Party Selection & Reference Details */}
-      <div className="grid grid-cols-1 md:grid-cols-12 gap-3 pt-2 items-center text-xs">
+      {/* Second Strip: Party Selection, Ledger Account & Ref Details */}
+      <div className="grid grid-cols-1 md:grid-cols-12 gap-2 pt-1.5 items-center text-xs">
         {/* Party A/c Name */}
-        <div className={`${isSales ? 'md:col-span-8' : 'md:col-span-6'} flex items-center gap-2`}>
-          <span className="w-28 text-slate-950 font-extrabold shrink-0 text-right text-xs uppercase tracking-tight">
-            Party A/c Name:
-          </span>
-          <div className="flex-1 min-w-0">
+        <div className="md:col-span-6 flex items-center gap-2">
+          <label
+            htmlFor="voucher-header-party-select-input"
+            className="w-28 text-slate-900 font-extrabold shrink-0 text-right text-[11px] uppercase tracking-tight"
+          >
+            Party A/c name:
+          </label>
+          <div
+            className="flex-1 min-w-0"
+            onClick={onPartyFocus}
+            onFocusCapture={onPartyFocus}
+          >
             <SearchableMasterSelect
               id="voucher-header-party-select"
               ref={partySelectRef}
-              placeholder={isSales ? 'Type customer name/phone...' : 'Type supplier name...'}
+              placeholder={isSales ? 'Search customer name/phone (or click for List of Ledgers)...' : 'Search supplier name (or click for List of Ledgers)...'}
               options={partyOptions}
               value={selectedPartyId}
               onSelect={opt => onPartyChange(opt ? opt.id : '')}
               allowCreate={allowPartyCreate}
-              createLabel={q => isSales ? `+ Create Customer ${q ? `"${q}"` : 'New'}` : `+ Create Supplier ${q ? `"${q}"` : 'New'}`}
+              createLabel={q => isSales ? `+ Create Customer ${q ? `"${q}"` : 'New'} (Alt+C)` : `+ Create Supplier ${q ? `"${q}"` : 'New'} (Alt+C)`}
               onCreate={query => {
                 setTypedPartyName(query);
                 setIsInlinePartyOpen(true);
@@ -287,25 +320,48 @@ export const VoucherHeader: React.FC<VoucherHeaderProps> = ({
                 }
               }}
               className="w-full"
-              inputClassName="py-1 text-xs font-bold text-slate-950 bg-white border-slate-400 rounded focus:ring-1 focus:ring-blue-600 shadow-2xs"
+              inputClassName="py-0.5 px-2 text-xs font-black text-slate-950 bg-white border-slate-400 rounded focus:ring-1 focus:ring-blue-600 shadow-2xs"
             />
           </div>
           {partyBalance && (
             <span
-              className={`px-2 py-0.5 rounded text-[11px] font-mono shrink-0 border ${
+              className={`px-1.5 py-0.5 rounded text-[11px] font-mono shrink-0 border ${
                 partyBalance.isOverLimit
-                  ? 'bg-red-50 text-red-700 border-red-200 font-bold'
+                  ? 'bg-red-50 text-red-800 border-red-300 font-black'
                   : 'bg-slate-100 text-slate-900 border-slate-300 font-bold'
               }`}
+              title={partyBalance.isOverLimit ? 'Credit limit exceeded!' : 'Current Account Balance'}
             >
               Bal: ₹{partyBalance.balance.toLocaleString('en-IN', { minimumFractionDigits: 2 })} {partyBalance.type}
             </span>
           )}
         </div>
 
-        {/* Reference / Supplier Invoice No */}
-        <div className={`${isSales ? 'md:col-span-4' : 'md:col-span-3'} flex items-center gap-1.5`}>
-          <span className="text-slate-950 font-extrabold shrink-0 text-xs uppercase tracking-tight">
+        {/* Sales / Purchase Ledger & GST Mode */}
+        <div className="md:col-span-3 flex items-center gap-1.5">
+          <span className="text-slate-900 font-extrabold shrink-0 text-[11px] uppercase tracking-tight">
+            {isSales ? 'Sales Ledger:' : 'Purchase Ledger:'}
+          </span>
+          {onGstModeChange ? (
+            <select
+              value={gstMode}
+              onChange={e => onGstModeChange(e.target.value as any)}
+              className="flex-1 min-w-0 py-0.5 px-1.5 text-xs font-bold text-slate-900 border border-slate-400 rounded bg-white focus:ring-1 focus:ring-blue-600 font-mono shadow-2xs"
+            >
+              <option value="INTRA_STATE">Sales A/c (CGST+SGST)</option>
+              <option value="INTER_STATE">Interstate A/c (IGST)</option>
+              <option value="EXEMPT">Exempted Sales A/c</option>
+            </select>
+          ) : (
+            <span className="flex-1 min-w-0 py-0.5 px-1.5 text-xs font-bold text-slate-800 bg-slate-100 border border-slate-300 rounded font-mono truncate">
+              {isSales ? 'Sales A/c' : 'Purchase A/c'} ({gstMode === 'INTER_STATE' ? 'IGST' : gstMode === 'EXEMPT' ? 'Exempt' : 'CGST+SGST'})
+            </span>
+          )}
+        </div>
+
+        {/* Reference / Supplier Invoice Details */}
+        <div className="md:col-span-3 flex items-center gap-1.5">
+          <span className="text-slate-900 font-extrabold shrink-0 text-[11px] uppercase tracking-tight">
             {isSales ? 'Ref No:' : 'Supp Inv:'}
           </span>
           <input
@@ -314,25 +370,20 @@ export const VoucherHeader: React.FC<VoucherHeaderProps> = ({
             value={referenceNumber ?? ''}
             onChange={e => onReferenceNumberChange && onReferenceNumberChange(e.target.value)}
             placeholder={isSales ? 'Order / Ref #' : 'Inv #'}
-            className="flex-1 min-w-0 py-1 px-1.5 text-xs font-bold text-slate-950 border border-slate-400 rounded bg-white focus:bg-white focus:ring-1 focus:ring-blue-600 font-mono shadow-2xs"
+            className="flex-1 min-w-0 py-0.5 px-1.5 text-xs font-bold text-slate-900 border border-slate-400 rounded bg-white focus:bg-white focus:ring-1 focus:ring-blue-600 font-mono shadow-2xs"
           />
-        </div>
 
-        {/* Supplier Invoice Date for Purchase */}
-        {!isSales && (
-          <div className="md:col-span-3 flex items-center gap-1.5">
-            <span className="text-slate-950 font-extrabold shrink-0 text-xs uppercase tracking-tight">
-              Supp Date:
-            </span>
+          {!isSales && onSupplierInvoiceDateChange && (
             <input
               id="voucher-header-supp-date"
               type="date"
               value={supplierInvoiceDate ?? ''}
-              onChange={e => onSupplierInvoiceDateChange && onSupplierInvoiceDateChange(e.target.value)}
-              className="flex-1 min-w-0 py-1 px-1.5 text-xs font-bold text-slate-950 border border-slate-400 rounded bg-white focus:bg-white focus:ring-1 focus:ring-blue-600 font-mono shadow-2xs"
+              onChange={e => onSupplierInvoiceDateChange(e.target.value)}
+              className="w-28 py-0.5 px-1 text-[11px] font-bold text-slate-900 border border-slate-400 rounded bg-white focus:ring-1 focus:ring-blue-600 font-mono shadow-2xs"
+              title="Supplier Invoice Date"
             />
-          </div>
-        )}
+          )}
+        </div>
       </div>
 
       {/* Inline Party Creation Modal */}
@@ -341,7 +392,6 @@ export const VoucherHeader: React.FC<VoucherHeaderProps> = ({
           isOpen={isInlinePartyOpen}
           onClose={() => {
             setIsInlinePartyOpen(false);
-            // Re-focus party input
             setTimeout(() => {
               partySelectRef.current?.focus();
             }, 50);
