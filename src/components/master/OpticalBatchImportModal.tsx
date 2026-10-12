@@ -15,13 +15,14 @@ import {
   Sparkles,
   Barcode as BarcodeIcon,
 } from 'lucide-react';
-import { apiRequest, getStoredToken } from '../../api/client.js';
+import { apiRequest, apiUpload, getStoredToken, getStoredBusinessId } from '../../api/client.js';
 import { generateClientOpticalBatchTemplate } from '../../utils/excelTemplateGenerator.js';
 
 interface OpticalBatchImportModalProps {
   isOpen: boolean;
   onClose: () => void;
   onSuccess: () => void;
+  preselectedStockItemId?: string;
 }
 
 interface ValidationResult {
@@ -125,14 +126,26 @@ export const OpticalBatchImportModal: React.FC<OpticalBatchImportModalProps> = (
     try {
       setDownloadingErrors(true);
       const token = getStoredToken();
+      const bizId = getStoredBusinessId();
       const response = await fetch(`/api/imports/${sessionId}/errors/xlsx`, {
         headers: {
           ...(token ? { Authorization: `Bearer ${token}` } : {}),
+          ...(bizId ? { 'X-Business-Id': bizId } : {}),
         },
       });
 
       if (!response.ok) {
-        throw new Error('Failed to download error report.');
+        const contentType = response.headers.get('content-type') || '';
+        if (contentType.includes('application/json')) {
+          const errData = await response.json().catch(() => ({}));
+          throw new Error(errData.error || errData.message || 'Failed to download error report.');
+        } else {
+          const text = await response.text().catch(() => '');
+          if (text.startsWith('<') || text.includes('<html')) {
+            throw new Error('The import service returned an unexpected HTML response. Please check server logs.');
+          }
+          throw new Error(text || 'Failed to download error report.');
+        }
       }
 
       const blob = await response.blob();
@@ -145,7 +158,8 @@ export const OpticalBatchImportModal: React.FC<OpticalBatchImportModalProps> = (
       window.URL.revokeObjectURL(url);
       document.body.removeChild(a);
     } catch (err: any) {
-      alert(err.message || 'Could not download error report');
+      console.error('[Download Error Report Failed]', err);
+      setError(err.message || 'Could not download error report');
     } finally {
       setDownloadingErrors(false);
     }
@@ -182,25 +196,17 @@ export const OpticalBatchImportModal: React.FC<OpticalBatchImportModalProps> = (
       formData.append('file', file);
       formData.append('importType', 'OPTICAL_BATCH');
 
-      const token = getStoredToken();
-      const response = await fetch('/api/imports/upload', {
-        method: 'POST',
-        headers: {
-          ...(token ? { Authorization: `Bearer ${token}` } : {}),
-        },
-        body: formData,
-      });
-
-      const data = await response.json();
-
-      if (!response.ok) {
-        throw new Error(data.error || 'Failed to process and validate Excel file.');
-      }
+      const data = await apiUpload<ValidationResult>('/api/imports/upload', formData);
 
       setValidationData(data);
       setStep('preview');
     } catch (err: any) {
-      setError(err.message || 'Error processing file.');
+      console.error('[Optical Batch Import Upload Error]', err);
+      let msg = err.message || 'Error processing file.';
+      if (msg.includes('<html') || msg.startsWith('<') || msg.includes('Unexpected token')) {
+        msg = 'The import service returned an unexpected HTML response. Please check the API endpoint or server logs.';
+      }
+      setError(msg);
     } finally {
       setLoading(false);
     }
@@ -221,7 +227,12 @@ export const OpticalBatchImportModal: React.FC<OpticalBatchImportModalProps> = (
       setStep('result');
       onSuccess(); // Refresh parent table in background
     } catch (err: any) {
-      setError(err.message || 'Failed to execute import.');
+      console.error('[Optical Batch Import Post Error]', err);
+      let msg = err.message || 'Failed to execute import.';
+      if (msg.includes('<html') || msg.startsWith('<') || msg.includes('Unexpected token')) {
+        msg = 'The import service returned an unexpected HTML response. Please check the API endpoint or server logs.';
+      }
+      setError(msg);
     } finally {
       setLoading(false);
     }

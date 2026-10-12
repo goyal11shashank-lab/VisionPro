@@ -86,6 +86,11 @@ export async function apiRequest<T = any>(
     headers['X-Business-Id'] = bizId;
   }
 
+  // For FormData bodies (file uploads), do NOT specify Content-Type so browser sets multipart boundary
+  if (options.body instanceof FormData) {
+    delete headers['Content-Type'];
+  }
+
   let attempt = 0;
   while (true) {
     attempt++;
@@ -95,11 +100,27 @@ export async function apiRequest<T = any>(
         headers,
       });
 
-      const contentType = response.headers.get('content-type') || '';
+      const contentType = (response.headers.get('content-type') || '').toLowerCase();
       let data: any = {};
 
       if (contentType.includes('application/json')) {
-        data = await response.json().catch(() => ({}));
+        const text = await response.text().catch(() => '');
+        try {
+          data = text ? JSON.parse(text) : {};
+        } catch (jsonErr) {
+          // In case header was JSON but body was malformed or HTML
+          console.error(`[API Client JSON Parse Error] ${endpoint}:`, text.slice(0, 300));
+          if (text.startsWith('<') || text.includes('<html')) {
+            const msg = endpoint.includes('/imports')
+              ? 'The import service returned an unexpected HTML response. Please check the API endpoint or server logs.'
+              : `HTTP ${response.status}: The server returned an unexpected HTML response instead of JSON.`;
+            const err: any = new Error(msg);
+            err.status = response.status;
+            err.rawResponse = text;
+            throw err;
+          }
+          data = {};
+        }
       } else {
         const text = await response.text().catch(() => '');
         const isHtml = text.startsWith('<!doctype') || text.startsWith('<html') || text.trim().startsWith('<') || text.includes('Starting Server...');
@@ -117,6 +138,16 @@ export async function apiRequest<T = any>(
             await new Promise((resolve) => setTimeout(resolve, Math.min(attempt * 600, 2500)));
             continue;
           }
+          if (isHtml) {
+            console.error(`[API Client Non-JSON Error] ${endpoint} returned HTML:`, text.slice(0, 500));
+            const msg = endpoint.includes('/imports')
+              ? 'The import service returned an unexpected HTML response. Please check the API endpoint or server logs.'
+              : `HTTP ${response.status}: The server returned an unexpected HTML response instead of JSON.`;
+            const err: any = new Error(msg);
+            err.status = response.status;
+            err.rawResponse = text;
+            throw err;
+          }
           const err: any = new Error(`HTTP ${response.status}: Request failed`);
           err.status = response.status;
           err.data = text;
@@ -129,9 +160,13 @@ export async function apiRequest<T = any>(
             await new Promise((resolve) => setTimeout(resolve, Math.min(attempt * 600, 2500)));
             continue;
           }
-          const err: any = new Error(`API endpoint ${endpoint} returned HTML instead of JSON. The server may still be initializing.`);
+          console.error(`[API Client Unexpected HTML] ${endpoint}:`, text.slice(0, 500));
+          const msg = endpoint.includes('/imports')
+            ? 'The import service returned an unexpected HTML response. Please check the API endpoint or server logs.'
+            : `API endpoint ${endpoint} returned HTML instead of JSON. The server may still be initializing.`;
+          const err: any = new Error(msg);
           err.status = 502;
-          err.data = text;
+          err.rawResponse = text;
           throw err;
         }
       }
@@ -159,4 +194,23 @@ export async function apiRequest<T = any>(
       throw networkErr;
     }
   }
+}
+
+/**
+ * Upload helper that transmits multipart FormData payloads while ensuring
+ * authentication headers, business context, retry logic, and non-JSON protection.
+ */
+export async function apiUpload<T = any>(
+  endpoint: string,
+  formData: FormData,
+  retries = 3
+): Promise<T> {
+  return apiRequest<T>(
+    endpoint,
+    {
+      method: 'POST',
+      body: formData,
+    },
+    retries
+  );
 }

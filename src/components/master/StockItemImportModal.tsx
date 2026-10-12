@@ -17,7 +17,7 @@ import {
   Check,
   FileDown,
 } from 'lucide-react';
-import { apiRequest, getStoredToken } from '../../api/client.js';
+import { apiRequest, apiUpload, getStoredToken, getStoredBusinessId } from '../../api/client.js';
 import { generateClientStockItemTemplate } from '../../utils/excelTemplateGenerator.js';
 
 interface StockItemImportModalProps {
@@ -182,24 +182,12 @@ export const StockItemImportModal: React.FC<StockItemImportModalProps> = ({
       formData.append('importType', 'STOCK_ITEM');
       formData.append('importMode', importMode);
 
-      const token = getStoredToken();
-      const response = await fetch('/api/imports/upload', {
-        method: 'POST',
-        headers: {
-          ...(token ? { Authorization: `Bearer ${token}` } : {}),
-        },
-        body: formData,
-      });
-
-      const data = await response.json();
-
-      if (!response.ok) {
-        throw new Error(data.error || 'Failed to process and validate Excel file.');
-      }
+      const data = await apiUpload<ValidationResult>('/api/imports/upload', formData);
 
       setValidationData(data);
       setStep('preview');
     } catch (err: any) {
+      console.error('[Stock Item Import Upload Error]', err);
       setError(err.message || 'Error processing file.');
     } finally {
       setLoading(false);
@@ -213,22 +201,12 @@ export const StockItemImportModal: React.FC<StockItemImportModalProps> = ({
       setError(null);
       setImportMode(newMode);
 
-      const token = getStoredToken();
-      const response = await fetch(`/api/imports/${validationData.sessionId}/revalidate`, {
+      const data = await apiRequest<{ validation: any }>(`/api/imports/${validationData.sessionId}/revalidate`, {
         method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          ...(token ? { Authorization: `Bearer ${token}` } : {}),
-        },
         body: JSON.stringify({
           importMode: newMode,
         }),
       });
-
-      const data = await response.json();
-      if (!response.ok) {
-        throw new Error(data.error || 'Re-validation failed.');
-      }
 
       setValidationData((prev) => {
         if (!prev) return null;
