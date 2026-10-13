@@ -1,7 +1,18 @@
+import * as XLSX from 'xlsx';
+
 const TOKEN_KEY = 'optical_erp_token';
 const LEGACY_TOKEN_KEY = 'token';
 const BIZ_KEY = 'optical_erp_active_biz';
 const LEGACY_BIZ_KEY = 'currentBusinessId';
+
+// Pre-set AI Studio iframe test cookie to ensure cross-origin/iframe proxy requests pass through
+if (typeof document !== 'undefined') {
+  try {
+    document.cookie = '__SECURE-aistudio_auth_flow_may_set_cookies=true; Path=/; Secure; SameSite=None; Partitioned; Max-Age=86400;';
+  } catch {
+    // Non-fatal if cookies are restricted
+  }
+}
 
 // Synchronize legacy and current storage keys on script load in browser
 if (typeof window !== 'undefined' && window.localStorage) {
@@ -96,6 +107,7 @@ export async function apiRequest<T = any>(
     attempt++;
     try {
       const response = await fetch(endpoint, {
+        credentials: 'include',
         ...options,
         headers,
       });
@@ -110,7 +122,18 @@ export async function apiRequest<T = any>(
         } catch (jsonErr) {
           // In case header was JSON but body was malformed or HTML
           console.error(`[API Client JSON Parse Error] ${endpoint}:`, text.slice(0, 300));
-          if (text.startsWith('<') || text.includes('<html')) {
+          if (text.startsWith('<') || text.includes('<html') || text.includes('Cookie check')) {
+            if (typeof document !== 'undefined') {
+              try {
+                document.cookie = '__SECURE-aistudio_auth_flow_may_set_cookies=true; Path=/; Secure; SameSite=None; Partitioned; Max-Age=86400;';
+              } catch {
+                // Ignore
+              }
+            }
+            if (attempt <= retries) {
+              await new Promise((resolve) => setTimeout(resolve, Math.min(attempt * 600, 2500)));
+              continue;
+            }
             const msg = endpoint.includes('/imports')
               ? 'The import service returned an unexpected HTML response. Please check the API endpoint or server logs.'
               : `HTTP ${response.status}: The server returned an unexpected HTML response instead of JSON.`;
@@ -123,11 +146,21 @@ export async function apiRequest<T = any>(
         }
       } else {
         const text = await response.text().catch(() => '');
-        const isHtml = text.startsWith('<!doctype') || text.startsWith('<html') || text.trim().startsWith('<') || text.includes('Starting Server...');
+        const isHtml = text.startsWith('<!doctype') || text.startsWith('<html') || text.trim().startsWith('<') || text.includes('Starting Server...') || text.includes('Cookie check');
         
-        // If the server is warming up or restarting and returned HTML, retry up to `retries` times
+        if (isHtml && (text.includes('Cookie check') || text.includes('aistudio_auth'))) {
+          if (typeof document !== 'undefined') {
+            try {
+              document.cookie = '__SECURE-aistudio_auth_flow_may_set_cookies=true; Path=/; Secure; SameSite=None; Partitioned; Max-Age=86400;';
+            } catch {
+              // Ignore
+            }
+          }
+        }
+
+        // If the server is warming up or cookie check is needed, retry up to `retries` times
         if (isHtml && attempt <= retries) {
-          console.warn(`[API Client] Endpoint ${endpoint} returned HTML (server warming up). Retrying attempt ${attempt}/${retries}...`);
+          console.warn(`[API Client] Endpoint ${endpoint} returned HTML (warming up or cookie check). Retrying attempt ${attempt}/${retries}...`);
           await new Promise((resolve) => setTimeout(resolve, Math.min(attempt * 600, 2500)));
           continue;
         }
@@ -197,14 +230,87 @@ export async function apiRequest<T = any>(
 }
 
 /**
- * Upload helper that transmits multipart FormData payloads while ensuring
- * authentication headers, business context, retry logic, and non-JSON protection.
+ * Converts a browser Blob or File into a base64 encoded string
+ */
+export async function fileBlobToBase64(blob: Blob): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => {
+      const res = reader.result as string;
+      const base64 = res.includes(',') ? res.split(',')[1] : res;
+      resolve(base64);
+    };
+    reader.onerror = (err) => reject(err);
+    reader.readAsDataURL(blob);
+  });
+}
+
+/**
+ * Upload helper that transmits payloads while ensuring authentication headers,
+ * business context, retry logic, and non-JSON protection.
+ * Automatically serializes File/Blob payloads to JSON Base64 and pre-parsed sheet rows
+ * when in browser iframe environments to prevent stream locking/consumption issues.
  */
 export async function apiUpload<T = any>(
   endpoint: string,
   formData: FormData,
   retries = 3
 ): Promise<T> {
+  try {
+    if (typeof FormData !== 'undefined' && formData instanceof FormData) {
+      const fileEntry = formData.get('file');
+      if (fileEntry && (fileEntry instanceof Blob || typeof (fileEntry as any).arrayBuffer === 'function')) {
+        const fileObj = fileEntry as File;
+
+        // Try extracting pre-parsed rows using XLSX if it's a spreadsheet
+        let parsedRows: any[] | null = null;
+        try {
+          if (fileObj.name && /\.(xlsx|xls|csv)$/i.test(fileObj.name)) {
+            const buffer = await fileObj.arrayBuffer();
+            const wb = XLSX.read(buffer, { type: 'array' });
+            const firstSheetName = wb.SheetNames[0];
+            if (firstSheetName) {
+              const ws = wb.Sheets[firstSheetName];
+              parsedRows = XLSX.utils.sheet_to_json(ws, { defval: '' });
+            }
+          }
+        } catch (parseErr) {
+          console.warn('[apiUpload] Pre-parsing sheet skipped:', parseErr);
+        }
+
+        const base64 = await fileBlobToBase64(fileObj);
+        const payload: Record<string, any> = {
+          fileBase64: base64,
+          fileName: fileObj.name || 'upload.xlsx',
+          fileSize: fileObj.size || 0,
+        };
+
+        if (parsedRows && parsedRows.length > 0) {
+          payload.rows = parsedRows;
+        }
+
+        // Transfer any extra form fields (e.g. importType, importMode, columnMapping)
+        formData.forEach((value, key) => {
+          if (key !== 'file') {
+            payload[key] = value;
+          }
+        });
+
+        return await apiRequest<T>(
+          endpoint,
+          {
+            method: 'POST',
+            body: JSON.stringify(payload),
+          },
+          retries
+        );
+      }
+    }
+  } catch (serializationErr) {
+    console.warn('[apiUpload] JSON serialization skipped, falling back to standard FormData:', serializationErr);
+  }
+
+  // Fallback to standard multipart FormData
   return apiRequest<T>(
     endpoint,
     {

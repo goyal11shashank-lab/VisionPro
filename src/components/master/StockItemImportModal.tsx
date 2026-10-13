@@ -19,6 +19,7 @@ import {
 } from 'lucide-react';
 import { apiRequest, apiUpload, getStoredToken, getStoredBusinessId } from '../../api/client.js';
 import { generateClientStockItemTemplate } from '../../utils/excelTemplateGenerator.js';
+import * as XLSX from 'xlsx';
 
 interface StockItemImportModalProps {
   isOpen: boolean;
@@ -173,22 +174,61 @@ export const StockItemImportModal: React.FC<StockItemImportModalProps> = ({
       return;
     }
 
+    const token = getStoredToken();
+    if (!token) {
+      setError('Your session has expired. Please log in again to import stock items.');
+      return;
+    }
+
     try {
       setLoading(true);
       setError(null);
 
-      const formData = new FormData();
-      formData.append('file', file);
-      formData.append('importType', 'STOCK_ITEM');
-      formData.append('importMode', importMode);
+      // Try pre-parsing the workbook client-side for fastest pure JSON transmission
+      let parsedRows: Record<string, any>[] = [];
+      try {
+        const arrayBuffer = await file.arrayBuffer();
+        const wb = XLSX.read(arrayBuffer, { type: 'array' });
+        const firstSheetName = wb.SheetNames[0];
+        if (firstSheetName) {
+          const ws = wb.Sheets[firstSheetName];
+          parsedRows = XLSX.utils.sheet_to_json(ws, { defval: '' });
+        }
+      } catch (parseErr) {
+        console.warn('[StockItemImportModal] Client-side parse fallback to apiUpload:', parseErr);
+      }
 
-      const data = await apiUpload<ValidationResult>('/api/imports/upload', formData);
+      let data: ValidationResult;
+      if (parsedRows && parsedRows.length > 0) {
+        data = await apiRequest<ValidationResult>('/api/imports/upload', {
+          method: 'POST',
+          body: JSON.stringify({
+            importType: 'STOCK_ITEM',
+            importMode,
+            fileName: file.name,
+            fileSize: file.size,
+            rows: parsedRows,
+          }),
+        });
+      } else {
+        const formData = new FormData();
+        formData.append('file', file);
+        formData.append('importType', 'STOCK_ITEM');
+        formData.append('importMode', importMode);
+        data = await apiUpload<ValidationResult>('/api/imports/upload', formData);
+      }
 
       setValidationData(data);
       setStep('preview');
     } catch (err: any) {
       console.error('[Stock Item Import Upload Error]', err);
-      setError(err.message || 'Error processing file.');
+      let msg = err.message || 'Error processing file.';
+      if (msg.includes('<html') || msg.startsWith('<') || msg.includes('Unexpected token')) {
+        msg = 'The import service returned an unexpected HTML response. Please check the API endpoint or server logs.';
+      } else if (msg === 'Failed to fetch' || msg.includes('Failed to fetch') || err.name === 'TypeError') {
+        msg = 'Connection to the import service failed. Please check your network connection or verify that the server is online.';
+      }
+      setError(msg);
     } finally {
       setLoading(false);
     }

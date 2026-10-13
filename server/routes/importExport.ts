@@ -14,22 +14,24 @@ import { ExportService, ExportDatasetType } from '../services/exportService.js';
 
 const router = Router();
 
-// Configure multer for memory storage (max 10MB)
+// Configure multer for memory storage (max 25MB)
 const upload = multer({
   storage: multer.memoryStorage(),
-  limits: { fileSize: 10 * 1024 * 1024 },
+  limits: { fileSize: 25 * 1024 * 1024 },
   fileFilter: (_req, file, cb) => {
     const allowed = [
       'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
       'application/vnd.ms-excel',
       'text/csv',
       'application/csv',
+      'application/octet-stream',
     ];
+    const name = (file.originalname || '').toLowerCase();
     if (
       allowed.includes(file.mimetype) ||
-      file.originalname.endsWith('.xlsx') ||
-      file.originalname.endsWith('.xls') ||
-      file.originalname.endsWith('.csv')
+      name.endsWith('.xlsx') ||
+      name.endsWith('.xls') ||
+      name.endsWith('.csv')
     ) {
       cb(null, true);
     } else {
@@ -37,6 +39,20 @@ const upload = multer({
     }
   },
 });
+
+const handleUploadMiddleware = (req: Request, res: Response, next: any) => {
+  const contentType = (req.headers['content-type'] || '').toLowerCase();
+  // If JSON payload is sent, bypass multer entirely so body has already been parsed by express.json
+  if (contentType.includes('application/json')) {
+    return next();
+  }
+  upload.single('file')(req, res, (err: any) => {
+    if (err) {
+      return res.status(400).json({ error: err.message || 'File upload error.' });
+    }
+    next();
+  });
+};
 
 // Helper for type permissions
 function getImportPermission(type: ImportType): string {
@@ -119,7 +135,7 @@ router.get(
 router.post(
   '/upload',
   authenticateToken,
-  upload.single('file'),
+  handleUploadMiddleware,
   async (req: Request, res: Response) => {
     try {
       const businessId = req.user?.currentBusinessId || (req.headers['x-business-id'] as string);
@@ -129,8 +145,27 @@ router.post(
         return res.status(400).json({ error: 'Business context required.' });
       }
 
-      if (!req.file) {
-        return res.status(400).json({ error: 'No file uploaded. Please provide an Excel (.xlsx/.xls) or CSV file.' });
+      let fileBuffer: Buffer | null = null;
+      let originalFileName = 'import.xlsx';
+      let fileSize = 0;
+      let rawRows: Record<string, any>[] | null = null;
+
+      if (Array.isArray(req.body?.rows) && req.body.rows.length > 0) {
+        rawRows = req.body.rows;
+        originalFileName = req.body.fileName || 'import.xlsx';
+        fileSize = Number(req.body.fileSize || 0);
+      } else if (req.file) {
+        fileBuffer = req.file.buffer;
+        originalFileName = req.file.originalname;
+        fileSize = req.file.size;
+      } else if (req.body?.fileBase64) {
+        try {
+          fileBuffer = Buffer.from(req.body.fileBase64, 'base64');
+          originalFileName = req.body.fileName || 'import.xlsx';
+          fileSize = fileBuffer.length;
+        } catch {
+          fileBuffer = null;
+        }
       }
 
       const importType = (req.body.importType || '').toUpperCase() as ImportType;
@@ -138,15 +173,21 @@ router.post(
         return res.status(400).json({ error: `Invalid importType "${importType}". Allowed: PARTY, PURCHASE, SALES_ORDER, SALES_INVOICE, OPENING_STOCK, OPTICAL_BATCH, STOCK_ITEM` });
       }
 
-      // Read spreadsheet buffer
-      const wb = XLSX.read(req.file.buffer, { type: 'buffer' });
-      const firstSheetName = wb.SheetNames[0];
-      if (!firstSheetName) {
-        return res.status(400).json({ error: 'Spreadsheet contains no worksheets.' });
-      }
+      if (!rawRows) {
+        if (!fileBuffer || fileBuffer.length === 0) {
+          return res.status(400).json({ error: 'No file uploaded. Please provide an Excel (.xlsx/.xls) or CSV file.' });
+        }
 
-      const ws = wb.Sheets[firstSheetName];
-      const rawRows: Record<string, any>[] = XLSX.utils.sheet_to_json(ws, { defval: '' });
+        // Read spreadsheet buffer
+        const wb = XLSX.read(fileBuffer, { type: 'buffer' });
+        const firstSheetName = wb.SheetNames[0];
+        if (!firstSheetName) {
+          return res.status(400).json({ error: 'Spreadsheet contains no worksheets.' });
+        }
+
+        const ws = wb.Sheets[firstSheetName];
+        rawRows = XLSX.utils.sheet_to_json(ws, { defval: '' });
+      }
 
       if (!rawRows || rawRows.length === 0) {
         return res.status(400).json({ error: 'Uploaded sheet contains no data rows.' });
@@ -194,8 +235,8 @@ router.post(
         .values({
           businessId,
           importType,
-          fileName: req.file.originalname,
-          fileSize: String(req.file.size),
+          fileName: originalFileName,
+          fileSize: String(fileSize),
           status: 'READY',
           totalRows: String(validation.totalRows),
           validRows: String(validation.validRows),
@@ -212,7 +253,7 @@ router.post(
 
       return res.json({
         sessionId: session.id,
-        fileName: req.file.originalname,
+        fileName: originalFileName,
         importType,
         totalRows: validation.totalRows,
         validRows: validation.validRows,

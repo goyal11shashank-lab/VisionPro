@@ -376,6 +376,7 @@ export interface OpticalBatch {
   physicalStock?: string | number;
   reservedStock?: string | number;
   availableStock?: string | number;
+  voucherCount?: number | null;
   createdAt?: string;
   updatedAt?: string;
 }

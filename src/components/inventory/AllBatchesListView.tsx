@@ -526,11 +526,28 @@ export const AllBatchesListView: React.FC<AllBatchesListViewProps> = ({
                       </td>
 
                       <td className="py-2.5 px-3">
-                        <span className="font-mono font-bold text-slate-900 group-hover:text-blue-600 transition-colors">
+                        <div className="font-mono font-bold text-slate-900 group-hover:text-blue-600 transition-colors">
                           {batch.formattedName || `${batch.sph} / ${batch.cyl}`}
-                        </span>
-                        {batch.axis ? <span className="ml-1 text-[10px] text-slate-500">Ax:{batch.axis}°</span> : null}
-                        {batch.add ? <span className="ml-1 text-[10px] text-slate-500">Add:{batch.add}</span> : null}
+                          {batch.axis ? <span className="ml-1 text-[10px] text-slate-500 font-normal">Ax:{batch.axis}°</span> : null}
+                          {batch.add ? <span className="ml-1 text-[10px] text-slate-500 font-normal">Add:{batch.add}</span> : null}
+                        </div>
+                        {batch.voucherCount === undefined || batch.voucherCount === null ? (
+                          <div className="text-[10px] text-slate-400 italic">Usage unavailable</div>
+                        ) : batch.voucherCount > 0 ? (
+                          <button
+                            type="button"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              onSelectBatch(batch);
+                            }}
+                            className="text-[10px] text-indigo-600 hover:text-indigo-800 hover:underline font-medium cursor-pointer text-left transition-colors block"
+                            title={`View ${batch.voucherCount} voucher(s) in batch ledger`}
+                          >
+                            Used in {batch.voucherCount} voucher{batch.voucherCount === 1 ? '' : 's'}
+                          </button>
+                        ) : (
+                          <div className="text-[10px] text-slate-400 font-medium">Used in 0 vouchers</div>
+                        )}
                       </td>
 
                       <td className="py-2.5 px-3">

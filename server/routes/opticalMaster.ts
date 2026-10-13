@@ -2314,6 +2314,40 @@ router.get('/batches', requirePermission('master:view'), async (req: Request, re
         physicalStock: opticalStocks.physicalStock,
         reservedStock: opticalStocks.reservedStock,
         availableStock: opticalStocks.availableStock,
+        voucherCount: sql<number>`COALESCE((
+          SELECT COUNT(DISTINCT b_usage.voucher_id)::int
+          FROM (
+            SELECT silb.batch_id, si.id AS voucher_id
+            FROM sales_invoice_line_batches silb
+            JOIN sales_invoice_lines sil ON silb.sales_invoice_line_id = sil.id
+            JOIN sales_invoices si ON sil.sales_invoice_id = si.id
+            WHERE silb.batch_id = ${opticalBatches.id} AND si.business_id = ${bizId} AND si.status NOT IN ('CANCELLED', 'DRAFT')
+
+            UNION ALL
+
+            SELECT pilb.batch_id, pi.id AS voucher_id
+            FROM purchase_invoice_line_batches pilb
+            JOIN purchase_invoice_lines pil ON pilb.purchase_invoice_line_id = pil.id
+            JOIN purchase_invoices pi ON pil.purchase_invoice_id = pi.id
+            WHERE pilb.batch_id = ${opticalBatches.id} AND pi.business_id = ${bizId} AND pi.status NOT IN ('CANCELLED', 'DRAFT')
+
+            UNION ALL
+
+            SELECT srlb.batch_id, sr.id AS voucher_id
+            FROM sales_return_line_batches srlb
+            JOIN sales_return_lines srl ON srlb.sales_return_line_id = srl.id
+            JOIN sales_returns sr ON srl.sales_return_id = sr.id
+            WHERE srlb.batch_id = ${opticalBatches.id} AND sr.business_id = ${bizId} AND sr.status NOT IN ('CANCELLED', 'DRAFT')
+
+            UNION ALL
+
+            SELECT prlb.batch_id, pr.id AS voucher_id
+            FROM purchase_return_line_batches prlb
+            JOIN purchase_return_lines prl ON prlb.purchase_return_line_id = prl.id
+            JOIN purchase_returns pr ON prl.purchase_return_id = pr.id
+            WHERE prlb.batch_id = ${opticalBatches.id} AND pr.business_id = ${bizId} AND pr.status NOT IN ('CANCELLED', 'DRAFT')
+          ) b_usage
+        ), 0)`.as('voucher_count'),
       })
       .from(opticalBatches)
       .innerJoin(uniqueItems, eq(opticalBatches.uniqueItemId, uniqueItems.id))
@@ -2338,6 +2372,7 @@ router.get('/batches', requirePermission('master:view'), async (req: Request, re
         categoryCode: catCode,
         formattedName,
         name: formattedName,
+        voucherCount: typeof r.voucherCount === 'number' ? r.voucherCount : parseInt(r.voucherCount as any, 10) || 0,
       };
     });
 

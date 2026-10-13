@@ -17,6 +17,7 @@ import {
 } from 'lucide-react';
 import { apiRequest, apiUpload, getStoredToken, getStoredBusinessId } from '../../api/client.js';
 import { generateClientOpticalBatchTemplate } from '../../utils/excelTemplateGenerator.js';
+import * as XLSX from 'xlsx';
 
 interface OpticalBatchImportModalProps {
   isOpen: boolean;
@@ -188,15 +189,47 @@ export const OpticalBatchImportModal: React.FC<OpticalBatchImportModalProps> = (
       return;
     }
 
+    const token = getStoredToken();
+    if (!token) {
+      setError('Your session has expired. Please log in again to import optical batches.');
+      return;
+    }
+
     try {
       setLoading(true);
       setError(null);
 
-      const formData = new FormData();
-      formData.append('file', file);
-      formData.append('importType', 'OPTICAL_BATCH');
+      // Try pre-parsing the workbook client-side for fastest pure JSON transmission
+      let parsedRows: Record<string, any>[] = [];
+      try {
+        const arrayBuffer = await file.arrayBuffer();
+        const wb = XLSX.read(arrayBuffer, { type: 'array' });
+        const firstSheetName = wb.SheetNames[0];
+        if (firstSheetName) {
+          const ws = wb.Sheets[firstSheetName];
+          parsedRows = XLSX.utils.sheet_to_json(ws, { defval: '' });
+        }
+      } catch (parseErr) {
+        console.warn('[OpticalBatchImportModal] Client-side parse fallback to apiUpload:', parseErr);
+      }
 
-      const data = await apiUpload<ValidationResult>('/api/imports/upload', formData);
+      let data: ValidationResult;
+      if (parsedRows && parsedRows.length > 0) {
+        data = await apiRequest<ValidationResult>('/api/imports/upload', {
+          method: 'POST',
+          body: JSON.stringify({
+            importType: 'OPTICAL_BATCH',
+            fileName: file.name,
+            fileSize: file.size,
+            rows: parsedRows,
+          }),
+        });
+      } else {
+        const formData = new FormData();
+        formData.append('file', file);
+        formData.append('importType', 'OPTICAL_BATCH');
+        data = await apiUpload<ValidationResult>('/api/imports/upload', formData);
+      }
 
       setValidationData(data);
       setStep('preview');
@@ -205,6 +238,8 @@ export const OpticalBatchImportModal: React.FC<OpticalBatchImportModalProps> = (
       let msg = err.message || 'Error processing file.';
       if (msg.includes('<html') || msg.startsWith('<') || msg.includes('Unexpected token')) {
         msg = 'The import service returned an unexpected HTML response. Please check the API endpoint or server logs.';
+      } else if (msg === 'Failed to fetch' || msg.includes('Failed to fetch') || err.name === 'TypeError') {
+        msg = 'Connection to the import service failed. Please check your network connection or verify that the server is online.';
       }
       setError(msg);
     } finally {
@@ -214,6 +249,12 @@ export const OpticalBatchImportModal: React.FC<OpticalBatchImportModalProps> = (
 
   const handlePostImport = async () => {
     if (!validationData?.sessionId) return;
+
+    const token = getStoredToken();
+    if (!token) {
+      setError('Your session has expired. Please log in again to import optical batches.');
+      return;
+    }
 
     try {
       setLoading(true);
@@ -231,6 +272,8 @@ export const OpticalBatchImportModal: React.FC<OpticalBatchImportModalProps> = (
       let msg = err.message || 'Failed to execute import.';
       if (msg.includes('<html') || msg.startsWith('<') || msg.includes('Unexpected token')) {
         msg = 'The import service returned an unexpected HTML response. Please check the API endpoint or server logs.';
+      } else if (msg === 'Failed to fetch' || msg.includes('Failed to fetch') || err.name === 'TypeError') {
+        msg = 'Connection to the import service failed. Please check your network connection or verify that the server is online.';
       }
       setError(msg);
     } finally {

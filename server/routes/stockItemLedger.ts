@@ -280,9 +280,47 @@ router.get(
           COALESCE(os.physical_stock, 0)::numeric AS stock,
           COALESCE(os.reserved_stock, 0)::numeric AS reserved,
           COALESCE(os.available_stock, 0)::numeric AS available,
+          COALESCE(vu.voucher_count, 0)::int AS voucher_count,
           (SELECT MAX(created_at) FROM stock_ledger sl WHERE sl.batch_id = ob.id) AS last_transaction_date
         FROM optical_batches ob
         LEFT JOIN optical_stocks os ON ob.id = os.batch_id
+        LEFT JOIN (
+          SELECT
+            b_usage.batch_id,
+            COUNT(DISTINCT b_usage.voucher_id)::int AS voucher_count
+          FROM (
+            SELECT silb.batch_id, si.id AS voucher_id
+            FROM sales_invoice_line_batches silb
+            JOIN sales_invoice_lines sil ON silb.sales_invoice_line_id = sil.id
+            JOIN sales_invoices si ON sil.sales_invoice_id = si.id
+            WHERE si.business_id = $2 AND si.status NOT IN ('CANCELLED', 'DRAFT')
+
+            UNION ALL
+
+            SELECT pilb.batch_id, pi.id AS voucher_id
+            FROM purchase_invoice_line_batches pilb
+            JOIN purchase_invoice_lines pil ON pilb.purchase_invoice_line_id = pil.id
+            JOIN purchase_invoices pi ON pil.purchase_invoice_id = pi.id
+            WHERE pi.business_id = $2 AND pi.status NOT IN ('CANCELLED', 'DRAFT')
+
+            UNION ALL
+
+            SELECT srlb.batch_id, sr.id AS voucher_id
+            FROM sales_return_line_batches srlb
+            JOIN sales_return_lines srl ON srlb.sales_return_line_id = srl.id
+            JOIN sales_returns sr ON srl.sales_return_id = sr.id
+            WHERE sr.business_id = $2 AND sr.status NOT IN ('CANCELLED', 'DRAFT')
+
+            UNION ALL
+
+            SELECT prlb.batch_id, pr.id AS voucher_id
+            FROM purchase_return_line_batches prlb
+            JOIN purchase_return_lines prl ON prlb.purchase_return_line_id = prl.id
+            JOIN purchase_returns pr ON prl.purchase_return_id = pr.id
+            WHERE pr.business_id = $2 AND pr.status NOT IN ('CANCELLED', 'DRAFT')
+          ) b_usage
+          GROUP BY b_usage.batch_id
+        ) vu ON ob.id = vu.batch_id
         ${whereSql}
         ORDER BY ${orderBy}
         LIMIT $${paginatedParams.length - 1} OFFSET $${paginatedParams.length}
@@ -316,6 +354,7 @@ router.get(
           stock: Number(b.stock),
           reserved: Number(b.reserved),
           available: Number(b.available),
+          voucherCount: typeof b.voucher_count === 'number' ? b.voucher_count : parseInt(b.voucher_count, 10) || 0,
           lastTransactionDate: b.last_transaction_date,
           createdAt: b.created_at,
           updatedAt: b.updated_at,
