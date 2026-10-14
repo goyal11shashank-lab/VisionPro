@@ -1,4 +1,8 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
+import {
+  TallyContextualPanel,
+  ContextualPanelItem,
+} from '../../components/voucher/TallyContextualPanel';
 import {
   ArrowDownLeft,
   Plus,
@@ -102,7 +106,70 @@ export const CustomerReceiptsPage: React.FC = () => {
   const [chequeNumber, setChequeNumber] = useState('');
   const [chequeDate, setChequeDate] = useState('');
   const [notes, setNotes] = useState('');
-  const [autoPost, setAutoPost] = useState(true);
+  const autoPost = true; // Globally true and done by default
+  const [contextualSearch, setContextualSearch] = useState('');
+  const [contextualSelectedIdx, setContextualSelectedIdx] = useState(0);
+
+  const selectedCustomer = useMemo(() => {
+    return customers.find(c => c.id === partyId) || null;
+  }, [customers, partyId]);
+
+  const contextualItems: ContextualPanelItem[] = useMemo(() => {
+    const q = contextualSearch.trim().toLowerCase();
+    const filtered = q
+      ? customers.filter(c => {
+          const name = (c.name || '').toLowerCase();
+          const phone = (c.phone || c.mobile || '').toLowerCase();
+          const city = (c.city || '').toLowerCase();
+          const gstin = (c.gstin || '').toLowerCase();
+          return name.includes(q) || phone.includes(q) || city.includes(q) || gstin.includes(q);
+        })
+      : customers;
+
+    return filtered.map(c => {
+      const bal = Number(c.balance ?? c.currentBalance ?? 0);
+      return {
+        id: c.id,
+        title: c.name,
+        subtitle: `${c.phone || c.mobile || ''} ${c.city ? `• ${c.city}` : ''}`.trim() || undefined,
+        badge: c.partyType === 'CUSTOMER' ? 'Sundry Debtors' : c.partyType || 'Customer',
+        badgeColor: 'blue' as const,
+        rightText: bal !== 0 ? `₹${Math.abs(bal).toLocaleString('en-IN', { minimumFractionDigits: 2 })} ${bal < 0 ? 'Cr' : 'Dr'}` : '₹0.00',
+        rightSubText: c.gstin ? `GST: ${c.gstin}` : undefined,
+        meta: c,
+      };
+    });
+  }, [contextualSearch, customers]);
+
+  const handleSelectCustomer = (item: ContextualPanelItem) => {
+    setPartyId(item.id);
+  };
+
+  // Keyboard navigation for side panel in Create Modal
+  useEffect(() => {
+    if (!showCreateModal) return;
+    const handleModalKey = (e: KeyboardEvent) => {
+      if (e.key === 'ArrowDown') {
+        e.preventDefault();
+        setContextualSelectedIdx(prev =>
+          Math.min(prev + 1, Math.max(0, contextualItems.length - 1))
+        );
+      } else if (e.key === 'ArrowUp') {
+        e.preventDefault();
+        setContextualSelectedIdx(prev => Math.max(prev - 1, 0));
+      } else if (e.key === 'Enter') {
+        const target = e.target as HTMLElement;
+        if (target.tagName !== 'TEXTAREA' && (!partyId || target.id === 'tally-contextual-search-input')) {
+          if (contextualItems[contextualSelectedIdx]) {
+            e.preventDefault();
+            handleSelectCustomer(contextualItems[contextualSelectedIdx]);
+          }
+        }
+      }
+    };
+    window.addEventListener('keydown', handleModalKey);
+    return () => window.removeEventListener('keydown', handleModalKey);
+  }, [showCreateModal, contextualItems, contextualSelectedIdx, partyId]);
 
   // Invoices for Allocation
   const [unpaidInvoices, setUnpaidInvoices] = useState<UnpaidInvoice[]>([]);
@@ -363,7 +430,7 @@ export const CustomerReceiptsPage: React.FC = () => {
     setChequeNumber('');
     setChequeDate('');
     setNotes('');
-    setAutoPost(true);
+    setContextualSearch('');
     setAllocationsMap({});
     setFormError(null);
   };
@@ -749,16 +816,16 @@ export const CustomerReceiptsPage: React.FC = () => {
 
       {/* CREATE RECEIPT MODAL */}
       {showCreateModal && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-xs overflow-y-auto">
-          <div className="bg-white rounded-2xl max-w-4xl w-full border border-slate-200 shadow-2xl overflow-hidden my-8">
-            <div className="flex items-center justify-between px-6 py-4 border-b border-slate-100 bg-slate-50/50">
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-2 sm:p-4 bg-slate-900/60 backdrop-blur-xs overflow-y-auto">
+          <div className="bg-white rounded-2xl max-w-6xl w-full border border-slate-200 shadow-2xl overflow-hidden my-4 flex flex-col max-h-[92vh]">
+            <div className="flex items-center justify-between px-6 py-3.5 border-b border-slate-200 bg-slate-50/80 shrink-0">
               <div className="flex items-center gap-2.5">
                 <div className="p-2 rounded-xl bg-emerald-50 text-emerald-600 border border-emerald-100">
                   <ArrowDownLeft className="w-5 h-5" />
                 </div>
                 <div>
                   <h3 className="text-base font-bold text-slate-900">New Customer Receipt</h3>
-                  <p className="text-xs text-slate-500">Record inbound payment & settle unpaid customer invoices</p>
+                  <p className="text-xs text-slate-500">Record inbound payment & settle customer invoices</p>
                 </div>
               </div>
               <button
@@ -769,39 +836,77 @@ export const CustomerReceiptsPage: React.FC = () => {
               </button>
             </div>
 
-            <form onSubmit={handleCreateReceipt} className="p-6 space-y-6">
-              {formError && (
-                <div className="p-3.5 rounded-xl bg-rose-50 border border-rose-200 text-rose-700 text-sm flex items-center gap-2">
-                  <AlertCircle className="w-4 h-4 shrink-0" />
-                  <span>{formError}</span>
-                </div>
-              )}
+            <div className="flex-1 min-h-0 flex flex-col lg:flex-row overflow-hidden">
+              <form onSubmit={handleCreateReceipt} className="flex-1 min-w-0 p-6 space-y-6 overflow-y-auto">
+                {formError && (
+                  <div className="p-3.5 rounded-xl bg-rose-50 border border-rose-200 text-rose-700 text-sm flex items-center gap-2">
+                    <AlertCircle className="w-4 h-4 shrink-0" />
+                    <span>{formError}</span>
+                  </div>
+                )}
 
-              {/* Top Controls Grid */}
-              <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
-                {/* Customer */}
-                <div className="space-y-1.5 sm:col-span-1">
-                  <label className="text-xs font-semibold text-slate-700">Customer *</label>
-                  <select
-                    value={partyId}
-                    onChange={e => setPartyId(e.target.value)}
-                    required
-                    className="w-full px-3.5 py-2 bg-slate-50 border border-slate-200 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-emerald-500/20 focus:border-emerald-500"
-                  >
-                    <option value="">Select Customer...</option>
-                    {customers.map(c => (
-                      <option key={c.id} value={c.id}>
-                        {c.name} ({c.phone || c.city || 'Customer'})
-                      </option>
-                    ))}
-                  </select>
-                </div>
+                {/* Top Controls Grid */}
+                <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+                  {/* Customer A/c Name (Side Panel Driven) */}
+                  <div className="space-y-1.5 sm:col-span-1">
+                    <label className="text-xs font-bold text-slate-700 flex items-center justify-between">
+                      <span>Customer A/c Name *</span>
+                      <span className="text-[10px] text-cyan-700 font-bold uppercase tracking-wider">
+                        Select on right panel →
+                      </span>
+                    </label>
+                    {selectedCustomer ? (
+                      <div className="p-2.5 bg-emerald-50/80 border border-emerald-300 rounded-xl flex items-center justify-between">
+                        <div className="min-w-0 pr-2">
+                          <div className="text-xs font-bold text-slate-900 truncate">
+                            {selectedCustomer.name}
+                          </div>
+                          <div className="text-[11px] text-slate-500 truncate flex items-center gap-1.5">
+                            <span>{selectedCustomer.phone || selectedCustomer.city || 'Customer'}</span>
+                            {selectedCustomer.gstin && <span>• GST: {selectedCustomer.gstin}</span>}
+                          </div>
+                        </div>
+                        <div className="flex items-center gap-1.5 shrink-0">
+                          {Number(selectedCustomer.balance ?? selectedCustomer.currentBalance ?? 0) !== 0 && (
+                            <span className="px-1.5 py-0.5 rounded text-[10px] font-mono font-bold bg-white text-emerald-800 border border-emerald-200">
+                              ₹{Math.abs(Number(selectedCustomer.balance ?? selectedCustomer.currentBalance ?? 0)).toLocaleString('en-IN', { minimumFractionDigits: 2 })}{' '}
+                              {Number(selectedCustomer.balance ?? selectedCustomer.currentBalance ?? 0) < 0 ? 'Cr' : 'Dr'}
+                            </span>
+                          )}
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setPartyId('');
+                              setContextualSearch('');
+                            }}
+                            className="px-2 py-1 text-[11px] font-semibold text-slate-600 hover:text-slate-900 hover:bg-emerald-100 rounded-lg transition-colors border border-emerald-200"
+                          >
+                            Change
+                          </button>
+                        </div>
+                      </div>
+                    ) : (
+                      <div className="relative">
+                        <Search className="w-3.5 h-3.5 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2" />
+                        <input
+                          type="text"
+                          placeholder="Select customer from side panel (or filter)..."
+                          value={contextualSearch}
+                          onChange={e => {
+                            setContextualSearch(e.target.value);
+                            setContextualSelectedIdx(0);
+                          }}
+                          className="w-full pl-9 pr-3.5 py-2 bg-slate-50 border border-slate-200 focus:border-emerald-500 focus:bg-white rounded-xl text-xs font-medium focus:outline-none focus:ring-2 focus:ring-emerald-500/20"
+                        />
+                      </div>
+                    )}
+                  </div>
 
-                {/* Date */}
-                <div className="space-y-1.5">
-                  <label className="text-xs font-semibold text-slate-700">Receipt Date *</label>
-                  <input
-                    type="date"
+                  {/* Date */}
+                  <div className="space-y-1.5">
+                    <label className="text-xs font-semibold text-slate-700">Receipt Date *</label>
+                    <input
+                      type="date"
                     value={paymentDate}
                     onChange={e => setPaymentDate(e.target.value)}
                     required
@@ -1032,20 +1137,6 @@ export const CustomerReceiptsPage: React.FC = () => {
                 />
               </div>
 
-              {/* Auto-post checkbox */}
-              <div className="flex items-center gap-2 pt-2">
-                <input
-                  type="checkbox"
-                  id="autoPost"
-                  checked={autoPost}
-                  onChange={e => setAutoPost(e.target.checked)}
-                  className="rounded border-slate-300 text-emerald-600 focus:ring-emerald-500 h-4 w-4"
-                />
-                <label htmlFor="autoPost" className="text-xs font-semibold text-slate-700 cursor-pointer">
-                  Post Immediately to Customer Ledger (Finalize Voucher)
-                </label>
-              </div>
-
               {/* Modal Footer */}
               <div className="flex items-center justify-end gap-3 pt-4 border-t border-slate-100">
                 <button
@@ -1060,13 +1151,30 @@ export const CustomerReceiptsPage: React.FC = () => {
                   disabled={submitting}
                   className="px-5 py-2 text-sm font-semibold text-white bg-emerald-600 hover:bg-emerald-700 rounded-xl transition-colors disabled:opacity-50 shadow-xs"
                 >
-                  {submitting ? 'Saving...' : autoPost ? 'Save & Post Receipt' : 'Save as Draft'}
+                  {submitting ? 'Saving...' : 'Save & Post Receipt'}
                 </button>
               </div>
             </form>
+
+            {/* Right: Tally Contextual Panel for Party Selection */}
+            <TallyContextualPanel
+              isOpen={true}
+              type="PARTY"
+              title="List of Ledger Accounts"
+              subtitle="Customer Accounts (Sundry Debtors)"
+              searchQuery={contextualSearch}
+              onSearchChange={setContextualSearch}
+              items={contextualItems}
+              selectedIndex={contextualSelectedIdx}
+              onSelectIndex={setContextualSelectedIdx}
+              onConfirmSelect={handleSelectCustomer}
+              onClose={() => {}}
+              isSales={true}
+            />
           </div>
         </div>
-      )}
+      </div>
+    )}
 
       {/* VIEW RECEIPT DETAILS MODAL */}
       {viewVoucher && (

@@ -1,4 +1,8 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
+import {
+  TallyContextualPanel,
+  ContextualPanelItem,
+} from '../../components/voucher/TallyContextualPanel';
 import {
   ArrowUpRight,
   Plus,
@@ -102,7 +106,71 @@ export const SupplierPaymentsPage: React.FC = () => {
   const [chequeNumber, setChequeNumber] = useState('');
   const [chequeDate, setChequeDate] = useState('');
   const [notes, setNotes] = useState('');
-  const [autoPost, setAutoPost] = useState(true);
+  const autoPost = true; // Globally true and done by default
+  const [contextualSearch, setContextualSearch] = useState('');
+  const [contextualSelectedIdx, setContextualSelectedIdx] = useState(0);
+
+  const selectedSupplier = useMemo(() => {
+    return suppliers.find(s => s.id === partyId) || null;
+  }, [suppliers, partyId]);
+
+  const contextualItems: ContextualPanelItem[] = useMemo(() => {
+    const q = contextualSearch.trim().toLowerCase();
+    const filtered = q
+      ? suppliers.filter(s => {
+          const name = (s.name || '').toLowerCase();
+          const phone = (s.phone || s.mobile || '').toLowerCase();
+          const city = (s.city || '').toLowerCase();
+          const state = (s.state || '').toLowerCase();
+          const gstin = (s.gstin || '').toLowerCase();
+          return name.includes(q) || phone.includes(q) || city.includes(q) || state.includes(q) || gstin.includes(q);
+        })
+      : suppliers;
+
+    return filtered.map(s => {
+      const bal = Number(s.balance ?? s.currentBalance ?? 0);
+      return {
+        id: s.id,
+        title: s.name,
+        subtitle: `${s.city || ''} ${s.state ? `• ${s.state}` : ''} ${s.phone ? `• ${s.phone}` : ''}`.trim() || undefined,
+        badge: s.partyType === 'SUPPLIER' ? 'Sundry Creditors' : s.partyType || 'Supplier',
+        badgeColor: 'blue' as const,
+        rightText: bal !== 0 ? `₹${Math.abs(bal).toLocaleString('en-IN', { minimumFractionDigits: 2 })} ${bal < 0 ? 'Cr' : 'Dr'}` : '₹0.00',
+        rightSubText: s.gstin ? `GST: ${s.gstin}` : undefined,
+        meta: s,
+      };
+    });
+  }, [contextualSearch, suppliers]);
+
+  const handleSelectSupplier = (item: ContextualPanelItem) => {
+    setPartyId(item.id);
+  };
+
+  // Keyboard navigation for side panel in Create Modal
+  useEffect(() => {
+    if (!showCreateModal) return;
+    const handleModalKey = (e: KeyboardEvent) => {
+      if (e.key === 'ArrowDown') {
+        e.preventDefault();
+        setContextualSelectedIdx(prev =>
+          Math.min(prev + 1, Math.max(0, contextualItems.length - 1))
+        );
+      } else if (e.key === 'ArrowUp') {
+        e.preventDefault();
+        setContextualSelectedIdx(prev => Math.max(prev - 1, 0));
+      } else if (e.key === 'Enter') {
+        const target = e.target as HTMLElement;
+        if (target.tagName !== 'TEXTAREA' && (!partyId || target.id === 'tally-contextual-search-input')) {
+          if (contextualItems[contextualSelectedIdx]) {
+            e.preventDefault();
+            handleSelectSupplier(contextualItems[contextualSelectedIdx]);
+          }
+        }
+      }
+    };
+    window.addEventListener('keydown', handleModalKey);
+    return () => window.removeEventListener('keydown', handleModalKey);
+  }, [showCreateModal, contextualItems, contextualSelectedIdx, partyId]);
 
   // Invoices for Allocation
   const [unpaidInvoices, setUnpaidInvoices] = useState<UnpaidPurchaseInvoice[]>([]);
@@ -358,7 +426,7 @@ export const SupplierPaymentsPage: React.FC = () => {
     setChequeNumber('');
     setChequeDate('');
     setNotes('');
-    setAutoPost(true);
+    setContextualSearch('');
     setAllocationsMap({});
     setFormError(null);
   };
@@ -744,9 +812,9 @@ export const SupplierPaymentsPage: React.FC = () => {
 
       {/* CREATE PAYMENT MODAL */}
       {showCreateModal && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-xs overflow-y-auto">
-          <div className="bg-white rounded-2xl max-w-4xl w-full border border-slate-200 shadow-2xl overflow-hidden my-8">
-            <div className="flex items-center justify-between px-6 py-4 border-b border-slate-100 bg-slate-50/50">
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-2 sm:p-4 bg-slate-900/60 backdrop-blur-xs overflow-y-auto">
+          <div className="bg-white rounded-2xl max-w-6xl w-full border border-slate-200 shadow-2xl overflow-hidden my-4 flex flex-col max-h-[92vh]">
+            <div className="flex items-center justify-between px-6 py-3.5 border-b border-slate-200 bg-slate-50/80 shrink-0">
               <div className="flex items-center gap-2.5">
                 <div className="p-2 rounded-xl bg-blue-50 text-blue-600 border border-blue-100">
                   <ArrowUpRight className="w-5 h-5" />
@@ -764,39 +832,78 @@ export const SupplierPaymentsPage: React.FC = () => {
               </button>
             </div>
 
-            <form onSubmit={handleCreatePayment} className="p-6 space-y-6">
-              {formError && (
-                <div className="p-3.5 rounded-xl bg-rose-50 border border-rose-200 text-rose-700 text-sm flex items-center gap-2">
-                  <AlertCircle className="w-4 h-4 shrink-0" />
-                  <span>{formError}</span>
-                </div>
-              )}
+            <div className="flex-1 min-h-0 flex flex-col lg:flex-row overflow-hidden">
+              <form onSubmit={handleCreatePayment} className="flex-1 min-w-0 p-6 space-y-6 overflow-y-auto">
+                {formError && (
+                  <div className="p-3.5 rounded-xl bg-rose-50 border border-rose-200 text-rose-700 text-sm flex items-center gap-2">
+                    <AlertCircle className="w-4 h-4 shrink-0" />
+                    <span>{formError}</span>
+                  </div>
+                )}
 
-              {/* Top Controls Grid */}
-              <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
-                {/* Supplier */}
-                <div className="space-y-1.5 sm:col-span-1">
-                  <label className="text-xs font-semibold text-slate-700">Supplier *</label>
-                  <select
-                    value={partyId}
-                    onChange={e => setPartyId(e.target.value)}
-                    required
-                    className="w-full px-3.5 py-2 bg-slate-50 border border-slate-200 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500"
-                  >
-                    <option value="">Select Supplier...</option>
-                    {suppliers.map(s => (
-                      <option key={s.id} value={s.id}>
-                        {s.name} ({s.city || s.state || 'Supplier'})
-                      </option>
-                    ))}
-                  </select>
-                </div>
+                {/* Top Controls Grid */}
+                <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+                  {/* Supplier A/c Name (Side Panel Driven) */}
+                  <div className="space-y-1.5 sm:col-span-1">
+                    <label className="text-xs font-bold text-slate-700 flex items-center justify-between">
+                      <span>Supplier A/c Name *</span>
+                      <span className="text-[10px] text-cyan-700 font-bold uppercase tracking-wider">
+                        Select on right panel →
+                      </span>
+                    </label>
+                    {selectedSupplier ? (
+                      <div className="p-2.5 bg-blue-50/80 border border-blue-300 rounded-xl flex items-center justify-between">
+                        <div className="min-w-0 pr-2">
+                          <div className="text-xs font-bold text-slate-900 truncate">
+                            {selectedSupplier.name}
+                          </div>
+                          <div className="text-[11px] text-slate-500 truncate flex items-center gap-1.5">
+                            <span>{selectedSupplier.city || selectedSupplier.state || 'Supplier'}</span>
+                            {selectedSupplier.phone && <span>• {selectedSupplier.phone}</span>}
+                            {selectedSupplier.gstin && <span>• GST: {selectedSupplier.gstin}</span>}
+                          </div>
+                        </div>
+                        <div className="flex items-center gap-1.5 shrink-0">
+                          {Number(selectedSupplier.balance ?? selectedSupplier.currentBalance ?? 0) !== 0 && (
+                            <span className="px-1.5 py-0.5 rounded text-[10px] font-mono font-bold bg-white text-blue-800 border border-blue-200">
+                              ₹{Math.abs(Number(selectedSupplier.balance ?? selectedSupplier.currentBalance ?? 0)).toLocaleString('en-IN', { minimumFractionDigits: 2 })}{' '}
+                              {Number(selectedSupplier.balance ?? selectedSupplier.currentBalance ?? 0) < 0 ? 'Cr' : 'Dr'}
+                            </span>
+                          )}
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setPartyId('');
+                              setContextualSearch('');
+                            }}
+                            className="px-2 py-1 text-[11px] font-semibold text-slate-600 hover:text-slate-900 hover:bg-blue-100 rounded-lg transition-colors border border-blue-200"
+                          >
+                            Change
+                          </button>
+                        </div>
+                      </div>
+                    ) : (
+                      <div className="relative">
+                        <Search className="w-3.5 h-3.5 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2" />
+                        <input
+                          type="text"
+                          placeholder="Select supplier from side panel (or filter)..."
+                          value={contextualSearch}
+                          onChange={e => {
+                            setContextualSearch(e.target.value);
+                            setContextualSelectedIdx(0);
+                          }}
+                          className="w-full pl-9 pr-3.5 py-2 bg-slate-50 border border-slate-200 focus:border-blue-500 focus:bg-white rounded-xl text-xs font-medium focus:outline-none focus:ring-2 focus:ring-blue-500/20"
+                        />
+                      </div>
+                    )}
+                  </div>
 
-                {/* Date */}
-                <div className="space-y-1.5">
-                  <label className="text-xs font-semibold text-slate-700">Payment Date *</label>
-                  <input
-                    type="date"
+                  {/* Date */}
+                  <div className="space-y-1.5">
+                    <label className="text-xs font-semibold text-slate-700">Payment Date *</label>
+                    <input
+                      type="date"
                     value={paymentDate}
                     onChange={e => setPaymentDate(e.target.value)}
                     required
@@ -1031,20 +1138,6 @@ export const SupplierPaymentsPage: React.FC = () => {
                 />
               </div>
 
-              {/* Auto-post checkbox */}
-              <div className="flex items-center gap-2 pt-2">
-                <input
-                  type="checkbox"
-                  id="autoPostSupplier"
-                  checked={autoPost}
-                  onChange={e => setAutoPost(e.target.checked)}
-                  className="rounded border-slate-300 text-blue-600 focus:ring-blue-500 h-4 w-4"
-                />
-                <label htmlFor="autoPostSupplier" className="text-xs font-semibold text-slate-700 cursor-pointer">
-                  Post Immediately to Supplier Ledger (Debit Supplier Balance)
-                </label>
-              </div>
-
               {/* Modal Footer */}
               <div className="flex items-center justify-end gap-3 pt-4 border-t border-slate-100">
                 <button
@@ -1059,13 +1152,30 @@ export const SupplierPaymentsPage: React.FC = () => {
                   disabled={submitting}
                   className="px-5 py-2 text-sm font-semibold text-white bg-blue-600 hover:bg-blue-700 rounded-xl transition-colors disabled:opacity-50 shadow-xs"
                 >
-                  {submitting ? 'Saving...' : autoPost ? 'Save & Post Payment' : 'Save as Draft'}
+                  {submitting ? 'Saving...' : 'Save & Post Payment'}
                 </button>
               </div>
             </form>
+
+            {/* Right: Tally Contextual Panel for Party Selection */}
+            <TallyContextualPanel
+              isOpen={true}
+              type="PARTY"
+              title="List of Ledger Accounts"
+              subtitle="Supplier Accounts (Sundry Creditors)"
+              searchQuery={contextualSearch}
+              onSearchChange={setContextualSearch}
+              items={contextualItems}
+              selectedIndex={contextualSelectedIdx}
+              onSelectIndex={setContextualSelectedIdx}
+              onConfirmSelect={handleSelectSupplier}
+              onClose={() => {}}
+              isSales={false}
+            />
           </div>
         </div>
-      )}
+      </div>
+    )}
 
       {/* VIEW PAYMENT DETAILS MODAL */}
       {viewVoucher && (

@@ -31,6 +31,7 @@ interface VoucherHeaderProps {
   onPartyChange: (partyId: string) => void;
   onPartyCreated?: (newParty: any) => void;
   onPartyFocus?: () => void;
+  onPartyQueryChange?: (query: string) => void;
   allowPartyCreate?: boolean;
   partyBalance?: { balance: number; type: 'Dr' | 'Cr'; isOverLimit?: boolean; creditLimit?: number };
   // Secondary voucher fields (optional / compatibility)
@@ -67,6 +68,7 @@ export const VoucherHeader: React.FC<VoucherHeaderProps> = ({
   onPartyChange,
   onPartyCreated,
   onPartyFocus,
+  onPartyQueryChange,
   allowPartyCreate = true,
   partyBalance,
   gstMode = 'INTRA_STATE',
@@ -306,6 +308,8 @@ export const VoucherHeader: React.FC<VoucherHeaderProps> = ({
               options={partyOptions}
               value={selectedPartyId}
               onSelect={opt => onPartyChange(opt ? opt.id : '')}
+              disableDropdown={true}
+              onQueryChange={onPartyQueryChange}
               allowCreate={allowPartyCreate}
               createLabel={q => isSales ? `+ Create Customer ${q ? `"${q}"` : 'New'} (Alt+C)` : `+ Create Supplier ${q ? `"${q}"` : 'New'} (Alt+C)`}
               onCreate={query => {

@@ -17,7 +17,26 @@ export class DealerDashboardService {
 
     const dealerBiz = bizRes.rows[0];
     if (dealerBiz.business_type !== 'DEALER') {
-      throw new Error('This business is not a DEALER business type.');
+      // If current business is not a DEALER (e.g. MAIN warehouse), check if there is an existing child dealer
+      const childDealerRes = await client.query(
+        `SELECT id, name, trade_name, business_type, parent_business_id, gstin, phone, email, city, state 
+         FROM businesses 
+         WHERE parent_business_id = $1 AND business_type = 'DEALER' AND status = 'ACTIVE'
+         ORDER BY created_at ASC LIMIT 1`,
+        [dealerBusinessId]
+      );
+      if (childDealerRes.rows.length > 0) {
+        return {
+          dealerBiz: childDealerRes.rows[0],
+          mainWarehouse: dealerBiz,
+        };
+      }
+
+      // No child dealer linked; treat current MAIN business as its own primary hub
+      return {
+        dealerBiz,
+        mainWarehouse: dealerBiz,
+      };
     }
 
     let mainWarehouseId = dealerBiz.parent_business_id;
@@ -82,6 +101,62 @@ export class DealerDashboardService {
     const client = await pool.connect();
     try {
       const { dealerBiz, mainWarehouse } = await this.resolveParentMainWarehouse(client, dealerBusinessId);
+
+      // If business is operating as a MAIN warehouse (not an active dealer branch), return main warehouse operational overview
+      if (dealerBiz.business_type !== 'DEALER') {
+        const localStockRes = await client.query(
+          `SELECT COALESCE(SUM(GREATEST(available_stock, 0)), 0)::numeric(12, 2) AS my_available_stock,
+                  COALESCE(SUM(physical_stock), 0)::numeric(12, 2) AS my_physical_stock,
+                  COALESCE(SUM(reserved_stock), 0)::numeric(12, 2) AS my_reserved_stock
+           FROM optical_stocks 
+           WHERE business_id = $1`,
+          [dealerBusinessId]
+        );
+        const myStock = parseFloat(localStockRes.rows[0]?.my_available_stock || '0.00');
+        const myPhysicalStock = parseFloat(localStockRes.rows[0]?.my_physical_stock || '0.00');
+        const myReservedStock = parseFloat(localStockRes.rows[0]?.my_reserved_stock || '0.00');
+
+        return {
+          isDealer: false,
+          businessType: dealerBiz.business_type,
+          dealerBusiness: dealerBiz,
+          mainWarehouse: dealerBiz,
+          linkedSupplierPartyId: null,
+          kpis: {
+            myAvailableStock: myStock,
+            myPhysicalStock,
+            myReservedStock,
+            mainWarehouseAvailable: myStock,
+            onOrderQuantity: 0,
+            incomingQuantity: 0,
+            outstandingToMain: 0,
+            overdueAmount: 0,
+            paymentsAwaitingVerification: 0,
+            paymentsAwaitingCount: 0,
+          },
+          returnStats: {
+            pendingRequests: 0,
+            approvedAwaitingDispatch: 0,
+            inTransit: 0,
+            totalReturnedQty: 0,
+          },
+          needsAttention: {
+            shipmentsAwaitingReceipt: 0,
+            partiallyReceivedShipments: 0,
+            openOrdersCount: 0,
+            overdueAmount: 0,
+            paymentsAwaitingVerification: 0,
+            paymentsAwaitingCount: 0,
+            hasUrgentAction: false,
+          },
+          recentOrders: [],
+          incomingShipments: [],
+          recentReturns: [],
+          lowStockItems: [],
+          stockSharingEnabled: false,
+          message: 'Current organization is operating as a Main Warehouse Hub.',
+        };
+      }
 
       // 1. KPI 1: MY AVAILABLE STOCK
       // Dealer's actual authoritative available inventory (not including ordered/incoming)

@@ -1096,6 +1096,7 @@ export const NormalSalesVoucherPage: React.FC<Props> = ({ onNavigate, onSuccess,
             selectedPartyId={selectedPartyId}
             onPartyChange={handlePartyChange}
             onPartyFocus={openContextualParty}
+            onPartyQueryChange={setContextualSearch}
             partyBalance={
               partyCreditInfo
                 ? {
@@ -1136,6 +1137,7 @@ export const NormalSalesVoucherPage: React.FC<Props> = ({ onNavigate, onSuccess,
               activeRowIndex={activeGridRow}
               onActiveRowChange={setActiveGridRow}
               onItemFocus={openContextualItem}
+              onItemQueryChange={setContextualSearch}
               onItemSelect={handleLineItemChange}
               onBatchClick={idx => {
                 setActiveBatchModalIndex(idx);

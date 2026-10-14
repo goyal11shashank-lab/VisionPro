@@ -27,6 +27,7 @@ import {
   IndianRupee,
   CreditCard,
   ReceiptText,
+  Info,
 } from 'lucide-react';
 import { apiRequest } from '../../api/client.js';
 import { useAuth } from '../../context/AuthContext.js';
@@ -274,6 +275,46 @@ export const DealerDashboardPage: React.FC<DealerDashboardPageProps> = ({ onNavi
         </div>
       </div>
 
+      {/* Error Alert Banner */}
+      {error && (
+        <div className="p-4 bg-red-50 border border-red-200 rounded-xl flex items-center justify-between text-xs text-red-800">
+          <div className="flex items-center gap-2">
+            <AlertTriangle className="w-4 h-4 text-red-600 shrink-0" />
+            <span>{error}</span>
+          </div>
+          <button
+            onClick={() => {
+              setError(null);
+              setRefreshing(true);
+              fetchSummary();
+            }}
+            className="text-red-700 hover:text-red-900 font-semibold underline ml-4 shrink-0"
+          >
+            Retry
+          </button>
+        </div>
+      )}
+
+      {/* Main Warehouse Context Banner */}
+      {(data.isDealer === false || currentBusiness?.businessType === 'MAIN') && (
+        <div className="p-4 bg-blue-50 border border-blue-200 rounded-xl flex flex-col sm:flex-row sm:items-center justify-between gap-3 text-xs text-blue-900">
+          <div className="flex items-center gap-2">
+            <Info className="w-4 h-4 text-blue-600 shrink-0" />
+            <span>
+              <strong>Main Warehouse Hub:</strong> {currentBusiness?.name} is configured as a primary Main Warehouse. Individual dealer transactions, orders, and shipments are managed across your branch network in the Dealer Control Center.
+            </span>
+          </div>
+          {onNavigate && (
+            <button
+              onClick={() => onNavigate('/dealers')}
+              className="px-3.5 py-1.5 bg-blue-600 hover:bg-blue-700 text-white rounded-lg font-semibold shrink-0 transition-colors shadow-xs"
+            >
+              Dealer Control Center
+            </button>
+          )}
+        </div>
+      )}
+
       {/* Onboarding Welcome Banner (Shown only right after setup completion) */}
       {justOnboarded && (
         <div className="p-4 bg-emerald-50 border border-emerald-200 rounded-xl flex items-center justify-between text-xs text-emerald-800">
@@ -295,8 +336,8 @@ export const DealerDashboardPage: React.FC<DealerDashboardPageProps> = ({ onNavi
         </div>
       )}
 
-      {/* Onboarding Pending Banner (If not yet completed) */}
-      {currentBusiness?.onboardingCompleted !== true && (
+      {/* Onboarding Pending Banner (If not yet completed for dealer) */}
+      {currentBusiness?.businessType === 'DEALER' && currentBusiness?.onboardingCompleted !== true && (
         <div className="p-4 bg-amber-50 border border-amber-200 rounded-xl flex items-center justify-between text-xs text-amber-800">
           <div className="flex items-center gap-2">
             <AlertCircle className="w-4 h-4 text-amber-600 shrink-0" />

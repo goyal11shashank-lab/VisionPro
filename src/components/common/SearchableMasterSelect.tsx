@@ -41,6 +41,8 @@ export interface SearchableMasterSelectProps {
   allowCreate?: boolean;
   createLabel?: string | ((query: string) => string);
   onCreate?: (query: string) => void;
+  disableDropdown?: boolean;
+  onQueryChange?: (query: string) => void;
 }
 
 export interface SearchableMasterSelectRef {
@@ -75,6 +77,8 @@ export const SearchableMasterSelect = forwardRef<SearchableMasterSelectRef, Sear
       allowCreate = false,
       createLabel,
       onCreate,
+      disableDropdown = false,
+      onQueryChange,
     },
     ref
   ) => {
@@ -266,6 +270,13 @@ export const SearchableMasterSelect = forwardRef<SearchableMasterSelectRef, Sear
     const handleKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
       if (disabled) return;
 
+      if (disableDropdown) {
+        if (e.key === 'Tab') {
+          return;
+        }
+        return;
+      }
+
       if (e.key === 'ArrowDown') {
         e.preventDefault();
         if (!isOpen) {
@@ -381,16 +392,19 @@ export const SearchableMasterSelect = forwardRef<SearchableMasterSelectRef, Sear
             autoComplete="off"
             spellCheck="false"
             onFocus={() => {
-              setIsOpen(true);
+              if (!disableDropdown) {
+                setIsOpen(true);
+              }
               inputRef.current?.select();
             }}
             onChange={e => {
               setSearchQuery(e.target.value);
-              if (!isOpen) setIsOpen(true);
+              onQueryChange?.(e.target.value);
+              if (!disableDropdown && !isOpen) setIsOpen(true);
             }}
             onKeyDown={handleKeyDown}
             className={`w-full pl-8 pr-14 py-1.5 text-xs font-medium rounded-lg border transition-all ${
-              isOpen
+              isOpen && !disableDropdown
                 ? 'border-blue-500 ring-2 ring-blue-500/20 bg-white'
                 : 'border-slate-300 bg-white hover:border-slate-400'
             } text-slate-900 placeholder:text-slate-400 focus:outline-none disabled:bg-slate-100 disabled:text-slate-400 disabled:cursor-not-allowed ${inputClassName}`}
@@ -418,29 +432,31 @@ export const SearchableMasterSelect = forwardRef<SearchableMasterSelectRef, Sear
                 <X className="w-3 h-3" />
               </button>
             )}
-            <button
-              type="button"
-              tabIndex={-1}
-              disabled={disabled}
-              onClick={() => {
-                if (!disabled) {
-                  setIsOpen(!isOpen);
-                  inputRef.current?.focus();
-                }
-              }}
-              className="p-1 rounded-md text-slate-400 hover:text-slate-600 transition-colors"
-            >
-              <ChevronDown
-                className={`w-3.5 h-3.5 transition-transform duration-150 ${
-                  isOpen ? 'rotate-180 text-blue-600' : ''
-                }`}
-              />
-            </button>
+            {!disableDropdown && (
+              <button
+                type="button"
+                tabIndex={-1}
+                disabled={disabled}
+                onClick={() => {
+                  if (!disabled) {
+                    setIsOpen(!isOpen);
+                    inputRef.current?.focus();
+                  }
+                }}
+                className="p-1 rounded-md text-slate-400 hover:text-slate-600 transition-colors"
+              >
+                <ChevronDown
+                  className={`w-3.5 h-3.5 transition-transform duration-150 ${
+                    isOpen ? 'rotate-180 text-blue-600' : ''
+                  }`}
+                />
+              </button>
+            )}
           </div>
         </div>
 
         {/* Dropdown Menu */}
-        {isOpen && !disabled && (
+        {!disableDropdown && isOpen && !disabled && (
           <div
             className={`absolute left-0 right-0 top-full mt-1 bg-white border border-slate-200 rounded-xl shadow-xl z-50 overflow-hidden text-xs max-h-64 flex flex-col animate-in fade-in-50 zoom-in-95 duration-100 ${dropdownClassName}`}
           >

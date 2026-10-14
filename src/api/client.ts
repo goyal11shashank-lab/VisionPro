@@ -121,7 +121,7 @@ export async function apiRequest<T = any>(
           data = text ? JSON.parse(text) : {};
         } catch (jsonErr) {
           // In case header was JSON but body was malformed or HTML
-          console.error(`[API Client JSON Parse Error] ${endpoint}:`, text.slice(0, 300));
+          console.warn(`[API Client JSON Parse Notice] ${endpoint}:`, text.slice(0, 150));
           if (text.startsWith('<') || text.includes('<html') || text.includes('Cookie check')) {
             if (typeof document !== 'undefined') {
               try {
@@ -136,6 +136,8 @@ export async function apiRequest<T = any>(
             }
             const msg = endpoint.includes('/imports')
               ? 'The import service returned an unexpected HTML response. Please check the API endpoint or server logs.'
+              : response.status === 403
+              ? 'Access forbidden (HTTP 403). Your session or permission may need to be refreshed.'
               : `HTTP ${response.status}: The server returned an unexpected HTML response instead of JSON.`;
             const err: any = new Error(msg);
             err.status = response.status;
@@ -146,9 +148,9 @@ export async function apiRequest<T = any>(
         }
       } else {
         const text = await response.text().catch(() => '');
-        const isHtml = text.startsWith('<!doctype') || text.startsWith('<html') || text.trim().startsWith('<') || text.includes('Starting Server...') || text.includes('Cookie check');
+        const isHtml = text.startsWith('<!doctype') || text.startsWith('<html') || text.trim().startsWith('<') || text.includes('Starting Server...') || text.includes('Cookie check') || text.includes('403 Forbidden');
         
-        if (isHtml && (text.includes('Cookie check') || text.includes('aistudio_auth'))) {
+        if (isHtml) {
           if (typeof document !== 'undefined') {
             try {
               document.cookie = '__SECURE-aistudio_auth_flow_may_set_cookies=true; Path=/; Secure; SameSite=None; Partitioned; Max-Age=86400;';
@@ -160,7 +162,7 @@ export async function apiRequest<T = any>(
 
         // If the server is warming up or cookie check is needed, retry up to `retries` times
         if (isHtml && attempt <= retries) {
-          console.warn(`[API Client] Endpoint ${endpoint} returned HTML (warming up or cookie check). Retrying attempt ${attempt}/${retries}...`);
+          console.warn(`[API Client] Endpoint ${endpoint} returned HTML (status: ${response.status || 'unknown'}). Retrying attempt ${attempt}/${retries}...`);
           await new Promise((resolve) => setTimeout(resolve, Math.min(attempt * 600, 2500)));
           continue;
         }
@@ -172,9 +174,11 @@ export async function apiRequest<T = any>(
             continue;
           }
           if (isHtml) {
-            console.error(`[API Client Non-JSON Error] ${endpoint} returned HTML:`, text.slice(0, 500));
+            console.warn(`[API Client Non-JSON Notice] ${endpoint} returned HTML with HTTP ${response.status}`);
             const msg = endpoint.includes('/imports')
               ? 'The import service returned an unexpected HTML response. Please check the API endpoint or server logs.'
+              : response.status === 403
+              ? 'Access forbidden (HTTP 403). Your session or permission may need to be refreshed.'
               : `HTTP ${response.status}: The server returned an unexpected HTML response instead of JSON.`;
             const err: any = new Error(msg);
             err.status = response.status;
@@ -193,7 +197,7 @@ export async function apiRequest<T = any>(
             await new Promise((resolve) => setTimeout(resolve, Math.min(attempt * 600, 2500)));
             continue;
           }
-          console.error(`[API Client Unexpected HTML] ${endpoint}:`, text.slice(0, 500));
+          console.warn(`[API Client HTML Notice] ${endpoint} returned HTML instead of JSON.`);
           const msg = endpoint.includes('/imports')
             ? 'The import service returned an unexpected HTML response. Please check the API endpoint or server logs.'
             : `API endpoint ${endpoint} returned HTML instead of JSON. The server may still be initializing.`;

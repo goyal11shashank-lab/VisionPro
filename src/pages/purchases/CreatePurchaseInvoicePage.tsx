@@ -1338,6 +1338,7 @@ export const CreatePurchaseInvoicePage: React.FC<Props> = ({
             selectedPartyId={supplierPartyId}
             onPartyChange={handlePartyChange}
             onPartyFocus={openContextualParty}
+            onPartyQueryChange={setContextualSearch}
             partyBalance={partyBalance || undefined}
             gstMode={gstMode}
             onGstModeChange={setGstMode}
@@ -1365,6 +1366,7 @@ export const CreatePurchaseInvoicePage: React.FC<Props> = ({
               activeRowIndex={activeGridRow}
               onActiveRowChange={setActiveGridRow}
               onItemFocus={openContextualItem}
+              onItemQueryChange={setContextualSearch}
               onItemSelect={handleLineItemChange}
               onBatchClick={idx => {
                 setActiveBatchModalIndex(idx);

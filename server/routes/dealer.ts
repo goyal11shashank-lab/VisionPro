@@ -1484,7 +1484,7 @@ router.get(
       });
     } catch (error: any) {
       console.error('[GET /api/dealer/dashboard/summary Error]', error);
-      res.status(error.message?.includes('not a DEALER') ? 403 : 500).json({
+      res.status(500).json({
         error: error.message || 'Failed to fetch dealer dashboard summary',
       });
     }

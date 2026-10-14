@@ -22,6 +22,7 @@ interface VoucherItemGridProps {
   onItemSelect: (rowIndex: number, uniqueItemId: string) => void;
   onItemCreated?: (newItem: any) => void;
   onItemFocus?: (rowIndex: number) => void;
+  onItemQueryChange?: (query: string) => void;
   allowStockItemCreate?: boolean;
   onBatchClick: (rowIndex: number) => void;
   onQuantityChange: (rowIndex: number, quantity: number) => void;
@@ -43,6 +44,7 @@ export const VoucherItemGrid: React.FC<VoucherItemGridProps> = ({
   onItemSelect,
   onItemCreated,
   onItemFocus,
+  onItemQueryChange,
   allowStockItemCreate = true,
   onBatchClick,
   onQuantityChange,
@@ -270,6 +272,8 @@ export const VoucherItemGrid: React.FC<VoucherItemGridProps> = ({
                           displayValue={line.uniqueItemName || ''}
                           options={itemOptions}
                           placeholder="Type stock item name..."
+                          disableDropdown={true}
+                          onQueryChange={onItemQueryChange}
                           allowCreate={allowStockItemCreate}
                           createLabel={q => (q ? `+ Create Stock Item "${q}"` : '+ Create Stock Item')}
                           onCreate={query => {
