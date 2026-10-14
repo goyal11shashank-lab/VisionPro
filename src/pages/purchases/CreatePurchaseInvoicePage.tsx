@@ -160,10 +160,14 @@ export const CreatePurchaseInvoicePage: React.FC<Props> = ({
   const [actionLoading, setActionLoading] = useState<boolean>(false);
 
   const openContextualParty = useCallback(() => {
-    setContextualType('PARTY');
+    setContextualType(prev => {
+      if (prev !== 'PARTY') {
+        setContextualSearch('');
+        setContextualSelectedIdx(0);
+      }
+      return 'PARTY';
+    });
     setContextualRowIndex(null);
-    setContextualSearch('');
-    setContextualSelectedIdx(0);
   }, []);
 
   const openContextualItem = useCallback((rowIdx: number) => {
@@ -1057,17 +1061,6 @@ export const CreatePurchaseInvoicePage: React.FC<Props> = ({
     }
   };
 
-  if (loadingInitial) {
-    return (
-      <div className="h-96 flex flex-col items-center justify-center gap-3 text-slate-500">
-        <RefreshCw className="w-8 h-8 animate-spin text-indigo-600" />
-        <span className="text-sm font-medium">
-          Loading procurement items and supplier directory...
-        </span>
-      </div>
-    );
-  }
-
   const getPrintableVoucher = () => {
     if (createdInvoice) return createdInvoice;
     return {
@@ -1291,6 +1284,17 @@ export const CreatePurchaseInvoicePage: React.FC<Props> = ({
     closeContextualPanel,
   ]);
 
+  if (loadingInitial) {
+    return (
+      <div className="h-96 flex flex-col items-center justify-center gap-3 text-slate-500">
+        <RefreshCw className="w-8 h-8 animate-spin text-indigo-600" />
+        <span className="text-sm font-medium">
+          Loading procurement items and supplier directory...
+        </span>
+      </div>
+    );
+  }
+
   return (
     <div
       id="normal-purchase-voucher-page"
@@ -1452,11 +1456,13 @@ export const CreatePurchaseInvoicePage: React.FC<Props> = ({
           onConfirmSelect={handleConfirmContextualSelect}
           onCreateNew={() => {
             if (contextualType === 'PARTY') {
-              const btn = document.getElementById('voucher-header-party-select');
-              btn?.click();
+              const partyInput = document.getElementById('voucher-header-party-input');
+              partyInput?.focus();
+              const evt = new KeyboardEvent('keydown', { key: 'c', altKey: true, bubbles: true });
+              window.dispatchEvent(evt);
             } else if (contextualType === 'STOCK_ITEM' && contextualRowIndex !== null) {
               const sel = document.getElementById(`voucher-item-grid-select-${contextualRowIndex}`);
-              sel?.click();
+              sel?.focus();
             }
           }}
           onClose={closeContextualPanel}

@@ -1,4 +1,4 @@
-import React, { useState, useRef, useEffect } from 'react';
+import React, { useState, useRef, useEffect, useMemo } from 'react';
 import {
   Trash2,
   Layers,
@@ -152,32 +152,34 @@ export const VoucherItemGrid: React.FC<VoucherItemGridProps> = ({
   }, [focusRequest]);
 
   // Convert Master items to Searchable options
-  const itemOptions: SearchableOption[] = allItems.map(item => {
-    const catCode = item.categoryCode || item.category?.code || 'SV';
-    const rateText = isSales
-      ? `MRP: ₹${item.mrp || item.standardSellingPrice || '0.00'}`
-      : `Cost: ₹${item.lastPurchasePrice || item.purchaseRate || '0.00'}`;
-    const itemGst = item.gstRate !== undefined ? item.gstRate : (item.taxRate !== undefined ? item.taxRate : 5);
+  const itemOptions: SearchableOption[] = useMemo(() => {
+    return allItems.map(item => {
+      const catCode = item.categoryCode || item.category?.code || 'SV';
+      const rateText = isSales
+        ? `MRP: ₹${item.mrp || item.standardSellingPrice || '0.00'}`
+        : `Cost: ₹${item.lastPurchasePrice || item.purchaseRate || '0.00'}`;
+      const itemGst = item.gstRate !== undefined ? item.gstRate : (item.taxRate !== undefined ? item.taxRate : 5);
 
-    return {
-      id: item.id,
-      label: item.name,
-      subLabel: `${item.code || ''} • ${rateText} • GST: ${itemGst}%`.trim(),
-      tag: catCode,
-      badgeColor:
-        catCode === 'SV'
-          ? 'blue'
-          : catCode === 'KT'
-          ? 'amber'
-          : catCode === 'PROG'
-          ? 'purple'
-          : 'slate',
-      meta: {
-        ...item,
-        categoryCode: catCode,
-      },
-    };
-  });
+      return {
+        id: item.id,
+        label: item.name,
+        subLabel: `${item.code || ''} • ${rateText} • GST: ${itemGst}%`.trim(),
+        tag: catCode,
+        badgeColor:
+          catCode === 'SV'
+            ? 'blue'
+            : catCode === 'KT'
+            ? 'amber'
+            : catCode === 'PROG'
+            ? 'purple'
+            : 'slate',
+        meta: {
+          ...item,
+          categoryCode: catCode,
+        },
+      };
+    });
+  }, [allItems, isSales]);
 
   return (
     <div

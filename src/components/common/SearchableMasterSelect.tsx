@@ -124,11 +124,17 @@ export const SearchableMasterSelect = forwardRef<SearchableMasterSelectRef, Sear
       },
     }));
 
+    const isFocusedRef = useRef(false);
+    const prevValueRef = useRef(value);
+
     // Find currently selected option from value and options list
     useEffect(() => {
+      const valueChanged = value !== prevValueRef.current;
+      prevValueRef.current = value;
+
       if (!value) {
         setSelectedOption(null);
-        if (!isOpen) {
+        if (valueChanged || (!disableDropdown && !isFocusedRef.current && !isOpen)) {
           setSearchQuery('');
         }
         return;
@@ -137,16 +143,16 @@ export const SearchableMasterSelect = forwardRef<SearchableMasterSelectRef, Sear
       const match = options.find(o => o.id === value);
       if (match) {
         setSelectedOption(match);
-        if (!isOpen) {
+        if (valueChanged || (!disableDropdown && !isFocusedRef.current && !isOpen)) {
           setSearchQuery(match.label);
         }
       } else if (displayValue) {
         setSelectedOption({ id: value, label: displayValue });
-        if (!isOpen) {
+        if (valueChanged || (!disableDropdown && !isFocusedRef.current && !isOpen)) {
           setSearchQuery(displayValue);
         }
       }
-    }, [value, options, displayValue, isOpen]);
+    }, [value, options, displayValue, isOpen, disableDropdown]);
 
     // Perform filtering or search query
     useEffect(() => {
@@ -352,6 +358,8 @@ export const SearchableMasterSelect = forwardRef<SearchableMasterSelectRef, Sear
     const handleClear = (e: React.MouseEvent) => {
       e.stopPropagation();
       handleSelect(null, false);
+      setSearchQuery('');
+      onQueryChange?.('');
       inputRef.current?.focus();
     };
 
@@ -392,14 +400,27 @@ export const SearchableMasterSelect = forwardRef<SearchableMasterSelectRef, Sear
             autoComplete="off"
             spellCheck="false"
             onFocus={() => {
+              isFocusedRef.current = true;
               if (!disableDropdown) {
                 setIsOpen(true);
+                inputRef.current?.select();
               }
-              inputRef.current?.select();
+            }}
+            onBlur={() => {
+              isFocusedRef.current = false;
+              if (!disableDropdown) {
+                if (selectedOption) {
+                  setSearchQuery(selectedOption.label);
+                } else if (!value && !searchQuery.trim()) {
+                  setSearchQuery('');
+                  onQueryChange?.('');
+                }
+              }
             }}
             onChange={e => {
-              setSearchQuery(e.target.value);
-              onQueryChange?.(e.target.value);
+              const val = e.target.value;
+              setSearchQuery(val);
+              onQueryChange?.(val);
               if (!disableDropdown && !isOpen) setIsOpen(true);
             }}
             onKeyDown={handleKeyDown}

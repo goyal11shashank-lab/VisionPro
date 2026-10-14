@@ -1,4 +1,4 @@
-import React, { useRef, useEffect, useState } from 'react';
+import React, { useRef, useEffect, useState, useMemo } from 'react';
 import {
   FileSpreadsheet,
   ArrowLeft,
@@ -13,6 +13,7 @@ import {
   Building2,
   Plus,
   BookOpen,
+  X,
 } from 'lucide-react';
 import { SearchableMasterSelect, SearchableOption } from '../common/SearchableMasterSelect';
 import { InlinePartyModal } from '../common/InlinePartyModal';
@@ -86,19 +87,39 @@ export const VoucherHeader: React.FC<VoucherHeaderProps> = ({
   const isSales = voucherType === 'SALES' || voucherType === 'SALES_ORDER';
   const isOrder = voucherType === 'SALES_ORDER' || voucherType === 'PURCHASE_ORDER';
   const partySelectRef = useRef<any>(null);
+  const partyInputRef = useRef<HTMLInputElement>(null);
   const dateInputRef = useRef<HTMLInputElement>(null);
 
   // Inline Party creation state
   const [isInlinePartyOpen, setIsInlinePartyOpen] = useState(false);
   const [typedPartyName, setTypedPartyName] = useState('');
 
-  const partyOptions: SearchableOption[] = parties.map(p => ({
-    id: p.id,
-    label: p.name,
-    subLabel: `${p.phone || p.mobile || ''} ${p.city ? `• ${p.city}` : ''} ${p.gstin ? `• GST: ${p.gstin}` : ''}`.trim(),
-    tag: p.partyType === 'CUSTOMER' ? 'Sundry Debtors' : 'Sundry Creditors',
-    meta: p,
-  }));
+  const selectedParty = useMemo(() => {
+    return parties.find(p => p.id === selectedPartyId) || null;
+  }, [parties, selectedPartyId]);
+
+  const [partyInputText, setPartyInputText] = useState(selectedParty?.name || '');
+
+  // Keep input text synced with selected party
+  useEffect(() => {
+    if (selectedParty) {
+      setPartyInputText(selectedParty.name);
+    } else if (!selectedPartyId) {
+      if (document.activeElement !== partyInputRef.current) {
+        setPartyInputText('');
+      }
+    }
+  }, [selectedParty, selectedPartyId]);
+
+  const partyOptions: SearchableOption[] = useMemo(() => {
+    return parties.map(p => ({
+      id: p.id,
+      label: p.name,
+      subLabel: `${p.phone || p.mobile || ''} ${p.city ? `• ${p.city}` : ''} ${p.gstin ? `• GST: ${p.gstin}` : ''}`.trim(),
+      tag: p.partyType === 'CUSTOMER' ? 'Sundry Debtors' : 'Sundry Creditors',
+      meta: p,
+    }));
+  }, [parties]);
 
   const handleInlinePartySuccess = (newParty: any) => {
     if (onPartyCreated) {
@@ -288,44 +309,95 @@ export const VoucherHeader: React.FC<VoucherHeaderProps> = ({
 
       {/* Second Strip: Party Selection, Ledger Account & Ref Details */}
       <div className="grid grid-cols-1 md:grid-cols-12 gap-2 pt-1.5 items-center text-xs">
-        {/* Party A/c Name */}
+        {/* Party A/c Name (Side Panel Selection Only - No Dropdown) */}
         <div className="md:col-span-6 flex items-center gap-2">
           <label
-            htmlFor="voucher-header-party-select-input"
+            htmlFor="voucher-header-party-input"
             className="w-28 text-slate-900 font-extrabold shrink-0 text-right text-[11px] uppercase tracking-tight"
           >
             Party A/c name:
           </label>
-          <div
-            className="flex-1 min-w-0"
-            onClick={onPartyFocus}
-            onFocusCapture={onPartyFocus}
-          >
-            <SearchableMasterSelect
-              id="voucher-header-party-select"
-              ref={partySelectRef}
-              placeholder={isSales ? 'Search customer name/phone (or click for List of Ledgers)...' : 'Search supplier name (or click for List of Ledgers)...'}
-              options={partyOptions}
-              value={selectedPartyId}
-              onSelect={opt => onPartyChange(opt ? opt.id : '')}
-              disableDropdown={true}
-              onQueryChange={onPartyQueryChange}
-              allowCreate={allowPartyCreate}
-              createLabel={q => isSales ? `+ Create Customer ${q ? `"${q}"` : 'New'} (Alt+C)` : `+ Create Supplier ${q ? `"${q}"` : 'New'} (Alt+C)`}
-              onCreate={query => {
-                setTypedPartyName(query);
-                setIsInlinePartyOpen(true);
+          <div className="flex-1 min-w-0 relative flex items-center">
+            {/* Search Icon */}
+            <div className="absolute left-2.5 pointer-events-none text-slate-400">
+              <Search className="w-3.5 h-3.5" />
+            </div>
+
+            <input
+              ref={partyInputRef}
+              id="voucher-header-party-input"
+              type="text"
+              autoComplete="off"
+              spellCheck="false"
+              value={partyInputText}
+              placeholder={
+                isSales
+                  ? 'Type customer name (select from right panel)...'
+                  : 'Type supplier name (select from right panel)...'
+              }
+              onFocus={() => {
+                onPartyFocus?.();
               }}
-              onNextFocus={() => {
-                const refInput = document.getElementById('voucher-header-ref-no') as HTMLInputElement;
-                if (refInput) {
-                  refInput.focus();
-                  refInput.select();
+              onClick={() => {
+                onPartyFocus?.();
+              }}
+              onChange={e => {
+                const val = e.target.value;
+                setPartyInputText(val);
+                setTypedPartyName(val);
+                if (selectedPartyId && val !== selectedParty?.name) {
+                  onPartyChange('');
+                }
+                onPartyQueryChange?.(val);
+              }}
+              onKeyDown={e => {
+                if (e.key === 'Tab') {
+                  const refInput = document.getElementById('voucher-header-ref-no') as HTMLInputElement;
+                  if (refInput) {
+                    refInput.focus();
+                    refInput.select();
+                  }
                 }
               }}
-              className="w-full"
-              inputClassName="py-0.5 px-2 text-xs font-black text-slate-950 bg-white border-slate-400 rounded focus:ring-1 focus:ring-blue-600 shadow-2xs"
+              className="w-full pl-8 pr-16 py-0.5 text-xs font-black text-slate-950 bg-white border border-slate-400 rounded focus:border-blue-600 focus:ring-1 focus:ring-blue-600 shadow-2xs placeholder:text-slate-400 placeholder:font-normal"
             />
+
+            {/* Clear and Create New Actions */}
+            <div className="absolute right-1.5 flex items-center gap-1">
+              {(partyInputText || selectedPartyId) && (
+                <button
+                  type="button"
+                  tabIndex={-1}
+                  onClick={e => {
+                    e.stopPropagation();
+                    setPartyInputText('');
+                    setTypedPartyName('');
+                    onPartyChange('');
+                    onPartyQueryChange?.('');
+                    partyInputRef.current?.focus();
+                  }}
+                  className="p-0.5 text-slate-400 hover:text-slate-600 rounded transition-colors"
+                  title="Clear Party"
+                >
+                  <X className="w-3.5 h-3.5" />
+                </button>
+              )}
+              {allowPartyCreate && (
+                <button
+                  type="button"
+                  tabIndex={-1}
+                  onClick={e => {
+                    e.stopPropagation();
+                    setTypedPartyName(partyInputText);
+                    setIsInlinePartyOpen(true);
+                  }}
+                  className="px-1.5 py-0.5 text-[10px] font-bold text-blue-700 hover:text-blue-900 bg-blue-50 hover:bg-blue-100 border border-blue-200 rounded transition-colors"
+                  title="Create New Party (Alt+C)"
+                >
+                  + New
+                </button>
+              )}
+            </div>
           </div>
           {partyBalance && (
             <span
@@ -397,7 +469,7 @@ export const VoucherHeader: React.FC<VoucherHeaderProps> = ({
           onClose={() => {
             setIsInlinePartyOpen(false);
             setTimeout(() => {
-              partySelectRef.current?.focus();
+              partyInputRef.current?.focus();
             }, 50);
           }}
           defaultPartyType={isSales ? 'CUSTOMER' : 'SUPPLIER'}
