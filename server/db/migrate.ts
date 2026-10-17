@@ -255,7 +255,7 @@ CREATE TABLE IF NOT EXISTS "unique_items" (
   "purchase_rate" NUMERIC(12, 2) DEFAULT 0.00,
   "last_purchase_price" NUMERIC(12, 2) DEFAULT 0.00,
   "mrp" NUMERIC(12, 2) DEFAULT 0.00,
-  "gst_rate" NUMERIC(5, 2) NOT NULL DEFAULT 5.00,
+  "gst_rate" NUMERIC(5, 2) NOT NULL DEFAULT 0.00,
   "status" VARCHAR(20) NOT NULL DEFAULT 'ACTIVE',
   "created_at" TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW(),
   "updated_at" TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW(),
@@ -1200,16 +1200,18 @@ export async function runMigrations(): Promise<{ success: boolean; message: stri
               WHERE "unique_item_id" IS NOT NULL
             );
           END IF;
-          -- Stock Item GST Rate Migration: Ensure unique_items.gst_rate exists and defaults to 5.00
+          -- Stock Item GST Rate Migration: Ensure unique_items.gst_rate exists and defaults to 0.00
           IF NOT EXISTS (
             SELECT 1 FROM information_schema.columns 
             WHERE table_name='unique_items' AND column_name='gst_rate'
           ) THEN
-            ALTER TABLE "unique_items" ADD COLUMN "gst_rate" NUMERIC(5, 2) NOT NULL DEFAULT 5.00;
-            UPDATE "unique_items"
-            SET "gst_rate" = 5.00
-            WHERE "gst_rate" IS NULL;
+            ALTER TABLE "unique_items" ADD COLUMN "gst_rate" NUMERIC(5, 2) NOT NULL DEFAULT 0.00;
+          ELSE
+            ALTER TABLE "unique_items" ALTER COLUMN "gst_rate" SET DEFAULT 0.00;
           END IF;
+          UPDATE "unique_items"
+          SET "gst_rate" = 0.00
+          WHERE "gst_rate" IS NULL OR "gst_rate" != 0;
           -- Stock Item Unit Migration: Ensure unique_items.unit exists and defaults to 'PRS'
           IF NOT EXISTS (
             SELECT 1 FROM information_schema.columns 
@@ -1802,6 +1804,7 @@ export async function runMigrations(): Promise<{ success: boolean; message: stri
       ALTER TABLE "sales_returns" ADD COLUMN IF NOT EXISTS "cancellation_reason" TEXT;
       ALTER TABLE "purchase_returns" ADD COLUMN IF NOT EXISTS "cancellation_reason" TEXT;
       ALTER TABLE "payments" ADD COLUMN IF NOT EXISTS "cancellation_reason" TEXT;
+      ALTER TABLE "unique_items" ALTER COLUMN "gst_rate" SET DEFAULT 0.00;
     `);
 
     // Verify all created tables

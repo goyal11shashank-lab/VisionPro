@@ -63,7 +63,7 @@ export function calculateLineTax(input: LineTaxInput): LineTaxResult {
   const rate = round2(input.rate);
   const discountType = input.discountType || 'NONE';
   const discountValue = round2(input.discountValue || 0);
-  const gstRate = round2(input.gstRate ?? 5.00);
+  const gstRate = round2(input.gstRate ?? 0.00);
 
   // 1. Gross amount = quantity * rate
   const gross = round2(quantity * rate);
@@ -131,7 +131,7 @@ export function calculateInvoiceTotals(input: InvoiceTotalsInput): InvoiceTotals
     if (taxableAmount > 0) {
       igstRate = round2((igstAmount / taxableAmount) * 100);
     } else {
-      igstRate = lines[0]?.gstRate ?? 5.00;
+      igstRate = lines[0]?.gstRate ?? 0.00;
     }
     cgstRate = 0;
     cgstAmount = 0;
@@ -147,7 +147,7 @@ export function calculateInvoiceTotals(input: InvoiceTotalsInput): InvoiceTotals
       cgstRate = round2((cgstAmount / taxableAmount) * 100);
       sgstRate = round2((sgstAmount / taxableAmount) * 100);
     } else {
-      const dominantGst = lines[0]?.gstRate ?? 5.00;
+      const dominantGst = lines[0]?.gstRate ?? 0.00;
       cgstRate = round2(dominantGst / 2);
       sgstRate = round2(dominantGst / 2);
     }

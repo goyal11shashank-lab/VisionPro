@@ -75,7 +75,7 @@ export function createEmptyVoucherLine(idPrefix: string = 'row'): VoucherLineIte
     rate: 0,
     discountType: 'NONE',
     discountValue: 0,
-    gstRate: 5,
+    gstRate: 0,
     batches: [],
     availableBatches: [],
   };

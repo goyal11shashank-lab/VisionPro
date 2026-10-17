@@ -236,7 +236,7 @@ export const NormalSalesVoucherPage: React.FC<Props> = ({ onNavigate, onSuccess,
               rate: parseFloat(l.rate) || 0,
               discountType: l.discountType || 'NONE',
               discountValue: parseFloat(l.discountValue) || 0,
-              gstRate: parseFloat(l.gstRate) || 12,
+              gstRate: l.gstRate !== undefined ? parseFloat(l.gstRate) : 0,
               batches: (l.batches || []).map((b: any) => ({
                 batchId: b.batchId || b.batch?.id,
                 sph: b.batch?.sph ?? b.sph ?? '0.00',
@@ -321,7 +321,7 @@ export const NormalSalesVoucherPage: React.FC<Props> = ({ onNavigate, onSuccess,
                   rate: parseFloat(l.rate || '0'),
                   discountType: l.discountType || 'NONE',
                   discountValue: parseFloat(l.discountValue || '0'),
-                  gstRate: parseFloat(l.gstRate || '5'),
+                  gstRate: l.gstRate !== undefined ? parseFloat(l.gstRate) : 0,
                   batches,
                 };
               });
@@ -468,7 +468,7 @@ export const NormalSalesVoucherPage: React.FC<Props> = ({ onNavigate, onSuccess,
                   ? parseFloat(String(item.gstRate))
                   : item.taxRate
                   ? parseFloat(item.taxRate)
-                  : 5,
+                  : 0,
               batches: existingBatches,
               quantity: existingQty,
             }
@@ -604,7 +604,7 @@ export const NormalSalesVoucherPage: React.FC<Props> = ({ onNavigate, onSuccess,
           rate: prefilledRate,
           discountType: 'NONE',
           discountValue: 0,
-          gstRate: uItem.gstRate !== undefined ? parseFloat(String(uItem.gstRate)) : (uItem.taxRate ? parseFloat(uItem.taxRate) : 5),
+          gstRate: uItem.gstRate !== undefined ? parseFloat(String(uItem.gstRate)) : (uItem.taxRate ? parseFloat(uItem.taxRate) : 0),
           batches: batch
             ? [
                 {

@@ -724,7 +724,7 @@ export class DealerLogisticsService {
           src.optical_category || 'SV',
           src.maintain_batches ?? true,
           src.unit || 'PRS',
-          src.gst_rate || 12.0,
+          (src.gst_rate !== undefined && src.gst_rate !== null) ? src.gst_rate : '0.00',
         ]
       );
       dealerUniqueItemId = newUiRes.rows[0].id;

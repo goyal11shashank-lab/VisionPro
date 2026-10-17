@@ -316,7 +316,19 @@ const AppContent: React.FC = () => {
       case '/unique-items':
         return <UniqueItemsPage />;
       case '/master/batches':
-        return <OpticalBatchesPage onNavigate={setCurrentPath} />;
+        return (
+          <OpticalBatchesPage
+            onNavigate={setCurrentPath}
+            initialStockFilter={
+              (searchParams.get('stockFilter') as any) ||
+              (searchParams.get('stockStatus') === 'NEGATIVE_STOCK'
+                ? 'NEGATIVE'
+                : searchParams.get('stockStatus') === 'LOW_STOCK'
+                ? 'LOW'
+                : undefined)
+            }
+          />
+        );
       case '/inventory/dealer-availability':
       case '/dealer/availability':
       case '/inventory/main-warehouse':
@@ -487,7 +499,12 @@ const AppContent: React.FC = () => {
       // Reports Center
       case '/reports':
       case '/reports/inventory':
-        return <ReportsCenterPage initialTab="inventory" />;
+        return (
+          <ReportsCenterPage
+            initialTab="inventory"
+            initialStockStatus={searchParams.get('stockStatus') || undefined}
+          />
+        );
       case '/reports/stock-ledger':
         return <ReportsCenterPage initialTab="stock-ledger" />;
       case '/reports/sales':

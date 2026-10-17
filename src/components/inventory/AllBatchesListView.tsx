@@ -13,6 +13,7 @@ interface AllBatchesListViewProps {
   onSelectBatch: (batch: any) => void;
   onEditBatch?: (batch: any) => void;
   onRefreshParent?: () => void;
+  initialStockFilter?: 'ALL' | 'POSITIVE' | 'ZERO' | 'NEGATIVE' | 'LOW';
 }
 
 export const AllBatchesListView: React.FC<AllBatchesListViewProps> = ({
@@ -20,6 +21,7 @@ export const AllBatchesListView: React.FC<AllBatchesListViewProps> = ({
   onSelectBatch,
   onEditBatch,
   onRefreshParent,
+  initialStockFilter,
 }) => {
   const { hasPermission } = useAuth();
   const canDelete = hasPermission('master:delete') || hasPermission('master.delete') || hasPermission('inventory:delete') || hasPermission('master:manage');
@@ -32,7 +34,26 @@ export const AllBatchesListView: React.FC<AllBatchesListViewProps> = ({
   // Filters
   const [search, setSearch] = useState<string>('');
   const [selectedCategory, setSelectedCategory] = useState<string>('');
-  const [stockFilter, setStockFilter] = useState<'ALL' | 'POSITIVE' | 'ZERO' | 'NEGATIVE'>('ALL');
+  const [stockFilter, setStockFilter] = useState<'ALL' | 'POSITIVE' | 'ZERO' | 'NEGATIVE' | 'LOW'>(() => {
+    if (initialStockFilter) return initialStockFilter;
+    if (typeof window !== 'undefined') {
+      const sp = new URLSearchParams(window.location.search);
+      const sf = sp.get('stockFilter');
+      if (sf === 'NEGATIVE' || sf === 'LOW' || sf === 'POSITIVE' || sf === 'ZERO') return sf;
+      const ss = sp.get('stockStatus');
+      if (ss === 'NEGATIVE_STOCK') return 'NEGATIVE';
+      if (ss === 'LOW_STOCK') return 'LOW';
+    }
+    return 'ALL';
+  });
+
+  useEffect(() => {
+    if (initialStockFilter) {
+      setStockFilter(initialStockFilter);
+      setPage(1);
+    }
+  }, [initialStockFilter]);
+
   const [statusFilter, setStatusFilter] = useState<'ALL' | 'ACTIVE' | 'INACTIVE'>('ALL');
 
   // Pagination
@@ -96,6 +117,7 @@ export const AllBatchesListView: React.FC<AllBatchesListViewProps> = ({
       if (stockFilter === 'POSITIVE' && stock <= 0) return false;
       if (stockFilter === 'ZERO' && stock !== 0) return false;
       if (stockFilter === 'NEGATIVE' && stock >= 0) return false;
+      if (stockFilter === 'LOW' && (stock <= 0 || stock > (Number(batch.lowStockThreshold) || 5))) return false;
 
       if (statusFilter !== 'ALL' && batch.status !== statusFilter) return false;
 
@@ -405,6 +427,7 @@ export const AllBatchesListView: React.FC<AllBatchesListViewProps> = ({
           >
             <option value="ALL">All Stock Levels</option>
             <option value="POSITIVE">In Stock (&gt; 0)</option>
+            <option value="LOW">Low Stock (≤ 5)</option>
             <option value="ZERO">Zero Stock (= 0)</option>
             <option value="NEGATIVE">Negative Stock (&lt; 0)</option>
           </select>

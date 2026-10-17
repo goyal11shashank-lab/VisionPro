@@ -269,7 +269,7 @@ export const SAMPLE_STOCK_ITEM_ROWS = [
     status: 'ACTIVE',
     purchase_rate: 450.0,
     mrp: 950.0,
-    gst_rate: 5.0,
+    gst_rate: 0.0,
     description: 'Finished anti-reflective coated stock lens with hydrophobic topcoat',
     parent_primary_item: 'Crizal Alize 1.56 SV HMC',
   },
@@ -353,8 +353,8 @@ export const STOCK_ITEM_INSTRUCTIONS = [
   {
     column: 'gst_rate',
     requirement: 'Optional',
-    format: '5, 12, 18, 28, or 0',
-    description: 'Applicable GST percentage. Standard default is 5.00%.',
+    format: '0, 5, 12, 18, 28',
+    description: 'Applicable GST percentage. Standard default is 0.00%.',
   },
   {
     column: 'description',

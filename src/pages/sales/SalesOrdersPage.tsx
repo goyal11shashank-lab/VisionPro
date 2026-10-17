@@ -375,7 +375,7 @@ export const SalesOrdersPage: React.FC<{ onNavigateToInvoice?: (orderId: string)
       rate: prefilledRate,
       discountType: 'NONE',
       discountValue: 0,
-      gstRate: (item as any).gstRate !== undefined ? parseFloat(String((item as any).gstRate)) : ((item as any).taxRate ? parseFloat((item as any).taxRate) : 5),
+      gstRate: (item as any).gstRate !== undefined ? parseFloat(String((item as any).gstRate)) : ((item as any).taxRate ? parseFloat((item as any).taxRate) : 0),
       batches: batches,
     };
 
@@ -432,7 +432,7 @@ export const SalesOrdersPage: React.FC<{ onNavigateToInvoice?: (orderId: string)
         rate: defaultRate,
         discountType: 'NONE',
         discountValue: 0,
-        gstRate: uItem.gstRate !== undefined ? parseFloat(String(uItem.gstRate)) : ((uItem as any).taxRate ? parseFloat((uItem as any).taxRate) : 5),
+        gstRate: uItem.gstRate !== undefined ? parseFloat(String(uItem.gstRate)) : ((uItem as any).taxRate ? parseFloat((uItem as any).taxRate) : 0),
         batches: [
           {
             batchId: batch.id,
@@ -1317,7 +1317,7 @@ export const SalesOrdersPage: React.FC<{ onNavigateToInvoice?: (orderId: string)
 
                               <td className="py-3 px-3">
                                 <select
-                                  value={line.gstRate !== undefined && line.gstRate !== null ? line.gstRate : 5}
+                                  value={line.gstRate !== undefined && line.gstRate !== null ? line.gstRate : 0}
                                   onChange={e => {
                                     const val = parseFloat(e.target.value);
                                     setFormLines(prev =>

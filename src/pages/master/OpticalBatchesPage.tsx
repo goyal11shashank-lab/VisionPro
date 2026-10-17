@@ -25,13 +25,14 @@ const formatPowerVal = (val: number | null | undefined) => {
 
 interface OpticalBatchesPageProps {
   onNavigate?: (path: string) => void;
+  initialStockFilter?: 'ALL' | 'POSITIVE' | 'ZERO' | 'NEGATIVE' | 'LOW';
 }
 
-export const OpticalBatchesPage: React.FC<OpticalBatchesPageProps> = ({ onNavigate }) => {
+export const OpticalBatchesPage: React.FC<OpticalBatchesPageProps> = ({ onNavigate, initialStockFilter }) => {
   const { hasPermission } = useAuth();
 
   // Navigation / Drill-down state
-  const [viewMode, setViewMode] = useState<ViewMode>('STOCK_ITEMS');
+  const [viewMode, setViewMode] = useState<ViewMode>(initialStockFilter ? 'ALL_BATCHES' : 'STOCK_ITEMS');
   const [selectedStockItem, setSelectedStockItem] = useState<UniqueItem | null>(null);
   const [selectedBatch, setSelectedBatch] = useState<any | null>(null);
 
@@ -578,6 +579,7 @@ export const OpticalBatchesPage: React.FC<OpticalBatchesPageProps> = ({ onNaviga
       {viewMode === 'ALL_BATCHES' && (
         <AllBatchesListView
           categories={categories}
+          initialStockFilter={initialStockFilter}
           onSelectBatch={handleSelectBatch}
           onEditBatch={handleOpenEdit}
           onRefreshParent={() => {

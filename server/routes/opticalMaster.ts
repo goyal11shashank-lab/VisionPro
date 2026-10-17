@@ -1691,7 +1691,7 @@ const uniqueItemSchema = z.object({
   purchaseRate: z.union([z.number(), z.string()]).default(0),
   lastPurchasePrice: z.union([z.number(), z.string()]).default(0),
   mrp: z.union([z.number(), z.string()]).default(0),
-  gstRate: z.union([z.number(), z.string()]).default(5),
+  gstRate: z.union([z.number(), z.string()]).default(0),
   status: z.enum(['ACTIVE', 'INACTIVE']).default('ACTIVE'),
 });
 
@@ -1832,7 +1832,7 @@ router.post(['/unique-items', '/stock-items'], requireAnyPermission(['master:cre
         purchaseRate: String(purchaseRate),
         lastPurchasePrice: String(lastPurchasePrice),
         mrp: String(mrp),
-        gstRate: String(gstRate !== undefined ? gstRate : '5.00'),
+        gstRate: String(gstRate !== undefined ? gstRate : '0.00'),
         status,
         createdBy: req.user!.id,
         updatedBy: req.user!.id,

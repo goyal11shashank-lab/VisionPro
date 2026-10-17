@@ -42,7 +42,10 @@ type ReportTab =
   | 'payments'
   | 'analytics';
 
-export const ReportsCenterPage: React.FC<{ initialTab?: ReportTab }> = ({ initialTab = 'inventory' }) => {
+export const ReportsCenterPage: React.FC<{ initialTab?: ReportTab; initialStockStatus?: string }> = ({
+  initialTab = 'inventory',
+  initialStockStatus,
+}) => {
   const { currentBusiness } = useAuth();
   const [activeTab, setActiveTab] = useState<ReportTab>(initialTab);
   const [loading, setLoading] = useState(false);
@@ -61,7 +64,24 @@ export const ReportsCenterPage: React.FC<{ initialTab?: ReportTab }> = ({ initia
   const [page, setPage] = useState(1);
 
   // Report Specific States
-  const [inventoryStatus, setInventoryStatus] = useState<string>('ALL');
+  const [inventoryStatus, setInventoryStatus] = useState<string>(() => {
+    if (initialStockStatus) return initialStockStatus;
+    if (typeof window !== 'undefined') {
+      const sp = new URLSearchParams(window.location.search);
+      const s = sp.get('stockStatus');
+      if (s) return s;
+    }
+    return 'ALL';
+  });
+
+  useEffect(() => {
+    if (initialStockStatus) {
+      setInventoryStatus(initialStockStatus);
+      setActiveTab('inventory');
+      setPage(1);
+    }
+  }, [initialStockStatus]);
+
   const [sphFilter, setSphFilter] = useState<string>('');
   const [cylFilter, setCylFilter] = useState<string>('');
   const [salesSubTab, setSalesSubTab] = useState<'SUMMARY' | 'DETAILS' | 'RETURNS'>('SUMMARY');
@@ -839,18 +859,18 @@ export const ReportsCenterPage: React.FC<{ initialTab?: ReportTab }> = ({ initia
                         <button
                           type="button"
                           onClick={() => {
-                            setLedgerItemId(row.unique_item_id || row.item_id);
-                            setLedgerItemName(row.unique_item_name);
+                            setLedgerItemId(row.unique_item_id || row.uniqueItemId || row.item_id);
+                            setLedgerItemName(row.unique_item_name || row.uniqueItemName || 'Item');
                           }}
                           className="font-semibold text-slate-800 hover:text-blue-600 hover:underline cursor-pointer text-left inline-block"
                           title="Click to view Tally-style Stock Item Ledger"
                         >
-                          {row.unique_item_name}
+                          {row.unique_item_name || row.uniqueItemName}
                         </button>
                         <div className="text-[10px] text-slate-400 font-mono">SKU: {row.sku}</div>
                       </td>
-                      <td className="py-2.5 px-4 text-slate-600">{row.category_name}</td>
-                      <td className="py-2.5 px-4 text-slate-600">{row.brand_name}</td>
+                      <td className="py-2.5 px-4 text-slate-600">{row.category_name || row.categoryName}</td>
+                      <td className="py-2.5 px-4 text-slate-600">{row.brand_name || row.brand || '-'}</td>
                       <td className="py-2.5 px-4 text-center font-mono">{row.sph ?? '-'}</td>
                       <td className="py-2.5 px-4 text-center font-mono">{row.cyl ?? '-'}</td>
                       <td className="py-2.5 px-4 text-center font-mono">{row.axis ?? '-'}</td>

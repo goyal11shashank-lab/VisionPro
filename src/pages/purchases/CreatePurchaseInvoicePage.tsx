@@ -287,7 +287,7 @@ export const CreatePurchaseInvoicePage: React.FC<Props> = ({
               rate: parseFloat(l.rate) || 0,
               discountType: l.discountType || 'NONE',
               discountValue: parseFloat(l.discountValue) || 0,
-              gstRate: parseFloat(l.gstRate) || 12,
+              gstRate: l.gstRate !== undefined ? parseFloat(l.gstRate) : 0,
               batches: (l.batches || []).map((b: any) => ({
                 batchId: b.batchId || b.batch?.id,
                 sph: b.batch?.sph !== undefined ? parseFloat(b.batch.sph) : parseFloat(b.sph || 0),
@@ -394,7 +394,7 @@ export const CreatePurchaseInvoicePage: React.FC<Props> = ({
                 rate: parseFloat(l.rate) || 0,
                 discountType: l.discountType || 'NONE',
                 discountValue: parseFloat(l.discountValue) || 0,
-                gstRate: parseFloat(l.gstRate) || 12,
+                gstRate: l.gstRate !== undefined ? parseFloat(l.gstRate) : 0,
                 batches: hydratedBatches,
               };
             });
@@ -458,7 +458,7 @@ export const CreatePurchaseInvoicePage: React.FC<Props> = ({
               rate: parseFloat(l.rate) || 0,
               discountType: l.discountType || 'NONE',
               discountValue: parseFloat(l.discountValue) || 0,
-              gstRate: parseFloat(l.gstRate) || 12,
+              gstRate: l.gstRate !== undefined ? parseFloat(l.gstRate) : 0,
               batches: (l.batches || []).map((b: any) => ({
                 batchId: b.batchId || b.batch?.id,
                 sph: b.batch?.sph !== undefined ? parseFloat(b.batch.sph) : parseFloat(b.sph || 0),
@@ -579,7 +579,7 @@ export const CreatePurchaseInvoicePage: React.FC<Props> = ({
                   ? parseFloat(String(item.gstRate))
                   : (item as any).taxRate
                   ? parseFloat((item as any).taxRate)
-                  : 5,
+                  : 0,
               batches: existingBatches,
               quantity: existingQty,
             }
@@ -715,7 +715,7 @@ export const CreatePurchaseInvoicePage: React.FC<Props> = ({
               ? parseFloat(String(uItem.gstRate))
               : (uItem as any).taxRate
               ? parseFloat((uItem as any).taxRate)
-              : 5,
+              : 0,
           batches: [
             {
               batchId: batch.id,
@@ -1161,7 +1161,7 @@ export const CreatePurchaseInvoicePage: React.FC<Props> = ({
           badge: cat,
           badgeColor: (cat === 'SV' ? 'blue' : cat === 'KT' ? 'amber' : cat === 'PROG' ? 'purple' : 'slate') as any,
           rightText: `₹${isNaN(price) ? '0.00' : price.toFixed(2)}`,
-          rightSubText: `GST: ${item.gstRate ?? (item as any).taxRate ?? 5}%`,
+          rightSubText: `GST: ${item.gstRate ?? (item as any).taxRate ?? 0}%`,
           meta: item,
         };
       });

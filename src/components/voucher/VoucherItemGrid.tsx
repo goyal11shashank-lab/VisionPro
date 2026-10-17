@@ -158,7 +158,7 @@ export const VoucherItemGrid: React.FC<VoucherItemGridProps> = ({
       const rateText = isSales
         ? `MRP: ₹${item.mrp || item.standardSellingPrice || '0.00'}`
         : `Cost: ₹${item.lastPurchasePrice || item.purchaseRate || '0.00'}`;
-      const itemGst = item.gstRate !== undefined ? item.gstRate : (item.taxRate !== undefined ? item.taxRate : 5);
+      const itemGst = item.gstRate !== undefined ? item.gstRate : (item.taxRate !== undefined ? item.taxRate : 0);
 
       return {
         id: item.id,
@@ -498,7 +498,7 @@ export const VoucherItemGrid: React.FC<VoucherItemGridProps> = ({
                     <td className="py-0.5 px-1 text-right">
                       <select
                         ref={el => setRef(idx, 'gst', el)}
-                        value={line.gstRate !== undefined && line.gstRate !== null ? line.gstRate : 5}
+                        value={line.gstRate !== undefined && line.gstRate !== null ? line.gstRate : 0}
                         onFocus={() => setActiveRow(idx)}
                         onChange={e => onGstRateChange(idx, parseFloat(e.target.value) || 0)}
                         onKeyDown={e => {

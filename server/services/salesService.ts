@@ -419,7 +419,7 @@ export class SalesService {
         rate: line.rate,
         discountType: discType,
         discountValue: discVal,
-        gstRate: line.gstRate ?? 5.0,
+        gstRate: line.gstRate ?? 0.0,
       });
 
       return {
@@ -819,7 +819,7 @@ export class SalesService {
             rate: line.rate,
             discountType: line.discountType || 'NONE',
             discountValue: line.discountValue || 0,
-            gstRate: line.gstRate ?? 5.0,
+            gstRate: line.gstRate ?? 0.0,
           });
 
           return {
@@ -1546,7 +1546,7 @@ export class SalesService {
         rate: line.rate,
         discountType: discType,
         discountValue: discVal,
-        gstRate: line.gstRate ?? 5.0,
+        gstRate: line.gstRate ?? 0.0,
       });
 
       return {
@@ -1836,7 +1836,7 @@ export class SalesService {
           rate: line.rate,
           discountType: discType,
           discountValue: discVal,
-          gstRate: line.gstRate ?? 5.0,
+          gstRate: line.gstRate ?? 0.0,
         });
 
         return {
@@ -2292,7 +2292,7 @@ export class SalesService {
             rate: l.rate,
             discountType: discType,
             discountValue: discVal,
-            gstRate: l.gstRate ?? 5.0,
+            gstRate: l.gstRate ?? 0.0,
             batches: l.batches,
           };
         });
@@ -2326,7 +2326,7 @@ export class SalesService {
           rate: line.rate,
           discountType: line.discountType || 'NONE',
           discountValue: line.discountValue || 0,
-          gstRate: line.gstRate ?? 5.0,
+          gstRate: line.gstRate ?? 0.0,
         });
         return { ...line, taxRes };
       });

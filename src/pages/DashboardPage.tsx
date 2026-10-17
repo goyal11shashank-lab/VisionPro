@@ -119,8 +119,9 @@ export const DashboardPage: React.FC<Props> = ({ onNavigate }) => {
         <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
           {alerts.lowStockCount > 0 && (
             <div
-              onClick={() => onNavigate('/reports/inventory')}
+              onClick={() => onNavigate('/reports/inventory?stockStatus=LOW_STOCK')}
               className="p-3.5 rounded-xl bg-amber-50 border border-amber-200 text-amber-900 flex items-center justify-between cursor-pointer hover:bg-amber-100/80 transition-all"
+              title="Click to view only Low Stock batches"
             >
               <div className="flex items-center gap-2.5">
                 <AlertTriangle className="w-4 h-4 text-amber-600 shrink-0" />
@@ -134,8 +135,9 @@ export const DashboardPage: React.FC<Props> = ({ onNavigate }) => {
 
           {alerts.negativeStockCount > 0 && (
             <div
-              onClick={() => onNavigate('/reports/inventory')}
+              onClick={() => onNavigate('/reports/inventory?stockStatus=NEGATIVE_STOCK')}
               className="p-3.5 rounded-xl bg-rose-50 border border-rose-200 text-rose-900 flex items-center justify-between cursor-pointer hover:bg-rose-100/80 transition-all"
+              title="Click to view only Negative Stock batches"
             >
               <div className="flex items-center gap-2.5">
                 <AlertOctagon className="w-4 h-4 text-rose-600 shrink-0" />
@@ -340,22 +342,39 @@ export const DashboardPage: React.FC<Props> = ({ onNavigate }) => {
 
         {/* Low / Negative Alerts */}
         <div
-          onClick={() => onNavigate('/reports/inventory')}
-          className="bg-white border border-slate-200 rounded-2xl p-5 flex flex-col justify-between gap-3 shadow-2xs hover:border-amber-300 transition-all cursor-pointer"
+          className="bg-white border border-slate-200 rounded-2xl p-5 flex flex-col justify-between gap-3 shadow-2xs hover:border-amber-300 transition-all"
         >
-          <div className="flex items-center justify-between">
+          <div
+            className="flex items-center justify-between cursor-pointer"
+            onClick={() => onNavigate('/reports/inventory?stockStatus=LOW_STOCK')}
+            title="View Low Stock Batches"
+          >
             <span className="text-xs text-slate-500 font-bold uppercase tracking-wider">Low / Zero Batches</span>
             <div className="p-2 rounded-xl bg-amber-50 text-amber-600">
               <AlertTriangle className="w-4 h-4" />
             </div>
           </div>
           <div>
-            <div className="text-2xl font-bold text-slate-900 tracking-tight">
+            <div
+              onClick={() => onNavigate('/reports/inventory?stockStatus=LOW_STOCK')}
+              className="text-2xl font-bold text-slate-900 tracking-tight cursor-pointer hover:text-amber-700 transition-colors"
+              title="Click to view Low Stock batches"
+            >
               {stockKPIs.lowStockBatches || 0} <span className="text-xs font-normal text-slate-500">low</span>
             </div>
             <div className="mt-2 flex items-center justify-between text-[11px]">
-              <span className="text-slate-500">{stockKPIs.zeroStockBatches || 0} zero stock</span>
-              <span className={stockKPIs.negativeStockBatches > 0 ? 'text-rose-600 font-bold' : 'text-emerald-600 font-semibold'}>
+              <span
+                onClick={() => onNavigate('/reports/inventory?stockStatus=ZERO_STOCK')}
+                className="text-slate-500 hover:text-slate-800 hover:underline cursor-pointer"
+                title="Click to view Zero Stock batches"
+              >
+                {stockKPIs.zeroStockBatches || 0} zero stock
+              </span>
+              <span
+                onClick={() => onNavigate('/reports/inventory?stockStatus=NEGATIVE_STOCK')}
+                className={`${stockKPIs.negativeStockBatches > 0 ? 'text-rose-600 font-bold hover:text-rose-800' : 'text-emerald-600 font-semibold'} hover:underline cursor-pointer`}
+                title="Click to view Negative Stock batches"
+              >
                 {stockKPIs.negativeStockBatches || 0} negative
               </span>
             </div>

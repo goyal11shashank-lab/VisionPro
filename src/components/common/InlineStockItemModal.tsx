@@ -25,7 +25,7 @@ export const InlineStockItemModal: React.FC<InlineStockItemModalProps> = ({
     maintainBatches: true,
     purchaseRate: 0,
     mrp: 0,
-    gstRate: 5,
+    gstRate: 0,
     description: '',
   });
 
@@ -50,7 +50,7 @@ export const InlineStockItemModal: React.FC<InlineStockItemModalProps> = ({
         maintainBatches: true,
         purchaseRate: 0,
         mrp: 0,
-        gstRate: 5,
+        gstRate: 0,
         description: '',
       });
       setErrorMessage(null);

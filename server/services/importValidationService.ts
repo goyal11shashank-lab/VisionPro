@@ -1693,8 +1693,8 @@ export class ImportValidationService {
       }
     }
 
-    // 8. GST Rate (default: 5.00)
-    let gstRate = '5.00';
+    // 8. GST Rate (default: 0.00)
+    let gstRate = '0.00';
     if (rawGstRate !== undefined && rawGstRate !== null && String(rawGstRate).trim() !== '') {
       const gst = Number(rawGstRate);
       if (isNaN(gst) || gst < 0 || gst > 100) {

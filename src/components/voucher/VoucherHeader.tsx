@@ -29,8 +29,9 @@ interface VoucherHeaderProps {
   // Party state
   parties: any[];
   selectedPartyId: string;
-  onPartyChange: (partyId: string) => void;
+  onPartyChange: (partyId: string, partyObj?: any) => void;
   onPartyCreated?: (newParty: any) => void;
+  onRequestCreateParty?: (initialName?: string) => void;
   onPartyFocus?: () => void;
   onPartyQueryChange?: (query: string) => void;
   allowPartyCreate?: boolean;
@@ -68,6 +69,7 @@ export const VoucherHeader: React.FC<VoucherHeaderProps> = ({
   selectedPartyId,
   onPartyChange,
   onPartyCreated,
+  onRequestCreateParty,
   onPartyFocus,
   onPartyQueryChange,
   allowPartyCreate = true,
@@ -122,10 +124,12 @@ export const VoucherHeader: React.FC<VoucherHeaderProps> = ({
   }, [parties]);
 
   const handleInlinePartySuccess = (newParty: any) => {
+    setPartyInputText(newParty?.name || '');
+    setTypedPartyName('');
     if (onPartyCreated) {
       onPartyCreated(newParty);
     }
-    onPartyChange(newParty.id);
+    onPartyChange(newParty.id, newParty);
 
     // Focus next field
     setTimeout(() => {
@@ -156,12 +160,17 @@ export const VoucherHeader: React.FC<VoucherHeaderProps> = ({
       } else if (e.altKey && e.key.toLowerCase() === 'c') {
         // Alt+C triggers inline creation
         e.preventDefault();
-        setIsInlinePartyOpen(true);
+        if (onRequestCreateParty) {
+          onRequestCreateParty(partyInputText);
+        } else {
+          setTypedPartyName(partyInputText);
+          setIsInlinePartyOpen(true);
+        }
       }
     };
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [onSavePost]);
+  }, [onSavePost, onRequestCreateParty, partyInputText]);
 
   return (
     <div
@@ -385,11 +394,16 @@ export const VoucherHeader: React.FC<VoucherHeaderProps> = ({
               {allowPartyCreate && (
                 <button
                   type="button"
+                  id="btn-voucher-header-new-party"
                   tabIndex={-1}
                   onClick={e => {
                     e.stopPropagation();
-                    setTypedPartyName(partyInputText);
-                    setIsInlinePartyOpen(true);
+                    if (onRequestCreateParty) {
+                      onRequestCreateParty(partyInputText);
+                    } else {
+                      setTypedPartyName(partyInputText);
+                      setIsInlinePartyOpen(true);
+                    }
                   }}
                   className="px-1.5 py-0.5 text-[10px] font-bold text-blue-700 hover:text-blue-900 bg-blue-50 hover:bg-blue-100 border border-blue-200 rounded transition-colors"
                   title="Create New Party (Alt+C)"

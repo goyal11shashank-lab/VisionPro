@@ -781,7 +781,7 @@ export const StockItemImportModal: React.FC<StockItemImportModalProps> = ({
                                 ₹{row.resolvedData?.mrp !== undefined ? Number(row.resolvedData.mrp).toFixed(2) : '-'}
                               </td>
                               <td className="py-2.5 px-3 font-mono">
-                                {row.resolvedData?.gstRate !== undefined ? `${row.resolvedData.gstRate}%` : '5%'}
+                                {row.resolvedData?.gstRate !== undefined ? `${row.resolvedData.gstRate}%` : '0%'}
                               </td>
                               <td className="py-2.5 px-3 whitespace-nowrap">
                                 <span

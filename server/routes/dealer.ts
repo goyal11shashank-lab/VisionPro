@@ -705,7 +705,7 @@ router.post(
             uniqueItemId: reqItem.uniqueItemId,
             quantity: reqItem.quantity,
             rate: resolvedRate,
-            gstRate: 5.0, // Optical lens standard GST 5%
+            gstRate: (itemData?.gstRate !== undefined && itemData?.gstRate !== null) ? parseFloat(itemData.gstRate) : 0.0,
             batches: [{ batchId: reqItem.batchId, quantity: reqItem.quantity }],
           });
         }

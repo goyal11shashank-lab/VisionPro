@@ -44,7 +44,7 @@ export const UniqueItemsPage: React.FC = () => {
     purchaseRate: 0,
     lastPurchasePrice: 0,
     mrp: 0,
-    gstRate: 5,
+    gstRate: 0,
     status: 'ACTIVE' as 'ACTIVE' | 'INACTIVE',
   });
   const [modalError, setModalError] = useState<string | null>(null);
@@ -86,7 +86,7 @@ export const UniqueItemsPage: React.FC = () => {
       purchaseRate: 0,
       lastPurchasePrice: 0,
       mrp: 0,
-      gstRate: 5,
+      gstRate: 0,
       status: 'ACTIVE',
     });
     setShowModal(true);
@@ -106,7 +106,7 @@ export const UniqueItemsPage: React.FC = () => {
       purchaseRate: Number(item.purchaseRate) || 0,
       lastPurchasePrice: Number(item.lastPurchasePrice) || 0,
       mrp: Number(item.mrp) || 0,
-      gstRate: item.gstRate !== undefined ? Number(item.gstRate) : 5,
+      gstRate: item.gstRate !== undefined ? Number(item.gstRate) : 0,
       status: item.status,
     });
     setShowModal(true);
@@ -543,7 +543,7 @@ export const UniqueItemsPage: React.FC = () => {
                         </td>
                         <td className="px-5 py-4">
                           <span className="inline-flex items-center px-2 py-0.5 rounded text-[11px] font-semibold font-mono bg-indigo-50 text-indigo-700 border border-indigo-200">
-                            {item.gstRate !== undefined ? item.gstRate : 5}%
+                            {item.gstRate !== undefined ? item.gstRate : 0}%
                           </span>
                         </td>
                         <td className="px-5 py-4">
@@ -948,10 +948,10 @@ export const UniqueItemsPage: React.FC = () => {
                       type="number"
                       step="any"
                       min="0"
-                      value={formData.gstRate !== undefined ? formData.gstRate : 5}
+                      value={formData.gstRate !== undefined ? formData.gstRate : 0}
                       onChange={(e) => setFormData({ ...formData, gstRate: Math.max(0, parseFloat(e.target.value) || 0) })}
                       className="w-full px-3 py-2 text-sm bg-slate-50 border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-indigo-500 font-mono [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none pr-7"
-                      placeholder="5"
+                      placeholder="0"
                     />
                     <div className="absolute right-2.5 top-2 text-xs text-slate-400 font-bold pointer-events-none">%</div>
                   </div>
