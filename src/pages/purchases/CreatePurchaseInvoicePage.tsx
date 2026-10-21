@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useMemo, useCallback } from 'react';
+import React, { useState, useEffect, useMemo, useCallback, useRef } from 'react';
 import {
   FileSpreadsheet,
   ArrowLeft,
@@ -18,6 +18,12 @@ import { VoucherHeader } from '../../components/voucher/VoucherHeader';
 import { VoucherItemGrid } from '../../components/voucher/VoucherItemGrid';
 import { VoucherFooter } from '../../components/voucher/VoucherFooter';
 import { OpticalBatchModal } from '../../components/voucher/OpticalBatchModal';
+import { StockItemChangeModal } from '../../components/voucher/StockItemChangeModal';
+import {
+  isSameOpticalCategory,
+  remapBatchAllocations,
+  getOpticalCategory,
+} from '../../components/voucher/batchAllocationHelper';
 import {
   TallyContextualPanel,
   ContextualPanelItem,
@@ -33,6 +39,7 @@ import {
   isVoucherLineEmpty,
   ensureTrailingBlankRow,
 } from '../../components/voucher/VoucherTypes';
+import { InlinePartyModal } from '../../components/common/InlinePartyModal';
 
 interface Props {
   editInvoiceId?: string | null;
@@ -118,6 +125,15 @@ export const CreatePurchaseInvoicePage: React.FC<Props> = ({
     ? lines[activeBatchModalIndex] || null
     : null;
 
+  // Stock Item Change Confirmation Modal state
+  const [stockItemChangeModal, setStockItemChangeModal] = useState<{
+    rowIndex: number;
+    oldLine: VoucherLineItem;
+    newItem: any;
+    isSameCategory: boolean;
+    categoryCode: any;
+  } | null>(null);
+
   // Barcode Scanner Quick Entry
   const [barcodeInput, setBarcodeInput] = useState<string>('');
   const [barcodeLoading, setBarcodeLoading] = useState<boolean>(false);
@@ -158,6 +174,8 @@ export const CreatePurchaseInvoicePage: React.FC<Props> = ({
   const [showDeleteConfirm, setShowDeleteConfirm] = useState<boolean>(false);
   const [showCancelConfirm, setShowCancelConfirm] = useState<boolean>(false);
   const [actionLoading, setActionLoading] = useState<boolean>(false);
+  const [isPartyModalOpen, setIsPartyModalOpen] = useState<boolean>(false);
+  const [partyModalInitialName, setPartyModalInitialName] = useState<string>('');
 
   const openContextualParty = useCallback(() => {
     setContextualType(prev => {
@@ -181,6 +199,8 @@ export const CreatePurchaseInvoicePage: React.FC<Props> = ({
   const closeContextualPanel = useCallback(() => {
     setContextualType(null);
     setContextualRowIndex(null);
+    setContextualSearch('');
+    setContextualSelectedIdx(0);
   }, []);
 
   // Helper: Auto calculate Due Date based on payment terms
@@ -490,9 +510,9 @@ export const CreatePurchaseInvoicePage: React.FC<Props> = ({
   }, [editInvoiceId, editOrderId, fromPurchaseOrderId, isOrder, currentBusiness?.id]);
 
   // Handle supplier change & auto-detect GST mode + ledger balance
-  const handlePartyChange = async (partyId: string) => {
+  const handlePartyChange = async (partyId: string, partyObj?: any) => {
     setSupplierPartyId(partyId);
-    const party = suppliers.find(p => p.id === partyId) || null;
+    const party = partyObj || suppliers.find(p => p.id === partyId) || null;
     setSelectedParty(party);
 
     if (!party) {
@@ -524,13 +544,194 @@ export const CreatePurchaseInvoicePage: React.FC<Props> = ({
     }
   };
 
+  const handleOpenPartyModal = (initialName?: string) => {
+    setPartyModalInitialName(initialName ?? contextualSearch ?? '');
+    setIsPartyModalOpen(true);
+  };
+
+  const handlePartyCreated = (newParty: any) => {
+    if (!newParty || !newParty.id) return;
+
+    const normalizedParty = {
+      ...newParty,
+      id: newParty.id,
+      name: newParty.name,
+      partyCode: newParty.partyCode || newParty.code || '',
+      partyType: newParty.partyType || 'SUPPLIER',
+      phone: newParty.phone || newParty.mobile || '',
+      mobile: newParty.mobile || newParty.phone || '',
+      city: newParty.city || '',
+      state: newParty.state || '',
+      gstin: newParty.gstin || '',
+      currentBalance: newParty.currentBalance ?? newParty.openingBalance ?? 0,
+      balance: newParty.balance ?? newParty.openingBalance ?? 0,
+    };
+
+    // 1. Immediately update suppliers array with the new party at the top
+    setSuppliers(prev => [normalizedParty, ...prev.filter(p => p.id !== newParty.id)]);
+
+    // 2. Select the supplier immediately
+    setSupplierPartyId(newParty.id);
+    setSelectedParty(normalizedParty);
+
+    // 3. Immediately auto-detect GST Mode based on the new supplier's state
+    if (normalizedParty.state && currentBusiness?.state) {
+      if (normalizedParty.state.trim().toLowerCase() !== currentBusiness.state.trim().toLowerCase()) {
+        setGstMode('INTER_STATE');
+      } else {
+        setGstMode('INTRA_STATE');
+      }
+    }
+
+    // 4. Update party balance
+    setPartyBalance({
+      balance: Math.abs(Number(normalizedParty.currentBalance || 0)),
+      type: Number(normalizedParty.currentBalance || 0) >= 0 ? 'Cr' : 'Dr',
+    });
+
+    // 5. Instantly show in right-side panel:
+    setContextualType('PARTY');
+    setContextualSearch('');
+    setContextualSelectedIdx(0);
+
+    // Close the party modal
+    setIsPartyModalOpen(false);
+
+    // 6. Smoothly move focus to Reference Number input
+    setTimeout(() => {
+      const refInput = document.getElementById('voucher-header-ref-no') as HTMLInputElement;
+      if (refInput) {
+        refInput.focus();
+        refInput.select();
+      }
+    }, 80);
+  };
+
   // Add a blank row
   const handleAddBlankLine = () => {
     setLines(prev => ensureTrailingBlankRow(prev, 'p-row'));
   };
 
-  // Select Item for a row
-  const handleLineItemChange = (index: number, newItemId: string) => {
+  // Applies confirmed or direct Stock Item selection
+  const applyStockItemChange = async (
+    index: number,
+    newItem: any,
+    retainBatches: boolean,
+    previousBatches: BatchAllocation[] = []
+  ) => {
+    const defaultRate = newItem.lastPurchasePrice
+      ? parseFloat(newItem.lastPurchasePrice as any)
+      : (newItem as any).purchaseRate
+      ? parseFloat((newItem as any).purchaseRate as any)
+      : 250;
+    const itemMaintainBatches = newItem.maintainBatches !== false;
+    const catCode = getOpticalCategory(newItem);
+
+    if (retainBatches && previousBatches.length > 0) {
+      let targetBatches: any[] = [];
+      try {
+        const res = await apiRequest<{ batches: any[] }>(
+          `/api/sales/unique-items/${newItem.id}/batches?limit=1000&onlyInStock=false`
+        );
+        targetBatches = res.batches || [];
+      } catch (err) {
+        console.warn('Failed to fetch batches for new item:', err);
+      }
+
+      const { remappedBatches, unmappedCount } = remapBatchAllocations(
+        previousBatches,
+        newItem.name,
+        targetBatches,
+        catCode
+      );
+
+      const retainedQty = remappedBatches.reduce(
+        (sum, b) => sum + (Number(b.quantity) || 0),
+        0
+      );
+
+      setLines(prev =>
+        prev.map((line, idx) =>
+          idx === index
+            ? {
+                ...line,
+                uniqueItemId: newItem.id,
+                uniqueItemName: newItem.name,
+                uniqueItemCode: newItem.code,
+                categoryCode: catCode,
+                unit: (newItem as any).unit || 'PRS',
+                maintainBatches: itemMaintainBatches,
+                rate: defaultRate,
+                gstRate:
+                  newItem.gstRate !== undefined
+                    ? parseFloat(String(newItem.gstRate))
+                    : (newItem as any).taxRate
+                    ? parseFloat((newItem as any).taxRate)
+                    : 0,
+                batches: remappedBatches,
+                quantity: retainedQty,
+                availableBatches: targetBatches,
+              }
+            : line
+        )
+      );
+
+      if (unmappedCount > 0) {
+        setError(
+          `Item changed to "${newItem.name}". ${unmappedCount} batch power(s) are not available under this item. Please resolve them before saving.`
+        );
+      } else {
+        setError(null);
+      }
+
+      // Return focus to grid
+      setTimeout(() => {
+        setFocusRequest({ row: index, col: 'rate', key: Date.now() });
+      }, 60);
+    } else {
+      // Clear batches (new item or different category)
+      setLines(prev =>
+        prev.map((line, idx) =>
+          idx === index
+            ? {
+                ...line,
+                uniqueItemId: newItem.id,
+                uniqueItemName: newItem.name,
+                uniqueItemCode: newItem.code,
+                categoryCode: catCode,
+                unit: (newItem as any).unit || 'PRS',
+                maintainBatches: itemMaintainBatches,
+                rate: defaultRate,
+                gstRate:
+                  newItem.gstRate !== undefined
+                    ? parseFloat(String(newItem.gstRate))
+                    : (newItem as any).taxRate
+                    ? parseFloat((newItem as any).taxRate)
+                    : 0,
+                batches: [],
+                quantity: itemMaintainBatches ? 0 : 1,
+                availableBatches: [],
+              }
+            : line
+        )
+      );
+
+      // Auto-open batch modal when maintainBatches is YES
+      if (itemMaintainBatches) {
+        setActiveBatchModalIndex(index);
+        if (lines[index]) {
+          setActiveBatchLineId(lines[index].id);
+        }
+      } else {
+        setTimeout(() => {
+          setFocusRequest({ row: index, col: 'qty', key: Date.now() });
+        }, 60);
+      }
+    }
+  };
+
+  // Select Item for a row with safety checks
+  const handleLineItemChange = async (index: number, newItemId: string) => {
     if (!newItemId) {
       setLines(prev =>
         prev.map((line, idx) =>
@@ -540,60 +741,54 @@ export const CreatePurchaseInvoicePage: React.FC<Props> = ({
       return;
     }
 
-    const item = uniqueItemsList.find(i => i.id === newItemId);
-    if (!item) return;
+    const newItem = uniqueItemsList.find(i => i.id === newItemId);
+    if (!newItem) return;
 
-    const defaultRate = item.lastPurchasePrice
-      ? parseFloat(item.lastPurchasePrice as any)
-      : (item as any).purchaseRate
-      ? parseFloat((item as any).purchaseRate as any)
-      : 250;
-    const itemMaintainBatches = item.maintainBatches !== false;
     const existingLine = lines[index];
-    const isSameItem = existingLine && existingLine.uniqueItemId === item.id;
-    const existingBatches = isSameItem ? existingLine.batches : [];
-    const existingQty =
-      isSameItem && existingLine.quantity > 0
-        ? existingLine.quantity
-        : itemMaintainBatches
-        ? 0
-        : existingLine && existingLine.quantity > 0
-        ? existingLine.quantity
-        : 1;
-
-    setLines(prev =>
-      prev.map((line, idx) =>
-        idx === index
-          ? {
-              ...line,
-              uniqueItemId: item.id,
-              uniqueItemName: item.name,
-              uniqueItemCode: item.code,
-              categoryCode:
-                (item as any).categoryCode || (item as any).category?.code || 'SV',
-              unit: (item as any).unit || 'PRS',
-              maintainBatches: itemMaintainBatches,
-              rate: defaultRate,
-              gstRate:
-                item.gstRate !== undefined
-                  ? parseFloat(String(item.gstRate))
-                  : (item as any).taxRate
-                  ? parseFloat((item as any).taxRate)
-                  : 0,
-              batches: existingBatches,
-              quantity: existingQty,
-            }
-          : line
-      )
+    const isChangingExistingItem = Boolean(
+      existingLine &&
+      existingLine.uniqueItemId &&
+      existingLine.uniqueItemId !== newItem.id
     );
 
-    // Auto-open batch modal when maintainBatches is YES
-    if (itemMaintainBatches) {
-      setActiveBatchModalIndex(index);
-      if (lines[index]) {
-        setActiveBatchLineId(lines[index].id);
-      }
+    const hasAllocations = Boolean(
+      existingLine &&
+      existingLine.batches &&
+      existingLine.batches.length > 0 &&
+      existingLine.batches.some(b => Number(b.quantity) > 0)
+    );
+
+    if (isChangingExistingItem && hasAllocations) {
+      const oldCat = getOpticalCategory(existingLine);
+      const isSameCategory = isSameOpticalCategory(existingLine, newItem);
+
+      setStockItemChangeModal({
+        rowIndex: index,
+        oldLine: existingLine,
+        newItem,
+        isSameCategory,
+        categoryCode: oldCat,
+      });
+      return;
     }
+
+    await applyStockItemChange(index, newItem, false);
+  };
+
+  const handleConfirmItemChange = async () => {
+    if (!stockItemChangeModal) return;
+    const { rowIndex, oldLine, newItem, isSameCategory } = stockItemChangeModal;
+    setStockItemChangeModal(null);
+    await applyStockItemChange(rowIndex, newItem, isSameCategory, oldLine.batches);
+  };
+
+  const handleCancelItemChange = () => {
+    if (!stockItemChangeModal) return;
+    const rIdx = stockItemChangeModal.rowIndex;
+    setStockItemChangeModal(null);
+    setTimeout(() => {
+      setFocusRequest({ row: rIdx, col: 'item', key: Date.now() });
+    }, 60);
   };
 
   // Apply batch allocations from modal
@@ -867,6 +1062,13 @@ export const CreatePurchaseInvoicePage: React.FC<Props> = ({
       if (line.maintainBatches !== false) {
         if (!line.batches || line.batches.length === 0) {
           setError(`Line #${lineNum} (${itemName}): Batch allocations are required. Please allocate at least one batch.`);
+          return;
+        }
+        const unresolved = line.batches.filter(b => (b as any).unresolved || !b.batchId);
+        if (unresolved.length > 0) {
+          setError(
+            `Line #${lineNum} (${itemName}): Contains ${unresolved.length} unresolved batch power(s). Please open batch allocations and select or create valid batches.`
+          );
           return;
         }
         const sumBatches = line.batches.reduce(
@@ -1170,8 +1372,52 @@ export const CreatePurchaseInvoicePage: React.FC<Props> = ({
     return [];
   }, [contextualType, contextualSearch, suppliers, uniqueItemsList]);
 
-  const handleConfirmContextualSelect = (item: ContextualPanelItem) => {
-    if (contextualType === 'PARTY') {
+  const contextualStateRef = useRef({
+    type: contextualType,
+    rowIndex: contextualRowIndex,
+    items: contextualItems,
+    selectedIdx: contextualSelectedIdx,
+  });
+  useEffect(() => {
+    contextualStateRef.current = {
+      type: contextualType,
+      rowIndex: contextualRowIndex,
+      items: contextualItems,
+      selectedIdx: contextualSelectedIdx,
+    };
+  });
+
+  const isPartyTarget = (el: HTMLElement | null): boolean => {
+    if (!el) return false;
+    return (
+      el.id === 'voucher-header-party-input' ||
+      Boolean(el.closest('[data-contextual-owner="party"]')) ||
+      Boolean(el.closest('#tally-contextual-panel'))
+    );
+  };
+
+  const isStockItemTarget = (el: HTMLElement | null, rowIndex: number | null): boolean => {
+    if (!el) return false;
+    if (el.closest('#tally-contextual-panel')) return true;
+    if (rowIndex === null) return false;
+    return (
+      el.id === `voucher-item-grid-select-${rowIndex}` ||
+      Boolean(el.closest(`[data-contextual-owner="stock-item-${rowIndex}"]`))
+    );
+  };
+
+  const isAnyStockItemInput = (el: HTMLElement | null): boolean => {
+    if (!el) return false;
+    return Boolean(
+      (el.id && el.id.startsWith('voucher-item-grid-select-')) ||
+      el.closest('[data-contextual-owner^="stock-item-"]')
+    );
+  };
+
+  const handleConfirmContextualSelect = useCallback((item: ContextualPanelItem) => {
+    const currentType = contextualStateRef.current.type;
+    const currentRowIndex = contextualStateRef.current.rowIndex;
+    if (currentType === 'PARTY') {
       handlePartyChange(item.id);
       closeContextualPanel();
       setTimeout(() => {
@@ -1183,21 +1429,74 @@ export const CreatePurchaseInvoicePage: React.FC<Props> = ({
           setFocusRequest({ row: 0, col: 'item', key: Date.now() });
         }
       }, 50);
-    } else if (contextualType === 'STOCK_ITEM' && contextualRowIndex !== null) {
-      const rIdx = contextualRowIndex;
-      handleLineItemChange(rIdx, item.id);
+    } else if (currentType === 'STOCK_ITEM' && currentRowIndex !== null) {
+      const rIdx = currentRowIndex;
       closeContextualPanel();
-      const fullItem = item.meta || uniqueItemsList.find(i => i.id === item.id);
-      if (fullItem && fullItem.maintainBatches !== false) {
-        setTimeout(() => {
-          setActiveBatchModalIndex(rIdx);
-          if (lines[rIdx]) setActiveBatchLineId(lines[rIdx].id);
-        }, 60);
-      } else {
-        setFocusRequest({ row: rIdx, col: 'qty', key: Date.now() });
-      }
+      handleLineItemChange(rIdx, item.id);
     }
-  };
+  }, [closeContextualPanel, handleLineItemChange, handlePartyChange]);
+
+  // Close contextual panel when focus moves to an unrelated field (e.g. Purchase Price, Rate, Qty, Disc, GST, Amount) or when clicking outside
+  useEffect(() => {
+    const handleFocusIn = (e: FocusEvent) => {
+      const state = contextualStateRef.current;
+      if (!state.type) return;
+
+      const target = e.target as HTMLElement | null;
+      if (!target) return;
+
+      // Keep open if interacting with the contextual panel itself
+      if (target.closest('#tally-contextual-panel')) return;
+
+      if (state.type === 'PARTY') {
+        if (!isPartyTarget(target) && !isAnyStockItemInput(target)) {
+          closeContextualPanel();
+        }
+      } else if (state.type === 'STOCK_ITEM') {
+        if (!isStockItemTarget(target, state.rowIndex) && !isAnyStockItemInput(target) && !isPartyTarget(target)) {
+          closeContextualPanel();
+        }
+      }
+    };
+
+    const handlePointerDown = (e: MouseEvent | PointerEvent) => {
+      const state = contextualStateRef.current;
+      if (!state.type) return;
+
+      const target = e.target as HTMLElement | null;
+      if (!target) return;
+
+      // Do not close if interacting with an active modal or dialog
+      if (
+        target.closest('[role="dialog"]') ||
+        target.closest('.modal-container') ||
+        target.closest('#inline-party-modal') ||
+        target.closest('#inline-stock-item-modal')
+      ) {
+        return;
+      }
+
+      // Keep open if clicking inside the contextual panel
+      if (target.closest('#tally-contextual-panel')) return;
+
+      if (state.type === 'PARTY') {
+        if (!isPartyTarget(target) && !isAnyStockItemInput(target)) {
+          closeContextualPanel();
+        }
+      } else if (state.type === 'STOCK_ITEM') {
+        if (!isStockItemTarget(target, state.rowIndex) && !isAnyStockItemInput(target) && !isPartyTarget(target)) {
+          closeContextualPanel();
+        }
+      }
+    };
+
+    document.addEventListener('focusin', handleFocusIn);
+    document.addEventListener('pointerdown', handlePointerDown);
+    return () => {
+      document.removeEventListener('focusin', handleFocusIn);
+      document.removeEventListener('pointerdown', handlePointerDown);
+    };
+  }, [closeContextualPanel]);
 
   const handleConfirmDelete = async () => {
     const idToDelete = isOrder ? editOrderId : editInvoiceId;
@@ -1238,28 +1537,67 @@ export const CreatePurchaseInvoicePage: React.FC<Props> = ({
   // Global Keyboard Shortcuts
   useEffect(() => {
     const handleGlobalKey = (e: KeyboardEvent) => {
+      const state = contextualStateRef.current;
+      const active = document.activeElement as HTMLElement | null;
+
       // Escape closes contextual panel if open
       if (e.key === 'Escape') {
-        if (contextualType !== null) {
+        if (state.type !== null) {
           e.preventDefault();
           closeContextualPanel();
+          return;
         }
-      } else if (contextualType !== null) {
+      }
+
+      // Up/Down/Enter navigation: ONLY when the owning input or panel is actively focused!
+      if (state.type === 'PARTY' && isPartyTarget(active)) {
         if (e.key === 'ArrowDown') {
           e.preventDefault();
           setContextualSelectedIdx(prev =>
-            Math.min(prev + 1, Math.max(0, contextualItems.length - 1))
+            Math.min(prev + 1, Math.max(0, state.items.length - 1))
           );
-        } else if (e.key === 'ArrowUp') {
+          return;
+        }
+        if (e.key === 'ArrowUp') {
           e.preventDefault();
           setContextualSelectedIdx(prev => Math.max(prev - 1, 0));
-        } else if (e.key === 'Enter') {
-          if (contextualItems[contextualSelectedIdx]) {
-            e.preventDefault();
-            handleConfirmContextualSelect(contextualItems[contextualSelectedIdx]);
-          }
+          return;
         }
-      } else if (e.altKey && e.key.toLowerCase() === 'd' && (editInvoiceId || editOrderId) && canDelete) {
+        if (e.key === 'Enter') {
+          if (state.items[state.selectedIdx]) {
+            e.preventDefault();
+            handleConfirmContextualSelect(state.items[state.selectedIdx]);
+          }
+          return;
+        }
+      } else if (
+        state.type === 'STOCK_ITEM' &&
+        state.rowIndex !== null &&
+        isStockItemTarget(active, state.rowIndex)
+      ) {
+        if (e.key === 'ArrowDown') {
+          e.preventDefault();
+          setContextualSelectedIdx(prev =>
+            Math.min(prev + 1, Math.max(0, state.items.length - 1))
+          );
+          return;
+        }
+        if (e.key === 'ArrowUp') {
+          e.preventDefault();
+          setContextualSelectedIdx(prev => Math.max(prev - 1, 0));
+          return;
+        }
+        if (e.key === 'Enter') {
+          if (state.items[state.selectedIdx]) {
+            e.preventDefault();
+            handleConfirmContextualSelect(state.items[state.selectedIdx]);
+          }
+          return;
+        }
+      }
+
+      // Hotkeys for voucher actions
+      if (e.altKey && e.key.toLowerCase() === 'd' && (editInvoiceId || editOrderId) && canDelete) {
         e.preventDefault();
         setShowDeleteConfirm(true);
       } else if (e.altKey && e.key.toLowerCase() === 'x' && (editInvoiceId || editOrderId) && canCancel) {
@@ -1271,17 +1609,16 @@ export const CreatePurchaseInvoicePage: React.FC<Props> = ({
         setIsPrintPreviewOpen(true);
       }
     };
+
     window.addEventListener('keydown', handleGlobalKey);
     return () => window.removeEventListener('keydown', handleGlobalKey);
   }, [
-    contextualType,
-    contextualItems,
-    contextualSelectedIdx,
     editInvoiceId,
     editOrderId,
     canDelete,
     canCancel,
     closeContextualPanel,
+    handleConfirmContextualSelect,
   ]);
 
   if (loadingInitial) {
@@ -1341,6 +1678,8 @@ export const CreatePurchaseInvoicePage: React.FC<Props> = ({
             parties={suppliers}
             selectedPartyId={supplierPartyId}
             onPartyChange={handlePartyChange}
+            onPartyCreated={handlePartyCreated}
+            onRequestCreateParty={handleOpenPartyModal}
             onPartyFocus={openContextualParty}
             onPartyQueryChange={setContextualSearch}
             partyBalance={partyBalance || undefined}
@@ -1456,10 +1795,7 @@ export const CreatePurchaseInvoicePage: React.FC<Props> = ({
           onConfirmSelect={handleConfirmContextualSelect}
           onCreateNew={() => {
             if (contextualType === 'PARTY') {
-              const partyInput = document.getElementById('voucher-header-party-input');
-              partyInput?.focus();
-              const evt = new KeyboardEvent('keydown', { key: 'c', altKey: true, bubbles: true });
-              window.dispatchEvent(evt);
+              handleOpenPartyModal(contextualSearch);
             } else if (contextualType === 'STOCK_ITEM' && contextualRowIndex !== null) {
               const sel = document.getElementById(`voucher-item-grid-select-${contextualRowIndex}`);
               sel?.focus();
@@ -1538,6 +1874,22 @@ export const CreatePurchaseInvoicePage: React.FC<Props> = ({
             </div>
           </div>
         </div>
+      )}
+
+      {/* 3.5 Stock Item Change Confirmation / Warning Modal */}
+      {stockItemChangeModal && (
+        <StockItemChangeModal
+          isOpen={true}
+          isSameCategory={stockItemChangeModal.isSameCategory}
+          oldItemName={stockItemChangeModal.oldLine.uniqueItemName}
+          oldItemCode={stockItemChangeModal.oldLine.uniqueItemCode}
+          newItemName={stockItemChangeModal.newItem.name}
+          newItemCode={stockItemChangeModal.newItem.code}
+          categoryCode={stockItemChangeModal.categoryCode}
+          allocationsCount={stockItemChangeModal.oldLine.batches?.length || 0}
+          onConfirm={handleConfirmItemChange}
+          onCancel={handleCancelItemChange}
+        />
       )}
 
       {/* 4. Optical Batch Power Allocation Modal */}
@@ -1696,6 +2048,23 @@ export const CreatePurchaseInvoicePage: React.FC<Props> = ({
             />
           )}
         </PrintPreviewModal>
+      )}
+
+      {/* Inline Party Creation Modal */}
+      {isPartyModalOpen && (
+        <InlinePartyModal
+          isOpen={isPartyModalOpen}
+          onClose={() => {
+            setIsPartyModalOpen(false);
+            setTimeout(() => {
+              const partyInput = document.getElementById('voucher-header-party-input');
+              partyInput?.focus();
+            }, 50);
+          }}
+          defaultPartyType="SUPPLIER"
+          initialName={partyModalInitialName}
+          onSuccess={handlePartyCreated}
+        />
       )}
     </div>
   );

@@ -319,7 +319,7 @@ export const VoucherHeader: React.FC<VoucherHeaderProps> = ({
       {/* Second Strip: Party Selection, Ledger Account & Ref Details */}
       <div className="grid grid-cols-1 md:grid-cols-12 gap-2 pt-1.5 items-center text-xs">
         {/* Party A/c Name (Side Panel Selection Only - No Dropdown) */}
-        <div className="md:col-span-6 flex items-center gap-2">
+        <div className="md:col-span-6 flex items-center gap-2" data-contextual-owner="party">
           <label
             htmlFor="voucher-header-party-input"
             className="w-28 text-slate-900 font-extrabold shrink-0 text-right text-[11px] uppercase tracking-tight"
@@ -349,6 +349,14 @@ export const VoucherHeader: React.FC<VoucherHeaderProps> = ({
               }}
               onClick={() => {
                 onPartyFocus?.();
+              }}
+              onBlur={() => {
+                if (selectedParty) {
+                  setPartyInputText(selectedParty.name);
+                } else if (!selectedPartyId) {
+                  setPartyInputText('');
+                  onPartyQueryChange?.('');
+                }
               }}
               onChange={e => {
                 const val = e.target.value;

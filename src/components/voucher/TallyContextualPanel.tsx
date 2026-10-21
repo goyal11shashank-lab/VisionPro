@@ -172,6 +172,10 @@ export const TallyContextualPanel: React.FC<TallyContextualPanelProps> = ({
                   itemRefs.current[idx] = el;
                 }}
                 type="button"
+                onMouseDown={e => {
+                  // Prevent blur on owning search input so selection commits cleanly without premature panel dismissal
+                  e.preventDefault();
+                }}
                 onClick={() => onConfirmSelect(item)}
                 onMouseEnter={() => onSelectIndex(idx)}
                 className={`w-full text-left p-2 transition-colors cursor-pointer flex items-start justify-between gap-2 border-l-4 ${

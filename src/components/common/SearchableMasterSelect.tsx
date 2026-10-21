@@ -408,13 +408,11 @@ export const SearchableMasterSelect = forwardRef<SearchableMasterSelectRef, Sear
             }}
             onBlur={() => {
               isFocusedRef.current = false;
-              if (!disableDropdown) {
-                if (selectedOption) {
-                  setSearchQuery(selectedOption.label);
-                } else if (!value && !searchQuery.trim()) {
-                  setSearchQuery('');
-                  onQueryChange?.('');
-                }
+              if (selectedOption) {
+                setSearchQuery(selectedOption.label);
+              } else if (!value) {
+                setSearchQuery('');
+                onQueryChange?.('');
               }
             }}
             onChange={e => {

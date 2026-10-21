@@ -9,7 +9,7 @@ import {
   AlertCircle,
   Hash,
   Sparkles,
-  Info,
+  AlertTriangle,
 } from 'lucide-react';
 import { apiRequest } from '../../api/client';
 import {
@@ -75,10 +75,13 @@ export interface OpticalBatchModalProps {
   lineRate?: number;
 }
 
-interface AllocationRecord {
+export interface AllocationRecord {
+  rowId: string;
+  batchId?: string;
   batch: any;
   quantityStr: string;
   error?: string | null;
+  unresolved?: boolean;
 }
 
 export const OpticalBatchModal: React.FC<OpticalBatchModalProps> = ({
@@ -98,11 +101,12 @@ export const OpticalBatchModal: React.FC<OpticalBatchModalProps> = ({
   lineRate = 0,
 }) => {
   const { settings } = useBusinessSettings();
-  const canCreateBatch = allowBatchCreate !== undefined
-    ? allowBatchCreate
-    : (mode === 'purchase'
-        ? (settings?.purchase?.allowNewBatchCreation ?? true)
-        : (settings?.sales?.allowNewBatchCreation ?? true));
+  const canCreateBatch =
+    allowBatchCreate !== undefined
+      ? allowBatchCreate
+      : mode === 'purchase'
+      ? settings?.purchase?.allowNewBatchCreation ?? true
+      : settings?.sales?.allowNewBatchCreation ?? true;
 
   const normCategory = (String(categoryCode || 'SV').toUpperCase()) as OpticalCategoryCode;
   const isBifocalOrProg = normCategory === 'KT' || normCategory === 'PROG';
@@ -119,13 +123,11 @@ export const OpticalBatchModal: React.FC<OpticalBatchModalProps> = ({
   // Cache of known batches for this unique item to allow instant client search
   const batchesCacheRef = useRef<any[]>([]);
 
-  // Allocated batches: map of batchId -> AllocationRecord, and array of IDs for order
-  const [allocationsMap, setAllocationsMap] = useState<Record<string, AllocationRecord>>({});
-  const [allocatedIds, setAllocatedIds] = useState<string[]>([]);
+  // Allocated batches: individual rows, each with its own rowId to allow entering same power multiple times
+  const [allocations, setAllocations] = useState<AllocationRecord[]>([]);
 
-  // Global / form errors
+  // Global form errors
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
-  const [duplicateNotice, setDuplicateNotice] = useState<string | null>(null);
 
   // Batch creation drawer
   const [showCreateBatch, setShowCreateBatch] = useState(false);
@@ -160,62 +162,81 @@ export const OpticalBatchModal: React.FC<OpticalBatchModalProps> = ({
     setShowDropdown(false);
     setActiveSearchIndex(0);
     setErrorMessage(null);
-    setDuplicateNotice(null);
     setShowCreateBatch(false);
 
-    // Populate initial allocations (only allocated batches are shown)
-    const initialMap: Record<string, AllocationRecord> = {};
-    const initialIds: string[] = [];
-
-    (initialBatches || []).forEach(b => {
+    // Populate initial allocations (each entry in initialBatches retains its own independent row)
+    const initialRows: AllocationRecord[] = (initialBatches || []).map((b, idx) => {
       const batchObj = (b as any).batch || b;
       const rawId = b.batchId || (b as any).id || (b as any).batch?.id;
-      const sphVal = batchObj.sph !== undefined && batchObj.sph !== null && batchObj.sph !== '' ? batchObj.sph : (b.sph ?? '0.00');
-      const cylVal = batchObj.cyl !== undefined && batchObj.cyl !== null && batchObj.cyl !== '' ? batchObj.cyl : (b.cyl ?? '0.00');
-      const axisVal = batchObj.axis !== undefined && batchObj.axis !== null ? batchObj.axis : (b.axis ?? '');
-      const addVal = batchObj.add !== undefined && batchObj.add !== null ? batchObj.add : (b.add ?? '');
+      const sphVal =
+        batchObj.sph !== undefined && batchObj.sph !== null && batchObj.sph !== ''
+          ? batchObj.sph
+          : b.sph ?? '0.00';
+      const cylVal =
+        batchObj.cyl !== undefined && batchObj.cyl !== null && batchObj.cyl !== ''
+          ? batchObj.cyl
+          : b.cyl ?? '0.00';
+      const axisVal =
+        batchObj.axis !== undefined && batchObj.axis !== null ? batchObj.axis : b.axis ?? '';
+      const addVal =
+        batchObj.add !== undefined && batchObj.add !== null ? batchObj.add : b.add ?? '';
       const sideVal = batchObj.side || b.side || 'NONE';
       const barcodeVal = batchObj.barcode || b.barcode;
       const stockVal = Number(batchObj.availableStock ?? b.availableStock ?? 0);
+      const isUnresolved = Boolean((b as any).unresolved || !rawId);
 
-      const id = rawId || `${sphVal}_${cylVal}_${axisVal || 0}_${addVal || 0}_${sideVal}`;
-      const qtyNum = Number(b.quantity);
-      if (qtyNum > 0) {
-        initialMap[id] = {
-          batch: {
-            id,
-            sph: sphVal,
-            cyl: cylVal,
-            axis: axisVal,
-            add: addVal,
-            side: sideVal,
-            barcode: barcodeVal,
-            availableStock: stockVal,
-            rate: b.rate !== undefined ? Number(b.rate) : undefined,
-            formattedName: formatOpticalBatchName({
-              sph: sphVal,
-              cyl: cylVal,
-              axis: axisVal,
-              add: addVal,
-              side: sideVal,
-              categoryCode: normCategory,
-            }),
-          },
-          quantityStr: String(qtyNum),
-          error: null,
-        };
-        initialIds.push(id);
-      }
+      const rowId = `init-row-${idx}-${Date.now()}-${Math.random().toString(36).substring(2, 6)}`;
+      const formattedName = formatOpticalBatchName({
+        sph: sphVal,
+        cyl: cylVal,
+        axis: axisVal,
+        add: addVal,
+        side: sideVal,
+        categoryCode: normCategory,
+      });
+
+      return {
+        rowId,
+        batchId: rawId || undefined,
+        batch: {
+          id: rawId,
+          sph: sphVal,
+          cyl: cylVal,
+          axis: axisVal,
+          add: addVal,
+          side: sideVal,
+          barcode: barcodeVal,
+          availableStock: stockVal,
+          rate: b.rate !== undefined ? Number(b.rate) : undefined,
+          formattedName,
+        },
+        quantityStr: String(b.quantity ?? 1),
+        error: isUnresolved ? (b as any).error || 'Batch power not found for this item' : null,
+        unresolved: isUnresolved,
+      };
     });
 
-    setAllocationsMap(initialMap);
-    setAllocatedIds(initialIds);
+    setAllocations(initialRows);
 
-    // Initialize batch cache from props if provided
+    // Initialize batch cache from props or fetch immediately from server
     if (propAvailableBatches && propAvailableBatches.length > 0) {
       batchesCacheRef.current = propAvailableBatches;
     } else {
       batchesCacheRef.current = [];
+    }
+
+    if (uniqueItemId) {
+      apiRequest<{ batches: any[] }>(
+        `/api/sales/unique-items/${uniqueItemId}/batches?limit=1000&onlyInStock=false`
+      )
+        .then(res => {
+          if (res.batches && res.batches.length > 0) {
+            batchesCacheRef.current = res.batches;
+          }
+        })
+        .catch(err => {
+          console.warn('Preload batches error:', err);
+        });
     }
 
     // Auto-focus search input
@@ -223,7 +244,7 @@ export const OpticalBatchModal: React.FC<OpticalBatchModalProps> = ({
       searchInputRef.current?.focus();
       searchInputRef.current?.select();
     }, 60);
-  }, [isOpen, initialBatches, normCategory, propAvailableBatches]);
+  }, [isOpen, initialBatches, normCategory, propAvailableBatches, uniqueItemId]);
 
   // Debounced search-driven batch querying
   useEffect(() => {
@@ -267,7 +288,7 @@ export const OpticalBatchModal: React.FC<OpticalBatchModalProps> = ({
       setSearchResults(clientMatches.slice(0, 25));
     }
 
-    // Call server search with debounce to guarantee up-to-date stock and cover thousands of records
+    // Call server search with debounce to guarantee up-to-date stock
     let cancelled = false;
     setIsSearching(true);
 
@@ -319,44 +340,16 @@ export const OpticalBatchModal: React.FC<OpticalBatchModalProps> = ({
     }
   }, [activeSearchIndex, showDropdown]);
 
-  // Select a batch from search and add to allocations
+  // FIX 1: Select a batch from search and add a NEW allocation row without overwriting or merging!
   const handleSelectBatch = useCallback(
     (batch: any) => {
-      const batchId = batch.id;
       setSearchQuery('');
       setShowDropdown(false);
       setErrorMessage(null);
 
-      // Check if already allocated
-      if (allocationsMap[batchId]) {
-        // Do NOT duplicate; focus existing quantity input
-        setDuplicateNotice(
-          `Batch "${
-            batch.formattedName ||
-            formatOpticalBatchName({
-              sph: batch.sph,
-              cyl: batch.cyl,
-              axis: batch.axis,
-              add: batch.add,
-              side: batch.side,
-              categoryCode: normCategory,
-            })
-          }" is already added. Edit quantity below.`
-        );
-        setTimeout(() => setDuplicateNotice(null), 3000);
-
-        setTimeout(() => {
-          const inputEl = qtyInputRefs.current[batchId];
-          if (inputEl) {
-            inputEl.focus();
-            inputEl.select();
-          }
-        }, 50);
-        return;
-      }
-
-      // Add to allocated batches with default initial quantity
-      const defaultQty = lineQuantity > 0 && allocatedIds.length === 0 ? lineQuantity : 1;
+      // Generate a distinct rowId for this entry
+      const rowId = `alloc-${Date.now()}-${Math.random().toString(36).substring(2, 7)}`;
+      const defaultQty = lineQuantity > 0 && allocations.length === 0 ? lineQuantity : 1;
       const formattedName =
         batch.formattedName ||
         formatOpticalBatchName({
@@ -373,82 +366,83 @@ export const OpticalBatchModal: React.FC<OpticalBatchModalProps> = ({
         formattedName,
       };
 
-      setAllocationsMap(prev => ({
-        ...prev,
-        [batchId]: {
-          batch: fullBatch,
-          quantityStr: String(defaultQty),
-          error: null,
-        },
-      }));
-      setAllocatedIds(prev => [...prev, batchId]);
+      const newRow: AllocationRecord = {
+        rowId,
+        batchId: batch.id,
+        batch: fullBatch,
+        quantityStr: String(defaultQty),
+        error: null,
+        unresolved: false,
+      };
 
-      // Automatically focus its Quantity field so salesperson can type manually
+      // Retain existing rows and append this new allocation row
+      setAllocations(prev => [...prev, newRow]);
+
+      // Automatically focus the new row's Quantity input so salesperson can type manually
       setTimeout(() => {
-        const inputEl = qtyInputRefs.current[batchId];
+        const inputEl = qtyInputRefs.current[rowId];
         if (inputEl) {
           inputEl.focus();
           inputEl.select();
         }
       }, 50);
     },
-    [allocationsMap, allocatedIds.length, lineQuantity, normCategory]
+    [allocations.length, lineQuantity, normCategory]
   );
 
   // Manual quantity change handler (plain text / numbers, no spinners)
-  const handleQuantityTextChange = (batchId: string, val: string) => {
-    setAllocationsMap(prev => {
-      const record = prev[batchId];
-      if (!record) return prev;
-
-      let errorMsg: string | null = null;
-      if (val.trim() !== '') {
-        const num = parseFloat(val);
-        if (isNaN(num) || num <= 0) {
-          errorMsg = 'Quantity must be > 0';
-        } else if (!isValidQtyForUnit(num, unitDisplay)) {
-          errorMsg = isPcs
-            ? 'Must be a whole integer (e.g. 1, 2, 3)'
-            : 'Must be multiple of 0.5 (e.g. 0.5, 1, 1.5, 2)';
+  const handleQuantityTextChange = (rowId: string, val: string) => {
+    setAllocations(prev =>
+      prev.map(row => {
+        if (row.rowId !== rowId) return row;
+        let errorMsg: string | null = null;
+        if (val.trim() !== '') {
+          const num = parseFloat(val);
+          if (isNaN(num) || num <= 0) {
+            errorMsg = 'Quantity must be > 0';
+          } else if (!isValidQtyForUnit(num, unitDisplay)) {
+            errorMsg = isPcs
+              ? 'Must be a whole integer (e.g. 1, 2, 3)'
+              : 'Must be multiple of 0.5 (e.g. 0.5, 1, 1.5, 2)';
+          }
         }
-      }
-
-      return {
-        ...prev,
-        [batchId]: {
-          ...record,
+        return {
+          ...row,
           quantityStr: val,
           error: errorMsg,
-        },
-      };
-    });
+        };
+      })
+    );
     setErrorMessage(null);
   };
 
-  // When Enter is pressed in Quantity input -> Accept quantity and return focus to Search
+  // When Enter is pressed in Quantity input -> Accept quantity and return focus to Search for next entry
   const handleQuantityKeyDown = (
     e: React.KeyboardEvent<HTMLInputElement>,
-    batchId: string
+    rowId: string
   ) => {
     if (e.key === 'Enter') {
       e.preventDefault();
-      const record = allocationsMap[batchId];
-      const num = parseFloat(record?.quantityStr || '0');
+      const row = allocations.find(r => r.rowId === rowId);
+      const num = parseFloat(row?.quantityStr || '0');
 
       if (isNaN(num) || num <= 0 || !isValidQtyForUnit(num, unitDisplay)) {
-        setAllocationsMap(prev => ({
-          ...prev,
-          [batchId]: {
-            ...prev[batchId],
-            error: isPcs
-              ? 'Must be a positive whole number (e.g. 1, 2, 3)'
-              : 'Must be a positive multiple of 0.5 (e.g. 0.5, 1.0, 1.5, 2.0)',
-          },
-        }));
+        setAllocations(prev =>
+          prev.map(r =>
+            r.rowId === rowId
+              ? {
+                  ...r,
+                  error: isPcs
+                    ? 'Must be a positive whole number (e.g. 1, 2, 3)'
+                    : 'Must be a positive multiple of 0.5 (e.g. 0.5, 1.0, 1.5, 2.0)',
+                }
+              : r
+          )
+        );
         return;
       }
 
-      // Quantity accepted; focus returns to Search box for next batch
+      // Quantity accepted; focus returns to Search box for next batch power entry
       setSearchQuery('');
       setShowDropdown(false);
       searchInputRef.current?.focus();
@@ -459,13 +453,12 @@ export const OpticalBatchModal: React.FC<OpticalBatchModalProps> = ({
       searchInputRef.current?.select();
     } else if (e.key === 'ArrowUp' || e.key === 'ArrowDown') {
       e.preventDefault();
-      const curIndex = allocatedIds.indexOf(batchId);
-      const targetIndex =
-        e.key === 'ArrowDown' ? curIndex + 1 : curIndex - 1;
+      const curIndex = allocations.findIndex(r => r.rowId === rowId);
+      const targetIndex = e.key === 'ArrowDown' ? curIndex + 1 : curIndex - 1;
 
-      if (targetIndex >= 0 && targetIndex < allocatedIds.length) {
-        const nextId = allocatedIds[targetIndex];
-        const nextEl = qtyInputRefs.current[nextId];
+      if (targetIndex >= 0 && targetIndex < allocations.length) {
+        const nextRow = allocations[targetIndex];
+        const nextEl = qtyInputRefs.current[nextRow.rowId];
         nextEl?.focus();
         nextEl?.select();
       } else if (e.key === 'ArrowUp' && curIndex === 0) {
@@ -475,14 +468,9 @@ export const OpticalBatchModal: React.FC<OpticalBatchModalProps> = ({
     }
   };
 
-  // Remove a batch from current voucher allocation
-  const handleRemoveAllocation = (batchId: string) => {
-    setAllocationsMap(prev => {
-      const next = { ...prev };
-      delete next[batchId];
-      return next;
-    });
-    setAllocatedIds(prev => prev.filter(id => id !== batchId));
+  // Remove a batch row from current voucher allocation
+  const handleRemoveAllocation = (rowId: string) => {
+    setAllocations(prev => prev.filter(r => r.rowId !== rowId));
     setErrorMessage(null);
 
     // Return focus to search input
@@ -492,80 +480,147 @@ export const OpticalBatchModal: React.FC<OpticalBatchModalProps> = ({
   };
 
   const handleClearAll = () => {
-    setAllocationsMap({});
-    setAllocatedIds([]);
+    setAllocations([]);
     setErrorMessage(null);
     searchInputRef.current?.focus();
   };
 
-  // Total quantity calculation
+  // Inline resolution for an unresolved batch row
+  const handleResolveUnresolvedRow = async (rowId: string) => {
+    const row = allocations.find(r => r.rowId === rowId);
+    if (!row || !uniqueItemId) return;
+
+    if (!canCreateBatch) {
+      setErrorMessage(
+        'Batch creation is disabled in business settings. Please search and select an available batch.'
+      );
+      return;
+    }
+
+    try {
+      setErrorMessage(null);
+      const res = await apiRequest<any>('/api/optical-master/batches/find-or-create', {
+        method: 'POST',
+        body: JSON.stringify({
+          uniqueItemId,
+          sph: parseFloat(String(row.batch.sph || 0)) || 0,
+          cyl: parseFloat(String(row.batch.cyl || 0)) || 0,
+          axis: parseInt(String(row.batch.axis || 0), 10) || 0,
+          add: parseFloat(String(row.batch.add || 0)) || 0,
+          side: row.batch.side || 'NONE',
+        }),
+      });
+
+      const resolvedBatch = res.batch;
+      if (!resolvedBatch) throw new Error('Could not resolve or create optical batch');
+
+      // Update the allocation row
+      setAllocations(prev =>
+        prev.map(r =>
+          r.rowId === rowId
+            ? {
+                ...r,
+                batchId: resolvedBatch.id,
+                batch: {
+                  ...resolvedBatch,
+                  formattedName: formatOpticalBatchName({
+                    sph: resolvedBatch.sph,
+                    cyl: resolvedBatch.cyl,
+                    axis: resolvedBatch.axis,
+                    add: resolvedBatch.add,
+                    side: resolvedBatch.side,
+                    categoryCode: normCategory,
+                  }),
+                },
+                unresolved: false,
+                error: null,
+              }
+            : r
+        )
+      );
+
+      // Add to local cache
+      batchesCacheRef.current.unshift(resolvedBatch);
+    } catch (err: any) {
+      setErrorMessage(err.message || 'Failed to create missing batch for this power');
+    }
+  };
+
+  // Total quantity calculation across all rows (including duplicate power rows)
   const totalAllocatedQty = useMemo(() => {
-    return allocatedIds.reduce((sum, id) => {
-      const rec = allocationsMap[id];
-      const num = parseFloat(rec?.quantityStr || '0');
+    return allocations.reduce((sum, r) => {
+      const num = parseFloat(r.quantityStr || '0');
       return sum + (!isNaN(num) && num > 0 ? num : 0);
     }, 0);
-  }, [allocatedIds, allocationsMap]);
+  }, [allocations]);
 
   // Validate & Finish allocations
   const handleApply = () => {
-    if (allocatedIds.length === 0) {
+    if (allocations.length === 0) {
       setErrorMessage('Please search and add at least one batch allocation.');
       searchInputRef.current?.focus();
       return;
     }
 
     const invalidEntries: string[] = [];
+    const unresolvedEntries: string[] = [];
     const validAllocations: BatchAllocation[] = [];
 
-    for (const id of allocatedIds) {
-      const record = allocationsMap[id];
-      const num = parseFloat(record?.quantityStr || '0');
+    for (const row of allocations) {
+      const num = parseFloat(row.quantityStr || '0');
       const batchName =
-        record.batch.formattedName ||
+        row.batch.formattedName ||
         formatOpticalBatchName({
-          sph: record.batch.sph,
-          cyl: record.batch.cyl,
-          axis: record.batch.axis,
-          add: record.batch.add,
-          side: record.batch.side,
+          sph: row.batch.sph,
+          cyl: row.batch.cyl,
+          axis: row.batch.axis,
+          add: row.batch.add,
+          side: row.batch.side,
           categoryCode: normCategory,
         });
 
       if (isNaN(num) || num <= 0 || !isValidQtyForUnit(num, unitDisplay)) {
-        invalidEntries.push(`${batchName} (value: "${record?.quantityStr || ''}")`);
+        invalidEntries.push(`${batchName} (value: "${row.quantityStr || ''}")`);
+      } else if (row.unresolved || !row.batchId) {
+        unresolvedEntries.push(batchName);
       } else {
         validAllocations.push({
-          batchId: record.batch.id,
-          sph: record.batch.sph ?? '0.00',
-          cyl: record.batch.cyl ?? '0.00',
-          axis: record.batch.axis ?? '',
-          add: record.batch.add ?? '',
-          side: record.batch.side ?? 'NONE',
+          batchId: row.batchId,
+          sph: row.batch.sph ?? '0.00',
+          cyl: row.batch.cyl ?? '0.00',
+          axis: row.batch.axis ?? '',
+          add: row.batch.add ?? '',
+          side: row.batch.side ?? 'NONE',
           quantity: num,
-          rate: record.batch.rate !== undefined && !isNaN(Number(record.batch.rate)) ? Number(record.batch.rate) : lineRate,
-          barcode: record.batch.barcode,
-          availableStock: parseFloat(record.batch.availableStock || 0),
+          rate:
+            row.batch.rate !== undefined && !isNaN(Number(row.batch.rate))
+              ? Number(row.batch.rate)
+              : lineRate,
+          barcode: row.batch.barcode,
+          availableStock: parseFloat(row.batch.availableStock || 0),
         });
       }
+    }
+
+    if (unresolvedEntries.length > 0) {
+      setErrorMessage(
+        `Unavailable target batches detected for: ${unresolvedEntries.join(
+          ', '
+        )}. These batches are not registered for ${itemName}. Please create or select valid batches.`
+      );
+      return;
     }
 
     if (invalidEntries.length > 0) {
       setErrorMessage(
         isPcs
-          ? `Invalid quantity for: ${invalidEntries.join(', ')}. All quantities for PCS items must be positive whole numbers (e.g. 1, 2, 3).`
-          : `Invalid quantity for: ${invalidEntries.join(', ')}. All quantities must be positive multiples of 0.5 (e.g. 0.5, 1.0, 1.5, 2.0).`
+          ? `Invalid quantity for: ${invalidEntries.join(
+              ', '
+            )}. All quantities for PCS items must be positive whole numbers (e.g. 1, 2, 3).`
+          : `Invalid quantity for: ${invalidEntries.join(
+              ', '
+            )}. All quantities must be positive multiples of 0.5 (e.g. 0.5, 1.0, 1.5, 2.0).`
       );
-      // Focus the first invalid field
-      const firstInvalidId = allocatedIds.find(id => {
-        const n = parseFloat(allocationsMap[id]?.quantityStr || '0');
-        return isNaN(n) || n <= 0 || !isValidQtyForUnit(n, unitDisplay);
-      });
-      if (firstInvalidId) {
-        const el = qtyInputRefs.current[firstInvalidId];
-        el?.focus();
-        el?.select();
-      }
       return;
     }
 
@@ -574,7 +629,7 @@ export const OpticalBatchModal: React.FC<OpticalBatchModalProps> = ({
     onClose();
   };
 
-  // Purchase mode: create new batch
+  // Quick batch creation drawer submit
   const handleCreateNewBatch = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!uniqueItemId) {
@@ -594,8 +649,8 @@ export const OpticalBatchModal: React.FC<OpticalBatchModalProps> = ({
           uniqueItemId,
           sph: parseFloat(newSph) || 0,
           cyl: cylVal,
-          axis: isBifocalOrProg ? (isCylNonZero ? (parseInt(newAxis, 10) || 0) : 0) : 0,
-          add: isBifocalOrProg ? (parseFloat(newAdd) || 0) : 0,
+          axis: isBifocalOrProg ? (isCylNonZero ? parseInt(newAxis, 10) || 0 : 0) : 0,
+          add: isBifocalOrProg ? parseFloat(newAdd) || 0 : 0,
           side: normCategory === 'PROG' ? (newSide === 'NONE' ? 'R' : newSide) : 'NONE',
         }),
       });
@@ -608,7 +663,7 @@ export const OpticalBatchModal: React.FC<OpticalBatchModalProps> = ({
       // Add to batch cache
       batchesCacheRef.current.unshift(created);
 
-      // Select and add this newly created batch
+      // Select and add this newly created batch as a new row
       handleSelectBatch(created);
       setShowCreateBatch(false);
       setSearchQuery('');
@@ -645,107 +700,73 @@ export const OpticalBatchModal: React.FC<OpticalBatchModalProps> = ({
             <div>
               <div className="flex items-center gap-2">
                 <h3 className="text-sm font-black text-white tracking-wider uppercase">
-                  {allocatedIds.length > 0 ? 'Edit Batch Allocations' : 'Batch Allocations'}
+                  {allocations.length > 0 ? 'Edit Batch Allocations' : 'Batch Allocations'}
                 </h3>
                 <span className="px-2 py-0.5 rounded text-[10px] font-mono font-black bg-blue-600 text-white border border-blue-400 uppercase tracking-wide">
-                  {mode.toUpperCase()} • CATEGORY: {normCategory}
+                  {normCategory}
+                </span>
+                <span className="text-xs text-slate-300 font-bold truncate max-w-xs">
+                  {itemName}
                 </span>
                 {itemCode && (
-                  <span className="text-xs text-slate-300 font-mono font-bold">[{itemCode}]</span>
+                  <span className="text-[11px] text-slate-400 font-mono">({itemCode})</span>
                 )}
               </div>
-              <div className="flex items-center gap-2 mt-0.5">
-                <p className="text-xs font-bold text-white truncate max-w-xs">
-                  {itemName}
-                </p>
-                {allocatedIds.length > 0 && (
-                  <span className="text-[11px] font-mono font-semibold text-emerald-300 bg-emerald-950/80 px-2 py-0.2 rounded border border-emerald-500/40 shrink-0">
-                    {allocatedIds.length} batch{allocatedIds.length > 1 ? 'es' : ''} currently allocated • Total Qty: {totalAllocatedQty.toFixed(2)} {unitDisplay}
-                  </span>
-                )}
-              </div>
+              <p className="text-[10px] text-slate-400 mt-0.5 font-sans">
+                Type batch power to add. Press <kbd className="px-1 py-0.2 bg-slate-700 rounded text-[9px] font-mono">Enter</kbd> to accept quantity and add another power. Multiple entries of the same power are permitted.
+              </p>
             </div>
           </div>
 
           <button
             type="button"
             onClick={onClose}
-            className="p-1 text-slate-400 hover:text-white hover:bg-slate-700 rounded transition-colors"
+            className="text-slate-400 hover:text-white p-1 rounded transition-colors cursor-pointer"
             title="Close (Esc)"
           >
             <X className="w-4 h-4" />
           </button>
         </div>
 
-        {/* Notices and Alerts */}
-        {duplicateNotice && (
-          <div className="bg-blue-50 border-b border-blue-200 px-4 py-1.5 text-xs text-blue-800 flex items-center gap-2 shrink-0 animate-in fade-in">
-            <Info className="w-3.5 h-3.5 text-blue-600 shrink-0" />
-            <span>{duplicateNotice}</span>
-          </div>
-        )}
-
+        {/* Global Error Banner */}
         {errorMessage && (
-          <div className="bg-amber-50 border-b border-amber-200 px-4 py-2 flex items-center justify-between text-xs text-amber-800 shrink-0">
-            <div className="flex items-center gap-1.5">
-              <AlertCircle className="w-4 h-4 text-amber-600 shrink-0" />
+          <div className="bg-rose-50 border-b border-rose-200 px-4 py-2 flex items-center justify-between text-xs text-rose-800 font-sans">
+            <div className="flex items-center gap-2">
+              <AlertCircle className="w-4 h-4 text-rose-600 shrink-0" />
               <span>{errorMessage}</span>
             </div>
             <button
               type="button"
               onClick={() => setErrorMessage(null)}
-              className="text-amber-600 hover:text-amber-800 font-bold"
+              className="text-rose-500 hover:text-rose-700 p-0.5"
             >
-              ✕
+              <X className="w-3.5 h-3.5" />
             </button>
           </div>
         )}
 
-        {/* Search / Entry Section (Primary Batch Entry) */}
-        <div className="p-4 bg-slate-50 border-b border-slate-200 shrink-0 relative">
-          <div className="flex items-center justify-between mb-1.5">
-            <label className="text-xs font-black text-slate-950 uppercase tracking-wide">
-              Add Batch / Power:
-            </label>
-            {canCreateBatch && (
-              <button
-                type="button"
-                onClick={() => {
-                  if (!showCreateBatch) {
-                    prefillFromSearch(searchQuery);
-                  }
-                  setShowCreateBatch(prev => !prev);
-                }}
-                className="text-xs text-blue-600 hover:text-blue-800 font-semibold flex items-center gap-1"
-              >
-                <Plus className="w-3 h-3" />
-                <span>{showCreateBatch ? 'Hide Power Creator' : '+ Create Missing Batch'}</span>
-              </button>
-            )}
-          </div>
-
+        {/* Search & Selection Bar */}
+        <div className="p-3 bg-slate-100 border-b border-slate-300 shrink-0">
           <div className="relative">
-            <Search className="w-4 h-4 absolute left-3 top-2.5 text-slate-400" />
+            <Search className="w-4 h-4 absolute left-3 top-2.5 text-slate-400 pointer-events-none" />
             <input
               ref={searchInputRef}
               type="text"
               value={searchQuery}
               onChange={e => setSearchQuery(e.target.value)}
               onFocus={() => {
-                if (searchQuery.trim().length > 0) {
-                  setShowDropdown(true);
-                }
+                if (searchQuery.trim()) setShowDropdown(true);
               }}
               onKeyDown={e => {
                 if (showDropdown && searchResults.length > 0) {
                   if (e.key === 'ArrowDown') {
                     e.preventDefault();
-                    setActiveSearchIndex(i =>
-                      Math.min(i + 1, searchResults.length - 1)
+                    setActiveSearchIndex(prev =>
+                      prev < searchResults.length - 1 ? prev + 1 : prev
                     );
                   } else if (e.key === 'ArrowUp') {
                     e.preventDefault();
-                    setActiveSearchIndex(i => Math.max(i - 1, 0));
+                    setActiveSearchIndex(prev => (prev > 0 ? prev - 1 : prev));
                   } else if (e.key === 'Enter') {
                     e.preventDefault();
                     const selected = searchResults[activeSearchIndex];
@@ -759,8 +780,8 @@ export const OpticalBatchModal: React.FC<OpticalBatchModalProps> = ({
                   }
                 } else if (e.key === 'Enter') {
                   if (!searchQuery.trim()) {
-                    // If user presses Enter on empty search and allocations exist, accept
-                    if (allocatedIds.length > 0) {
+                    // Enter on empty search accepts allocations
+                    if (allocations.length > 0) {
                       e.preventDefault();
                       handleApply();
                     }
@@ -771,15 +792,14 @@ export const OpticalBatchModal: React.FC<OpticalBatchModalProps> = ({
                     setShowCreateBatch(true);
                     setShowDropdown(false);
                   }
-                } else if (e.key === 'ArrowDown' && allocatedIds.length > 0) {
-                  // Down arrow moves into allocated table
+                } else if (e.key === 'ArrowDown' && allocations.length > 0) {
                   e.preventDefault();
-                  const firstInput = qtyInputRefs.current[allocatedIds[0]];
+                  const firstInput = qtyInputRefs.current[allocations[0].rowId];
                   firstInput?.focus();
                   firstInput?.select();
                 }
               }}
-              placeholder="Type batch power (e.g., 25 1 for -2.50/-1.00, or barcode)..."
+              placeholder="Type batch power (e.g., -3.25/0.00, or 25 1, or barcode)..."
               className="w-full pl-9 pr-8 py-2 text-xs bg-white border border-slate-300 rounded-md font-mono text-slate-900 placeholder:text-slate-400 placeholder:font-sans focus:outline-none focus:ring-2 focus:ring-blue-600 focus:border-blue-600 shadow-2xs"
             />
             {searchQuery && (
@@ -790,7 +810,7 @@ export const OpticalBatchModal: React.FC<OpticalBatchModalProps> = ({
                   setShowDropdown(false);
                   searchInputRef.current?.focus();
                 }}
-                className="absolute right-2.5 top-2.5 text-slate-400 hover:text-slate-600 p-0.5"
+                className="absolute right-2.5 top-2.5 text-slate-400 hover:text-slate-600 p-0.5 cursor-pointer"
               >
                 <X className="w-3.5 h-3.5" />
               </button>
@@ -820,7 +840,7 @@ export const OpticalBatchModal: React.FC<OpticalBatchModalProps> = ({
                           setShowCreateBatch(true);
                           setShowDropdown(false);
                         }}
-                        className="mt-2 px-3 py-1 text-xs font-bold text-blue-700 bg-blue-50 hover:bg-blue-100 rounded border border-blue-200 inline-flex items-center gap-1"
+                        className="mt-2 px-3 py-1 text-xs font-bold text-blue-700 bg-blue-50 hover:bg-blue-100 rounded border border-blue-200 inline-flex items-center gap-1 cursor-pointer"
                       >
                         <Plus className="w-3 h-3" />
                         <span>Create Missing Batch {searchQuery ? `"${searchQuery}"` : ''}</span>
@@ -830,7 +850,7 @@ export const OpticalBatchModal: React.FC<OpticalBatchModalProps> = ({
                 ) : (
                   searchResults.map((b, idx) => {
                     const isActive = idx === activeSearchIndex;
-                    const isAlreadyAllocated = Boolean(allocationsMap[b.id]);
+                    const allocatedCount = allocations.filter(r => r.batchId === b.id).length;
                     const formattedName =
                       b.formattedName ||
                       formatOpticalBatchName({
@@ -849,7 +869,6 @@ export const OpticalBatchModal: React.FC<OpticalBatchModalProps> = ({
                       <div
                         key={b.id}
                         onMouseDown={e => {
-                          // Prevent input blur before click registers
                           e.preventDefault();
                           handleSelectBatch(b);
                         }}
@@ -868,9 +887,9 @@ export const OpticalBatchModal: React.FC<OpticalBatchModalProps> = ({
                               {b.barcode}
                             </span>
                           )}
-                          {isAlreadyAllocated && (
+                          {allocatedCount > 0 && (
                             <span className="px-1.5 py-0.2 rounded text-[9px] font-sans font-bold bg-blue-100 text-blue-800 border border-blue-200">
-                              Added
+                              Added ({allocatedCount})
                             </span>
                           )}
                         </div>
@@ -887,7 +906,9 @@ export const OpticalBatchModal: React.FC<OpticalBatchModalProps> = ({
                           >
                             {availStock.toFixed(2)}
                           </span>
-                          <span className="text-[10px] text-slate-400 ml-1 font-sans uppercase">{unitDisplay}</span>
+                          <span className="text-[10px] text-slate-400 ml-1 font-sans uppercase">
+                            {unitDisplay}
+                          </span>
                         </div>
                       </div>
                     );
@@ -934,7 +955,9 @@ export const OpticalBatchModal: React.FC<OpticalBatchModalProps> = ({
               </div>
 
               <div>
-                <label className="block text-[10px] font-black text-slate-950 uppercase tracking-wider mb-0.5">CYL</label>
+                <label className="block text-[10px] font-black text-slate-950 uppercase tracking-wider mb-0.5">
+                  CYL
+                </label>
                 <input
                   type="number"
                   step="0.25"
@@ -946,7 +969,9 @@ export const OpticalBatchModal: React.FC<OpticalBatchModalProps> = ({
 
               {isBifocalOrProg && (
                 <div>
-                  <label className="block text-[10px] font-black text-slate-950 uppercase tracking-wider mb-0.5">AXIS</label>
+                  <label className="block text-[10px] font-black text-slate-950 uppercase tracking-wider mb-0.5">
+                    AXIS
+                  </label>
                   <input
                     type="number"
                     min="0"
@@ -966,7 +991,9 @@ export const OpticalBatchModal: React.FC<OpticalBatchModalProps> = ({
 
               {isBifocalOrProg && (
                 <div>
-                  <label className="block text-[10px] font-black text-slate-950 uppercase tracking-wider mb-0.5">+ADD</label>
+                  <label className="block text-[10px] font-black text-slate-950 uppercase tracking-wider mb-0.5">
+                    +ADD
+                  </label>
                   <input
                     type="number"
                     step="0.25"
@@ -981,7 +1008,9 @@ export const OpticalBatchModal: React.FC<OpticalBatchModalProps> = ({
 
               {normCategory === 'PROG' && (
                 <div>
-                  <label className="block text-[10px] font-black text-slate-950 uppercase tracking-wider mb-0.5">SIDE</label>
+                  <label className="block text-[10px] font-black text-slate-950 uppercase tracking-wider mb-0.5">
+                    SIDE
+                  </label>
                   <select
                     value={newSide === 'NONE' ? 'R' : newSide}
                     onChange={e => setNewSide(e.target.value as any)}
@@ -998,7 +1027,7 @@ export const OpticalBatchModal: React.FC<OpticalBatchModalProps> = ({
                 <button
                   type="submit"
                   disabled={creatingBatch}
-                  className="w-full py-1 px-3 text-xs font-bold text-white bg-blue-600 hover:bg-blue-700 disabled:bg-blue-400 rounded transition-colors shadow-2xs"
+                  className="w-full py-1 px-3 text-xs font-bold text-white bg-blue-600 hover:bg-blue-700 disabled:bg-blue-400 rounded transition-colors shadow-2xs cursor-pointer"
                 >
                   {creatingBatch ? 'Adding...' : '+ Add Power'}
                 </button>
@@ -1007,38 +1036,41 @@ export const OpticalBatchModal: React.FC<OpticalBatchModalProps> = ({
           </form>
         )}
 
-        {/* Allocated Batches Table (Only allocated batches are displayed) */}
+        {/* Allocated Batches Table */}
         <div className="flex-1 min-h-0 overflow-y-auto bg-white flex flex-col">
           <div className="px-4 py-2 bg-slate-200 border-b border-slate-300 flex items-center justify-between text-xs font-black text-slate-950 uppercase tracking-wider">
             <span>Allocated Batches:</span>
             <span className="text-slate-700 font-bold font-mono">
-              {allocatedIds.length} {allocatedIds.length === 1 ? 'batch' : 'batches'} selected
+              {allocations.length} {allocations.length === 1 ? 'row' : 'rows'} entered
             </span>
           </div>
 
-          {allocatedIds.length === 0 ? (
+          {allocations.length === 0 ? (
             <div className="py-12 px-4 text-center text-xs text-slate-400 font-sans my-auto">
               <Layers className="w-8 h-8 mx-auto text-slate-300 mb-2" />
               <p className="font-bold text-slate-700">No batches allocated yet</p>
               <p className="text-[11px] text-slate-500 mt-1">
-                Type batch power in the search box above (e.g. <span className="font-mono font-bold text-slate-700">25 1</span>) and press Enter to add.
+                Type batch power in the search box above (e.g.{' '}
+                <span className="font-mono font-bold text-slate-700">-3.25/0.00</span> or{' '}
+                <span className="font-mono font-bold text-slate-700">25 1</span>) and press Enter to add.
               </p>
             </div>
           ) : (
             <table className="w-full text-xs text-left border-collapse">
               <thead className="bg-slate-200 text-slate-950 font-black border-b-2 border-slate-300 sticky top-0 z-10 font-sans uppercase tracking-wider text-[11px]">
                 <tr>
+                  <th className="py-2.5 px-3 text-slate-950 font-black">#</th>
                   <th className="py-2.5 px-3 text-slate-950 font-black">Batch / Power</th>
                   <th className="py-2.5 px-3 text-right text-slate-950 font-black">Available</th>
-                  <th className="py-2.5 px-3 text-right w-36 text-slate-950 font-black">Qty ({unitDisplay})</th>
+                  <th className="py-2.5 px-3 text-right w-36 text-slate-950 font-black">
+                    Qty ({unitDisplay})
+                  </th>
                   <th className="py-2.5 px-2 text-center w-12 text-slate-950 font-black">Remove</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-100 font-mono">
-                {allocatedIds.map(batchId => {
-                  const record = allocationsMap[batchId];
-                  if (!record) return null;
-                  const b = record.batch;
+                {allocations.map((row, idx) => {
+                  const b = row.batch;
                   const formattedName =
                     b.formattedName ||
                     formatOpticalBatchName({
@@ -1052,54 +1084,92 @@ export const OpticalBatchModal: React.FC<OpticalBatchModalProps> = ({
                   const availStock = parseFloat(
                     b.availableStock !== undefined ? b.availableStock : b.quantityRemaining || 0
                   );
-                  const hasError = Boolean(record.error);
+                  const hasError = Boolean(row.error);
+                  const isUnresolved = Boolean(row.unresolved || !row.batchId);
 
                   return (
                     <tr
-                      key={batchId}
-                      className="hover:bg-slate-50/80 transition-colors"
+                      key={row.rowId}
+                      className={`hover:bg-slate-50/80 transition-colors ${
+                        isUnresolved ? 'bg-amber-50/60' : ''
+                      }`}
                     >
+                      {/* Row Index */}
+                      <td className="py-2.5 px-3 text-slate-400 font-sans text-[11px]">
+                        #{idx + 1}
+                      </td>
+
                       {/* Batch / Power */}
                       <td className="py-2.5 px-3">
-                        <div className="font-bold text-slate-900 text-xs">
-                          {formattedName}
+                        <div className="font-bold text-slate-900 text-xs flex items-center gap-1.5">
+                          <span>{formattedName}</span>
+                          {isUnresolved && (
+                            <span className="inline-flex items-center gap-1 px-1.5 py-0.2 rounded text-[10px] font-sans font-bold bg-amber-100 text-amber-800 border border-amber-300">
+                              <AlertTriangle className="w-3 h-3 text-amber-600" />
+                              <span>Power not in {itemName}</span>
+                            </span>
+                          )}
                         </div>
+
                         {b.barcode && (
                           <div className="text-[10px] text-slate-400 font-sans flex items-center gap-1 mt-0.5">
                             <Hash className="w-2.5 h-2.5" />
                             <span>{b.barcode}</span>
                           </div>
                         )}
+
+                        {isUnresolved && canCreateBatch && (
+                          <div className="mt-1">
+                            <button
+                              type="button"
+                              onClick={() => handleResolveUnresolvedRow(row.rowId)}
+                              className="text-[10px] font-sans font-bold text-blue-700 bg-blue-50 hover:bg-blue-100 px-2 py-0.5 rounded border border-blue-200 inline-flex items-center gap-1 cursor-pointer"
+                            >
+                              <Plus className="w-2.5 h-2.5" />
+                              <span>Create batch for this power</span>
+                            </button>
+                          </div>
+                        )}
                       </td>
 
                       {/* Available Stock */}
                       <td className="py-2.5 px-3 text-right">
-                        <span
-                          className={`font-semibold ${
-                            availStock < 0
-                              ? 'text-rose-600 font-bold bg-rose-50 px-1.5 py-0.5 rounded'
-                              : availStock === 0
-                              ? 'text-amber-600'
-                              : 'text-emerald-700'
-                          }`}
-                        >
-                          {availStock.toFixed(2)}
-                        </span>
-                        <span className="text-[10px] text-slate-400 ml-1 font-sans uppercase">{unitDisplay}</span>
+                        {isUnresolved ? (
+                          <span className="text-[11px] text-amber-700 font-sans italic">
+                            Unmapped
+                          </span>
+                        ) : (
+                          <>
+                            <span
+                              className={`font-semibold ${
+                                availStock < 0
+                                  ? 'text-rose-600 font-bold bg-rose-50 px-1.5 py-0.5 rounded'
+                                  : availStock === 0
+                                  ? 'text-amber-600'
+                                  : 'text-emerald-700'
+                              }`}
+                            >
+                              {availStock.toFixed(2)}
+                            </span>
+                            <span className="text-[10px] text-slate-400 ml-1 font-sans uppercase">
+                              {unitDisplay}
+                            </span>
+                          </>
+                        )}
                       </td>
 
-                      {/* Manual Quantity Input (NO SPINNER ARROWS, NO +/- BUTTONS) */}
+                      {/* Manual Quantity Input */}
                       <td className="py-2 px-3 text-right">
                         <div className="flex flex-col items-end">
                           <input
                             ref={el => {
-                              qtyInputRefs.current[batchId] = el;
+                              qtyInputRefs.current[row.rowId] = el;
                             }}
                             type="text"
                             inputMode="decimal"
-                            value={record.quantityStr ?? ''}
-                            onChange={e => handleQuantityTextChange(batchId, e.target.value)}
-                            onKeyDown={e => handleQuantityKeyDown(e, batchId)}
+                            value={row.quantityStr ?? ''}
+                            onChange={e => handleQuantityTextChange(row.rowId, e.target.value)}
+                            onKeyDown={e => handleQuantityKeyDown(e, row.rowId)}
                             placeholder="1.0"
                             className={`w-24 px-2 py-1 text-xs text-right border rounded font-mono font-bold focus:outline-none focus:ring-2 [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none ${
                               hasError
@@ -1109,7 +1179,7 @@ export const OpticalBatchModal: React.FC<OpticalBatchModalProps> = ({
                           />
                           {hasError && (
                             <span className="text-[10px] text-red-600 font-sans mt-0.5">
-                              {record.error}
+                              {row.error}
                             </span>
                           )}
                         </div>
@@ -1119,9 +1189,9 @@ export const OpticalBatchModal: React.FC<OpticalBatchModalProps> = ({
                       <td className="py-2.5 px-2 text-center">
                         <button
                           type="button"
-                          onClick={() => handleRemoveAllocation(batchId)}
-                          className="p-1 text-slate-400 hover:text-red-600 rounded transition-colors"
-                          title="Remove Allocation"
+                          onClick={() => handleRemoveAllocation(row.rowId)}
+                          className="p-1 text-slate-400 hover:text-red-600 rounded transition-colors cursor-pointer"
+                          title="Remove Allocation Row"
                         >
                           <Trash2 className="w-3.5 h-3.5" />
                         </button>
@@ -1159,11 +1229,11 @@ export const OpticalBatchModal: React.FC<OpticalBatchModalProps> = ({
 
           {/* Right Action Buttons */}
           <div className="flex items-center gap-2">
-            {allocatedIds.length > 0 && (
+            {allocations.length > 0 && (
               <button
                 type="button"
                 onClick={handleClearAll}
-                className="px-2.5 py-1 text-xs text-slate-600 hover:text-red-700 hover:bg-slate-200 rounded transition-colors"
+                className="px-2.5 py-1 text-xs text-slate-600 hover:text-red-700 hover:bg-slate-200 rounded transition-colors cursor-pointer"
               >
                 Clear All
               </button>
@@ -1172,7 +1242,7 @@ export const OpticalBatchModal: React.FC<OpticalBatchModalProps> = ({
             <button
               type="button"
               onClick={onClose}
-              className="px-3 py-1 text-xs font-semibold text-slate-700 hover:bg-slate-200 rounded border border-slate-300 transition-colors"
+              className="px-3 py-1 text-xs font-semibold text-slate-700 hover:bg-slate-200 rounded border border-slate-300 transition-colors cursor-pointer"
             >
               Cancel (Esc)
             </button>
@@ -1180,7 +1250,7 @@ export const OpticalBatchModal: React.FC<OpticalBatchModalProps> = ({
             <button
               type="button"
               onClick={handleApply}
-              className="px-4 py-1.5 text-xs font-bold text-white bg-blue-700 hover:bg-blue-800 rounded shadow-2xs transition-colors flex items-center gap-1.5"
+              className="px-4 py-1.5 text-xs font-bold text-white bg-blue-700 hover:bg-blue-800 rounded shadow-2xs transition-colors flex items-center gap-1.5 cursor-pointer"
             >
               <Check className="w-4 h-4" />
               <span>Accept Allocations (Ctrl+Enter)</span>

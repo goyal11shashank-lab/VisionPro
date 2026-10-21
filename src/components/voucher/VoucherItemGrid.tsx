@@ -262,6 +262,7 @@ export const VoucherItemGrid: React.FC<VoucherItemGridProps> = ({
                     <td className="py-0.5 px-1 font-sans">
                       <div
                         className="flex-1 min-w-0"
+                        data-contextual-owner={`stock-item-${idx}`}
                         onFocusCapture={() => {
                           setActiveRow(idx);
                           onItemFocus?.(idx);
@@ -315,6 +316,7 @@ export const VoucherItemGrid: React.FC<VoucherItemGridProps> = ({
                       {hasBatches && line.uniqueItemId ? (
                         <div className="flex items-center justify-between gap-1">
                           <button
+                            id={`voucher-item-grid-batch-${idx}`}
                             ref={el => setRef(idx, 'batch', el)}
                             type="button"
                             onClick={() => {
@@ -336,6 +338,11 @@ export const VoucherItemGrid: React.FC<VoucherItemGridProps> = ({
                                 <span className="text-[11px] text-amber-800 font-bold italic flex items-center gap-1">
                                   <AlertCircle className="w-3 h-3 shrink-0" />
                                   <span>Allocate Batches (0)</span>
+                                </span>
+                              ) : line.batches.some(b => (b as any).unresolved || !b.batchId) ? (
+                                <span className="inline-flex items-center gap-1 px-1.5 py-0.2 text-[11px] font-bold text-amber-900 bg-amber-100 rounded border border-amber-300">
+                                  <AlertCircle className="w-3 h-3 text-amber-600" />
+                                  <span>{line.batches.filter(b => (b as any).unresolved || !b.batchId).length} batch(es) need resolution</span>
                                 </span>
                               ) : batchesCount === 1 ? (
                                 <span className="text-[11px] font-mono font-black text-slate-900">
@@ -368,6 +375,7 @@ export const VoucherItemGrid: React.FC<VoucherItemGridProps> = ({
                     <td className="py-0.5 px-1 text-right">
                       {hasBatches ? (
                         <div
+                          id={`voucher-item-grid-qty-${idx}`}
                           ref={el => setRef(idx, 'qty', el)}
                           tabIndex={0}
                           onClick={() => {
@@ -404,6 +412,7 @@ export const VoucherItemGrid: React.FC<VoucherItemGridProps> = ({
                       ) : (
                         <div className="relative flex items-center">
                           <input
+                            id={`voucher-item-grid-qty-${idx}`}
                             ref={el => setRef(idx, 'qty', el)}
                             type="number"
                             min={(line.unit || 'PRS').toUpperCase() === 'PCS' ? '1' : '0.5'}
@@ -439,6 +448,7 @@ export const VoucherItemGrid: React.FC<VoucherItemGridProps> = ({
                     {/* Rate (₹) */}
                     <td className="py-0.5 px-1 text-right">
                       <input
+                        id={`voucher-item-grid-rate-${idx}`}
                         ref={el => setRef(idx, 'rate', el)}
                         type="number"
                         step="any"
@@ -469,6 +479,7 @@ export const VoucherItemGrid: React.FC<VoucherItemGridProps> = ({
                     {/* Disc % */}
                     <td className="py-0.5 px-1 text-right">
                       <input
+                        id={`voucher-item-grid-disc-${idx}`}
                         ref={el => setRef(idx, 'disc', el)}
                         type="number"
                         min="0"
@@ -497,6 +508,7 @@ export const VoucherItemGrid: React.FC<VoucherItemGridProps> = ({
                     {/* GST % */}
                     <td className="py-0.5 px-1 text-right">
                       <select
+                        id={`voucher-item-grid-gst-${idx}`}
                         ref={el => setRef(idx, 'gst', el)}
                         value={line.gstRate !== undefined && line.gstRate !== null ? line.gstRate : 0}
                         onFocus={() => setActiveRow(idx)}
@@ -589,6 +601,11 @@ export const VoucherItemGrid: React.FC<VoucherItemGridProps> = ({
                             <span className="font-mono font-black text-slate-950">
                               {formattedName}
                             </span>
+                            {((b as any).unresolved || !b.batchId) && (
+                              <span className="ml-1.5 px-1 py-0.2 rounded text-[9px] font-sans font-bold bg-amber-100 text-amber-800 border border-amber-300">
+                                Unresolved
+                              </span>
+                            )}
                           </td>
 
                           <td className="py-0.5 px-2 text-slate-500 font-sans text-[10px] italic">
