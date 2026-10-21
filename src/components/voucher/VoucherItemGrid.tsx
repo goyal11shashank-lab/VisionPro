@@ -192,16 +192,14 @@ export const VoucherItemGrid: React.FC<VoucherItemGridProps> = ({
           <thead className="bg-[#1e3a5f] text-white font-extrabold border-b border-slate-400 sticky top-0 z-20 font-sans tracking-wide uppercase text-[11px] shadow-xs">
             <tr className="divide-x divide-blue-900/60">
               <th className="py-1.5 px-1 w-9 text-center text-cyan-200 font-black font-mono">#</th>
-              <th className="py-1.5 px-2.5 text-left min-w-[240px] text-white font-extrabold">
+              <th className="py-1.5 px-2.5 text-left min-w-[280px] text-white font-extrabold">
                 Name of Item / Description
               </th>
-              <th className="py-1.5 px-2 text-left w-[220px] text-white font-extrabold">
+              <th className="py-1.5 px-2 text-left w-[260px] text-white font-extrabold">
                 Batch / Optical Power Allocations
               </th>
               <th className="py-1.5 px-2 text-right w-24 text-white font-extrabold">Quantity</th>
               <th className="py-1.5 px-2 text-right w-28 text-white font-extrabold">Rate (₹)</th>
-              <th className="py-1.5 px-2 text-right w-20 text-white font-extrabold">Disc %</th>
-              <th className="py-1.5 px-2 text-right w-20 text-white font-extrabold">GST %</th>
               <th className="py-1.5 px-2.5 text-right w-32 text-white font-extrabold">Amount (₹)</th>
               <th className="py-1.5 px-1 w-8 text-center text-slate-300"></th>
             </tr>
@@ -462,7 +460,14 @@ export const VoucherItemGrid: React.FC<VoucherItemGridProps> = ({
                         onKeyDown={e => {
                           if (e.key === 'Enter') {
                             e.preventDefault();
-                            focusCell(idx, 'disc');
+                            if (idx === lines.length - 1) {
+                              onAddBlankLine();
+                              setTimeout(() => {
+                                focusCell(idx + 1, 'item');
+                              }, 50);
+                            } else {
+                              focusCell(idx + 1, 'item');
+                            }
                           } else if (e.key === 'ArrowUp' && idx > 0) {
                             e.preventDefault();
                             focusCell(idx - 1, 'rate');
@@ -476,80 +481,10 @@ export const VoucherItemGrid: React.FC<VoucherItemGridProps> = ({
                       />
                     </td>
 
-                    {/* Disc % */}
-                    <td className="py-0.5 px-1 text-right">
-                      <input
-                        id={`voucher-item-grid-disc-${idx}`}
-                        ref={el => setRef(idx, 'disc', el)}
-                        type="number"
-                        min="0"
-                        max="100"
-                        step="0.1"
-                        value={line.discountValue !== undefined && line.discountValue !== null ? line.discountValue : ''}
-                        placeholder="0"
-                        onFocus={() => setActiveRow(idx)}
-                        onChange={e => onDiscountChange(idx, parseFloat(e.target.value) || 0)}
-                        onKeyDown={e => {
-                          if (e.key === 'Enter') {
-                            e.preventDefault();
-                            focusCell(idx, 'gst');
-                          } else if (e.key === 'ArrowUp' && idx > 0) {
-                            e.preventDefault();
-                            focusCell(idx - 1, 'disc');
-                          } else if (e.key === 'ArrowDown' && idx < lines.length - 1) {
-                            e.preventDefault();
-                            focusCell(idx + 1, 'disc');
-                          }
-                        }}
-                        className="w-full text-right py-0.5 px-1 text-xs font-mono text-slate-900 font-bold border border-transparent hover:border-slate-300 focus:border-blue-600 focus:bg-white focus:ring-1 focus:ring-blue-600 rounded-xs bg-transparent"
-                      />
-                    </td>
-
-                    {/* GST % */}
-                    <td className="py-0.5 px-1 text-right">
-                      <select
-                        id={`voucher-item-grid-gst-${idx}`}
-                        ref={el => setRef(idx, 'gst', el)}
-                        value={line.gstRate !== undefined && line.gstRate !== null ? line.gstRate : 0}
-                        onFocus={() => setActiveRow(idx)}
-                        onChange={e => onGstRateChange(idx, parseFloat(e.target.value) || 0)}
-                        onKeyDown={e => {
-                          if (e.key === 'Enter') {
-                            e.preventDefault();
-                            // Auto advance to next line or add row
-                            if (idx === lines.length - 1) {
-                              onAddBlankLine();
-                              setTimeout(() => {
-                                focusCell(idx + 1, 'item');
-                              }, 50);
-                            } else {
-                              focusCell(idx + 1, 'item');
-                            }
-                          } else if (e.key === 'ArrowUp' && idx > 0) {
-                            e.preventDefault();
-                            focusCell(idx - 1, 'gst');
-                          } else if (e.key === 'ArrowDown' && idx < lines.length - 1) {
-                            e.preventDefault();
-                            focusCell(idx + 1, 'gst');
-                          }
-                        }}
-                        className="w-full text-right py-0.5 px-1 text-xs font-mono text-slate-900 font-bold border border-transparent hover:border-slate-300 focus:border-blue-600 focus:bg-white focus:ring-1 focus:ring-blue-600 rounded-xs bg-transparent cursor-pointer"
-                      >
-                        <option value="0">0%</option>
-                        <option value="5">5%</option>
-                        <option value="12">12%</option>
-                        <option value="18">18%</option>
-                        <option value="28">28%</option>
-                        {![0, 5, 12, 18, 28].includes(Number(line.gstRate)) && line.gstRate !== undefined && (
-                          <option value={line.gstRate}>{line.gstRate}%</option>
-                        )}
-                      </select>
-                    </td>
-
-                    {/* Amount (₹) */}
+                    {/* Amount (₹) - Item Line Gross Amount */}
                     <td className="py-0.5 px-2 text-right font-mono font-black text-slate-950 bg-slate-50/50">
                       ₹
-                      {comp.total.toLocaleString('en-IN', {
+                      {(comp.gross ?? ((line.quantity || 0) * (line.rate || 0))).toLocaleString('en-IN', {
                         minimumFractionDigits: 2,
                         maximumFractionDigits: 2,
                       })}

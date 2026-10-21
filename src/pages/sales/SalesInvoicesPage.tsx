@@ -112,6 +112,8 @@ export const SalesInvoicesPage: React.FC<{
   const [loading, setLoading] = useState(true);
   const [search, setSearch] = useState('');
   const [statusFilter, setStatusFilter] = useState<string>('ALL');
+  const [fromDate, setFromDate] = useState<string>('');
+  const [toDate, setToDate] = useState<string>('');
   const [selectedInvoice, setSelectedInvoice] = useState<SalesInvoice | null>(null);
   const [isDetailOpen, setIsDetailOpen] = useState(false);
   const [isDetailLoading, setIsDetailLoading] = useState(false);
@@ -244,12 +246,14 @@ export const SalesInvoicesPage: React.FC<{
       { header: 'Grand Total (₹)', key: 'grandTotal', type: 'currency', width: 18 },
     ];
 
+    const dateFilterText = fromDate && toDate ? ` | Date: ${fromDate} to ${toDate}` : fromDate ? ` | From: ${fromDate}` : toDate ? ` | Up to: ${toDate}` : '';
+
     exportToExcel({
       filename: `sales_invoices_${new Date().toISOString().split('T')[0]}`,
       sheetName: 'Sales Invoices',
       reportTitle: 'Sales Invoices Register',
       businessName: currentBusiness?.name,
-      filtersSummary: `Status: ${statusFilter}${search ? `, Search: "${search}"` : ''} | Total: ${invoices.length} invoices`,
+      filtersSummary: `Status: ${statusFilter}${search ? `, Search: "${search}"` : ''}${dateFilterText} | Total: ${invoices.length} invoices`,
       columns,
       data: invoices,
     });
@@ -270,11 +274,13 @@ export const SalesInvoicesPage: React.FC<{
       { header: 'Grand Total', key: 'grandTotal' },
     ];
 
+    const dateFilterText = fromDate && toDate ? ` | Date: ${fromDate} to ${toDate}` : fromDate ? ` | From: ${fromDate}` : toDate ? ` | Up to: ${toDate}` : '';
+
     exportToCsv({
       filename: `sales_invoices_${new Date().toISOString().split('T')[0]}`,
       reportTitle: 'Sales Invoices Register',
       businessName: currentBusiness?.name,
-      filtersSummary: `Status: ${statusFilter}${search ? `, Search: "${search}"` : ''}`,
+      filtersSummary: `Status: ${statusFilter}${search ? `, Search: "${search}"` : ''}${dateFilterText}`,
       columns,
       data: invoices,
     });
@@ -294,6 +300,8 @@ export const SalesInvoicesPage: React.FC<{
       const params = new URLSearchParams();
       if (statusFilter !== 'ALL') params.append('status', statusFilter);
       if (search) params.append('search', search);
+      if (fromDate) params.append('fromDate', fromDate);
+      if (toDate) params.append('toDate', toDate);
 
       const res = await fetch(`/api/sales/invoices?${params.toString()}`, {
         headers: {
@@ -306,7 +314,20 @@ export const SalesInvoicesPage: React.FC<{
         throw new Error(errData.message || 'Failed to load sales invoices');
       }
       const data = await res.json();
-      setInvoices(data.invoices || []);
+      const rawInvoices: SalesInvoice[] = data.invoices || [];
+
+      // Display invoices in descending order: latest bills first
+      const sortedInvoices = [...rawInvoices].sort((a, b) => {
+        const timeA = new Date(a.invoiceDate).getTime() || 0;
+        const timeB = new Date(b.invoiceDate).getTime() || 0;
+        if (timeB !== timeA) return timeB - timeA;
+        const createdA = new Date(a.createdAt || 0).getTime() || 0;
+        const createdB = new Date(b.createdAt || 0).getTime() || 0;
+        if (createdB !== createdA) return createdB - createdA;
+        return (b.invoiceNumber || '').localeCompare(a.invoiceNumber || '', undefined, { numeric: true });
+      });
+
+      setInvoices(sortedInvoices);
     } catch (err: any) {
       console.error(err);
     } finally {
@@ -316,7 +337,7 @@ export const SalesInvoicesPage: React.FC<{
 
   useEffect(() => {
     fetchInvoices();
-  }, [currentBusiness, statusFilter, search]);
+  }, [currentBusiness, statusFilter, search, fromDate, toDate]);
 
   // Handle Initial Conversion Prompt
   useEffect(() => {
@@ -967,8 +988,8 @@ export const SalesInvoicesPage: React.FC<{
       </div>
 
       {/* Filters & Search */}
-      <div className="flex flex-col sm:flex-row items-center gap-4 bg-white p-4 rounded-xl border border-slate-200 shadow-sm">
-        <div className="relative flex-1 w-full">
+      <div className="flex flex-col lg:flex-row items-stretch lg:items-center gap-3 bg-white p-4 rounded-xl border border-slate-200 shadow-sm">
+        <div className="relative flex-1 min-w-[220px]">
           <Search className="w-4 h-4 absolute left-3.5 top-3 text-slate-400" />
           <input
             id="input-search-invoices"
@@ -980,8 +1001,56 @@ export const SalesInvoicesPage: React.FC<{
           />
         </div>
 
-        <div className="flex items-center gap-2 w-full sm:w-auto">
-          <Filter className="w-4 h-4 text-slate-400" />
+        {/* Date Filters */}
+        <div className="flex flex-wrap items-center gap-2">
+          <div className="flex items-center gap-1.5 bg-slate-50 border border-slate-200 rounded-lg px-2.5 py-1.5 shadow-2xs">
+            <Calendar className="w-3.5 h-3.5 text-slate-500 shrink-0" />
+            <label htmlFor="input-filter-from-date" className="text-xs text-slate-600 font-semibold whitespace-nowrap">
+              From:
+            </label>
+            <input
+              type="date"
+              id="input-filter-from-date"
+              value={fromDate}
+              onChange={e => setFromDate(e.target.value)}
+              className="text-xs bg-transparent border-0 text-slate-800 font-medium focus:outline-none focus:ring-0 p-0"
+              title="Filter invoices starting from this date"
+            />
+          </div>
+
+          <div className="flex items-center gap-1.5 bg-slate-50 border border-slate-200 rounded-lg px-2.5 py-1.5 shadow-2xs">
+            <Calendar className="w-3.5 h-3.5 text-slate-500 shrink-0" />
+            <label htmlFor="input-filter-to-date" className="text-xs text-slate-600 font-semibold whitespace-nowrap">
+              To:
+            </label>
+            <input
+              type="date"
+              id="input-filter-to-date"
+              value={toDate}
+              onChange={e => setToDate(e.target.value)}
+              className="text-xs bg-transparent border-0 text-slate-800 font-medium focus:outline-none focus:ring-0 p-0"
+              title="Filter invoices up to this date"
+            />
+          </div>
+
+          {(fromDate || toDate) && (
+            <button
+              id="btn-clear-date-filter"
+              type="button"
+              onClick={() => {
+                setFromDate('');
+                setToDate('');
+              }}
+              className="px-2.5 py-1.5 text-xs font-semibold text-slate-600 hover:text-slate-900 bg-slate-100 hover:bg-slate-200 rounded-lg border border-slate-200 transition"
+              title="Clear date filters"
+            >
+              Reset Dates
+            </button>
+          )}
+        </div>
+
+        <div className="flex items-center gap-2">
+          <Filter className="w-4 h-4 text-slate-400 shrink-0" />
           <select
             id="select-invoice-status-filter"
             value={statusFilter}

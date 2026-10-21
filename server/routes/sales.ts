@@ -270,14 +270,16 @@ router.get(
   async (req: Request, res: Response) => {
     try {
       const businessId = req.user!.currentBusinessId;
-      const { partyId, status, search, limit, offset } = req.query;
+      const { partyId, status, search, limit, offset, fromDate, toDate } = req.query;
 
       const result = await SalesService.getSalesInvoices(businessId, {
         partyId: partyId as string,
         status: status as string,
         search: search as string,
-        limit: limit ? parseInt(limit as string, 10) : 50,
+        limit: limit ? parseInt(limit as string, 10) : 100,
         offset: offset ? parseInt(offset as string, 10) : 0,
+        fromDate: fromDate as string,
+        toDate: toDate as string,
       });
 
       res.json(result);

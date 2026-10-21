@@ -28,6 +28,7 @@ export interface PrintPreviewModalProps {
   onExportExcel?: () => void;
   onExportCsv?: () => void;
   autoInvokePrint?: boolean;
+  onAfterPrint?: () => void;
   children: (props: { orientation: 'portrait' | 'landscape'; documentId: string }) => React.ReactNode;
 }
 
@@ -40,6 +41,7 @@ export const PrintPreviewModal: React.FC<PrintPreviewModalProps> = ({
   onExportExcel,
   onExportCsv,
   autoInvokePrint = false,
+  onAfterPrint,
   children,
 }) => {
   const [orientation, setOrientation] = useState<'portrait' | 'landscape'>(defaultOrientation);
@@ -66,6 +68,8 @@ export const PrintPreviewModal: React.FC<PrintPreviewModalProps> = ({
 
       if (result.method === 'restricted' && result.message) {
         setErrorMessage(result.message);
+      } else {
+        onAfterPrint?.();
       }
     } catch (err: any) {
       console.error('Print error:', err);

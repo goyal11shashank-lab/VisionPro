@@ -17,6 +17,12 @@ export interface AuthenticatedUser {
     name: string;
     tradeName?: string | null;
     gstin?: string | null;
+    state?: string | null;
+    stateCode?: string | null;
+    city?: string | null;
+    addressLine1?: string | null;
+    addressLine2?: string | null;
+    pincode?: string | null;
     currency: string;
     status: string;
     businessType: string;
@@ -224,6 +230,12 @@ export async function authenticateToken(req: Request, res: Response, next: NextF
         name: currentBusiness.name,
         tradeName: currentBusiness.tradeName,
         gstin: currentBusiness.gstin,
+        state: currentBusiness.state,
+        stateCode: currentBusiness.stateCode,
+        city: currentBusiness.city,
+        addressLine1: currentBusiness.addressLine1,
+        addressLine2: currentBusiness.addressLine2,
+        pincode: currentBusiness.pincode,
         currency: currentBusiness.currency,
         status: currentBusiness.status,
         businessType: currentBusiness.businessType || 'MAIN',

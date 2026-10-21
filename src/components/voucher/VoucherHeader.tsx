@@ -17,6 +17,7 @@ import {
 } from 'lucide-react';
 import { SearchableMasterSelect, SearchableOption } from '../common/SearchableMasterSelect';
 import { InlinePartyModal } from '../common/InlinePartyModal';
+import { INDIAN_STATES_LIST, getDisplayStateName } from '../../utils/gstHelper';
 
 interface VoucherHeaderProps {
   voucherType: 'SALES' | 'PURCHASE' | 'SALES_ORDER' | 'PURCHASE_ORDER';
@@ -39,6 +40,15 @@ interface VoucherHeaderProps {
   // Secondary voucher fields (optional / compatibility)
   gstMode?: 'INTRA_STATE' | 'INTER_STATE' | 'EXEMPT';
   onGstModeChange?: (mode: 'INTRA_STATE' | 'INTER_STATE' | 'EXEMPT') => void;
+  showLedger?: boolean;
+  showRefNo?: boolean;
+  partyStateValidation?: {
+    bizState?: string;
+    partyState?: string;
+    isMissing?: boolean;
+    isInterState?: boolean;
+  };
+  onPartyStateChange?: (stateName: string) => void;
   referenceNumber?: string;
   onReferenceNumberChange?: (val: string) => void;
   supplierInvoiceDate?: string;
@@ -53,6 +63,7 @@ interface VoucherHeaderProps {
   submitting: boolean;
   onSaveDraft?: () => void;
   onSavePost: () => void;
+  onSaveAndNew?: () => void;
   onPrint?: () => void;
   onBack: () => void;
 }
@@ -76,6 +87,10 @@ export const VoucherHeader: React.FC<VoucherHeaderProps> = ({
   partyBalance,
   gstMode = 'INTRA_STATE',
   onGstModeChange,
+  showLedger = false,
+  showRefNo = false,
+  partyStateValidation,
+  onPartyStateChange,
   referenceNumber = '',
   onReferenceNumberChange,
   supplierInvoiceDate = '',
@@ -83,6 +98,7 @@ export const VoucherHeader: React.FC<VoucherHeaderProps> = ({
   submitting,
   onSaveDraft,
   onSavePost,
+  onSaveAndNew,
   onPrint,
   onBack,
 }) => {
@@ -308,7 +324,7 @@ export const VoucherHeader: React.FC<VoucherHeaderProps> = ({
               ) : (
                 <>
                   <Send className="w-3 h-3" />
-                  <span>{isEditing ? 'Update' : 'Accept (Ctrl+A)'}</span>
+                  <span>{isEditing ? 'Update' : 'Accept & New (Ctrl+A)'}</span>
                 </>
               )}
             </button>
@@ -316,10 +332,19 @@ export const VoucherHeader: React.FC<VoucherHeaderProps> = ({
         </div>
       </div>
 
-      {/* Second Strip: Party Selection, Ledger Account & Ref Details */}
+      {/* Second Strip: Party Selection, Auto GST State & Optional Ref */}
       <div className="grid grid-cols-1 md:grid-cols-12 gap-2 pt-1.5 items-center text-xs">
-        {/* Party A/c Name (Side Panel Selection Only - No Dropdown) */}
-        <div className="md:col-span-6 flex items-center gap-2" data-contextual-owner="party">
+        {/* Party A/c Name */}
+        <div
+          className={`${
+            showLedger && showRefNo
+              ? 'md:col-span-6'
+              : showLedger || showRefNo
+              ? 'md:col-span-8'
+              : 'md:col-span-7'
+          } flex items-center gap-2`}
+          data-contextual-owner="party"
+        >
           <label
             htmlFor="voucher-header-party-input"
             className="w-28 text-slate-900 font-extrabold shrink-0 text-right text-[11px] uppercase tracking-tight"
@@ -373,6 +398,9 @@ export const VoucherHeader: React.FC<VoucherHeaderProps> = ({
                   if (refInput) {
                     refInput.focus();
                     refInput.select();
+                  } else {
+                    const firstItem = document.getElementById('voucher-item-grid-select-0');
+                    if (firstItem) firstItem.focus();
                   }
                 }
               }}
@@ -435,53 +463,142 @@ export const VoucherHeader: React.FC<VoucherHeaderProps> = ({
           )}
         </div>
 
-        {/* Sales / Purchase Ledger & GST Mode */}
-        <div className="md:col-span-3 flex items-center gap-1.5">
-          <span className="text-slate-900 font-extrabold shrink-0 text-[11px] uppercase tracking-tight">
-            {isSales ? 'Sales Ledger:' : 'Purchase Ledger:'}
-          </span>
-          {onGstModeChange ? (
-            <select
-              value={gstMode}
-              onChange={e => onGstModeChange(e.target.value as any)}
-              className="flex-1 min-w-0 py-0.5 px-1.5 text-xs font-bold text-slate-900 border border-slate-400 rounded bg-white focus:ring-1 focus:ring-blue-600 font-mono shadow-2xs"
-            >
-              <option value="INTRA_STATE">Sales A/c (CGST+SGST)</option>
-              <option value="INTER_STATE">Interstate A/c (IGST)</option>
-              <option value="EXEMPT">Exempted Sales A/c</option>
-            </select>
-          ) : (
-            <span className="flex-1 min-w-0 py-0.5 px-1.5 text-xs font-bold text-slate-800 bg-slate-100 border border-slate-300 rounded font-mono truncate">
-              {isSales ? 'Sales A/c' : 'Purchase A/c'} ({gstMode === 'INTER_STATE' ? 'IGST' : gstMode === 'EXEMPT' ? 'Exempt' : 'CGST+SGST'})
+        {/* Sales / Purchase Ledger OR Auto GST State-of-Supply Classification */}
+        {showLedger ? (
+          <div className="md:col-span-3 flex items-center gap-1.5">
+            <span className="text-slate-900 font-extrabold shrink-0 text-[11px] uppercase tracking-tight">
+              {isSales ? 'Sales Ledger:' : 'Purchase Ledger:'}
             </span>
-          )}
-        </div>
+            {onGstModeChange ? (
+              <select
+                value={gstMode}
+                onChange={e => onGstModeChange(e.target.value as any)}
+                className="flex-1 min-w-0 py-0.5 px-1.5 text-xs font-bold text-slate-900 border border-slate-400 rounded bg-white focus:ring-1 focus:ring-blue-600 font-mono shadow-2xs"
+              >
+                <option value="INTRA_STATE">Sales A/c (CGST+SGST)</option>
+                <option value="INTER_STATE">Interstate A/c (IGST)</option>
+                <option value="EXEMPT">Exempted Sales A/c</option>
+              </select>
+            ) : (
+              <span className="flex-1 min-w-0 py-0.5 px-1.5 text-xs font-bold text-slate-800 bg-slate-100 border border-slate-300 rounded font-mono truncate">
+                {isSales ? 'Sales A/c' : 'Purchase A/c'} ({gstMode === 'INTER_STATE' ? 'IGST' : gstMode === 'EXEMPT' ? 'Exempt' : 'CGST+SGST'})
+              </span>
+            )}
+          </div>
+        ) : (
+          <div className={`${showRefNo ? 'md:col-span-3' : 'md:col-span-5'} flex items-center justify-end gap-2 flex-wrap`}>
+            {partyStateValidation?.isMissing && selectedPartyId ? (
+              <div className="flex items-center gap-1.5 px-2 py-0.5 rounded text-[10px] font-bold bg-amber-50 text-amber-900 border border-amber-300">
+                <AlertTriangle className="w-3.5 h-3.5 text-amber-600 shrink-0" />
+                <span className="truncate">Party state missing:</span>
+                {onPartyStateChange ? (
+                  <select
+                    id="voucher-header-party-state-select"
+                    onChange={e => onPartyStateChange(e.target.value)}
+                    defaultValue=""
+                    className="py-0.5 px-1 text-[11px] font-bold text-slate-900 bg-white border border-amber-400 rounded focus:ring-1 focus:ring-blue-600 font-mono shadow-2xs cursor-pointer"
+                  >
+                    <option value="" disabled>Select State...</option>
+                    {INDIAN_STATES_LIST.map(st => (
+                      <option key={st.code} value={st.name}>
+                        {st.code} - {st.name}
+                      </option>
+                    ))}
+                  </select>
+                ) : (
+                  <span className="font-semibold">State required for GST supply</span>
+                )}
+              </div>
+            ) : (
+              <div className="flex items-center gap-1.5 text-[11px]">
+                <span className="text-slate-600 font-bold uppercase tracking-tight text-[10px]">
+                  Place of Supply:
+                </span>
+                {onPartyStateChange && selectedPartyId ? (
+                  <select
+                    id="voucher-header-state-selector"
+                    value={partyStateValidation?.partyState || ''}
+                    onChange={e => onPartyStateChange(e.target.value)}
+                    className="py-0.5 px-1.5 text-[11px] font-bold text-slate-900 bg-white border border-slate-300 rounded focus:ring-1 focus:ring-blue-600 font-mono shadow-2xs max-w-40 truncate cursor-pointer hover:border-slate-400"
+                    title="Change Party State / Place of Supply"
+                  >
+                    <option value="" disabled>Select State...</option>
+                    {INDIAN_STATES_LIST.map(st => (
+                      <option key={st.code} value={st.name}>
+                        {st.name} ({st.code})
+                      </option>
+                    ))}
+                  </select>
+                ) : partyStateValidation?.partyState ? (
+                  <span className="font-bold text-slate-800 font-mono text-[11px]">
+                    {partyStateValidation.partyState}
+                  </span>
+                ) : null}
 
-        {/* Reference / Supplier Invoice Details */}
-        <div className="md:col-span-3 flex items-center gap-1.5">
-          <span className="text-slate-900 font-extrabold shrink-0 text-[11px] uppercase tracking-tight">
-            {isSales ? 'Ref No:' : 'Supp Inv:'}
-          </span>
-          <input
-            id="voucher-header-ref-no"
-            type="text"
-            value={referenceNumber ?? ''}
-            onChange={e => onReferenceNumberChange && onReferenceNumberChange(e.target.value)}
-            placeholder={isSales ? 'Order / Ref #' : 'Inv #'}
-            className="flex-1 min-w-0 py-0.5 px-1.5 text-xs font-bold text-slate-900 border border-slate-400 rounded bg-white focus:bg-white focus:ring-1 focus:ring-blue-600 font-mono shadow-2xs"
-          />
+                {/* GST Mode Badge (clickable toggle if onGstModeChange is supplied) */}
+                {onGstModeChange ? (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      const nextMode = gstMode === 'INTER_STATE' ? 'INTRA_STATE' : 'INTER_STATE';
+                      onGstModeChange(nextMode);
+                    }}
+                    className={`px-2 py-0.5 rounded font-mono font-black border text-[11px] shadow-2xs cursor-pointer hover:opacity-85 transition-opacity ${
+                      gstMode === 'INTER_STATE'
+                        ? 'bg-purple-50 text-purple-900 border-purple-300'
+                        : gstMode === 'EXEMPT'
+                        ? 'bg-slate-100 text-slate-700 border-slate-300'
+                        : 'bg-emerald-50 text-emerald-950 border-emerald-300'
+                    }`}
+                    title="Click to toggle between Intrastate (CGST+SGST) and Interstate (IGST)"
+                  >
+                    {gstMode === 'INTER_STATE' ? 'INTERSTATE (IGST)' : gstMode === 'EXEMPT' ? 'EXEMPT' : 'INTRA-STATE (CGST + SGST)'}
+                  </button>
+                ) : (
+                  <span
+                    className={`px-2 py-0.5 rounded font-mono font-black border text-[11px] shadow-2xs ${
+                      gstMode === 'INTER_STATE'
+                        ? 'bg-purple-50 text-purple-900 border-purple-300'
+                        : gstMode === 'EXEMPT'
+                        ? 'bg-slate-100 text-slate-700 border-slate-300'
+                        : 'bg-emerald-50 text-emerald-950 border-emerald-300'
+                    }`}
+                  >
+                    {gstMode === 'INTER_STATE' ? 'INTERSTATE (IGST)' : gstMode === 'EXEMPT' ? 'EXEMPT' : 'INTRA-STATE (CGST + SGST)'}
+                  </span>
+                )}
+              </div>
+            )}
+          </div>
+        )}
 
-          {!isSales && onSupplierInvoiceDateChange && (
+        {/* Optional Reference / Supplier Invoice Details */}
+        {showRefNo && (
+          <div className="md:col-span-3 flex items-center gap-1.5">
+            <span className="text-slate-900 font-extrabold shrink-0 text-[11px] uppercase tracking-tight">
+              {isSales ? 'Ref No:' : 'Supp Inv:'}
+            </span>
             <input
-              id="voucher-header-supp-date"
-              type="date"
-              value={supplierInvoiceDate ?? ''}
-              onChange={e => onSupplierInvoiceDateChange(e.target.value)}
-              className="w-28 py-0.5 px-1 text-[11px] font-bold text-slate-900 border border-slate-400 rounded bg-white focus:ring-1 focus:ring-blue-600 font-mono shadow-2xs"
-              title="Supplier Invoice Date"
+              id="voucher-header-ref-no"
+              type="text"
+              value={referenceNumber ?? ''}
+              onChange={e => onReferenceNumberChange && onReferenceNumberChange(e.target.value)}
+              placeholder={isSales ? 'Order / Ref #' : 'Inv #'}
+              className="flex-1 min-w-0 py-0.5 px-1.5 text-xs font-bold text-slate-900 border border-slate-400 rounded bg-white focus:bg-white focus:ring-1 focus:ring-blue-600 font-mono shadow-2xs"
             />
-          )}
-        </div>
+
+            {!isSales && onSupplierInvoiceDateChange && (
+              <input
+                id="voucher-header-supp-date"
+                type="date"
+                value={supplierInvoiceDate ?? ''}
+                onChange={e => onSupplierInvoiceDateChange(e.target.value)}
+                className="w-28 py-0.5 px-1 text-[11px] font-bold text-slate-900 border border-slate-400 rounded bg-white focus:ring-1 focus:ring-blue-600 font-mono shadow-2xs"
+                title="Supplier Invoice Date"
+              />
+            )}
+          </div>
+        )}
       </div>
 
       {/* Inline Party Creation Modal */}

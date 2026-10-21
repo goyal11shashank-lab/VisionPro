@@ -389,6 +389,7 @@ CREATE TABLE IF NOT EXISTS "purchase_invoices" (
   "cgst_amount" NUMERIC(12, 2) NOT NULL DEFAULT 0.00,
   "sgst_rate" NUMERIC(5, 2) NOT NULL DEFAULT 0.00,
   "sgst_amount" NUMERIC(12, 2) NOT NULL DEFAULT 0.00,
+  "courier_charges" NUMERIC(12, 2) NOT NULL DEFAULT 0.00,
   "round_off" NUMERIC(8, 2) NOT NULL DEFAULT 0.00,
   "grand_total" NUMERIC(12, 2) NOT NULL DEFAULT 0.00,
   "payment_status" VARCHAR(20) NOT NULL DEFAULT 'UNPAID',
@@ -606,6 +607,7 @@ CREATE TABLE IF NOT EXISTS "sales_invoices" (
   "cgst_amount" NUMERIC(12, 2) NOT NULL DEFAULT '0.00',
   "sgst_rate" NUMERIC(5, 2) NOT NULL DEFAULT '0.00',
   "sgst_amount" NUMERIC(12, 2) NOT NULL DEFAULT '0.00',
+  "courier_charges" NUMERIC(12, 2) NOT NULL DEFAULT '0.00',
   "round_off" NUMERIC(12, 2) NOT NULL DEFAULT '0.00',
   "grand_total" NUMERIC(12, 2) NOT NULL DEFAULT '0.00',
   "status" VARCHAR(50) NOT NULL DEFAULT 'DRAFT',
@@ -1794,10 +1796,12 @@ export async function runMigrations(): Promise<{ success: boolean; message: stri
       ALTER TABLE "sales_invoices" ADD COLUMN IF NOT EXISTS "due_date" TIMESTAMP WITH TIME ZONE;
       ALTER TABLE "sales_invoices" ADD COLUMN IF NOT EXISTS "credit_days_snapshot" INTEGER DEFAULT 0;
       ALTER TABLE "sales_invoices" ADD COLUMN IF NOT EXISTS "cancellation_reason" TEXT;
+      ALTER TABLE "sales_invoices" ADD COLUMN IF NOT EXISTS "courier_charges" NUMERIC(12, 2) DEFAULT 0.00 NOT NULL;
 
       ALTER TABLE "purchase_invoices" ADD COLUMN IF NOT EXISTS "due_date" TIMESTAMP WITH TIME ZONE;
       ALTER TABLE "purchase_invoices" ADD COLUMN IF NOT EXISTS "credit_days_snapshot" INTEGER DEFAULT 0;
       ALTER TABLE "purchase_invoices" ADD COLUMN IF NOT EXISTS "cancellation_reason" TEXT;
+      ALTER TABLE "purchase_invoices" ADD COLUMN IF NOT EXISTS "courier_charges" NUMERIC(12, 2) DEFAULT 0.00 NOT NULL;
 
       ALTER TABLE "sales_orders" ADD COLUMN IF NOT EXISTS "cancellation_reason" TEXT;
       ALTER TABLE "purchase_orders" ADD COLUMN IF NOT EXISTS "cancellation_reason" TEXT;

@@ -41,6 +41,7 @@ import { PrintableVoucher } from '../../components/print/PrintableVoucher';
 import { cleanNarrationNotes } from '../../utils/narrationHelper';
 import { validateQuantity } from '../../utils/quantityValidator';
 import { InlinePartyModal } from '../../components/common/InlinePartyModal';
+import { determineGstMode, resolveEntityState, getDisplayStateName } from '../../utils/gstHelper';
 
 interface Props {
   onNavigate?: (path: string) => void;
@@ -85,9 +86,49 @@ export const NormalSalesVoucherPage: React.FC<Props> = ({ onNavigate, onSuccess,
   const [gstMode, setGstMode] = useState<'INTRA_STATE' | 'INTER_STATE' | 'EXEMPT'>(
     'INTRA_STATE'
   );
+  const [courierCharges, setCourierCharges] = useState<number>(0);
+  const [invoiceDiscount, setInvoiceDiscount] = useState<number>(0);
+  const [invoiceGstRate, setInvoiceGstRate] = useState<number>(0);
   const [paymentMode, setPaymentMode] = useState<string>('CREDIT');
   const [referenceNumber, setReferenceNumber] = useState<string>('');
   const [notes, setNotes] = useState<string>('');
+  const [partyStateOverride, setPartyStateOverride] = useState<string>('');
+
+  // Auto-determine GST mode from selling business state and customer party state
+  const bizState = useMemo(() => {
+    return resolveEntityState(currentBusiness) || (currentBusiness?.state || 'Maharashtra').trim();
+  }, [currentBusiness]);
+
+  const partyState = useMemo(() => {
+    if (partyStateOverride) return partyStateOverride;
+    return resolveEntityState(selectedParty) || (selectedParty?.state || (selectedParty as any)?.placeOfSupply || '').trim();
+  }, [selectedParty, partyStateOverride]);
+
+  const isPartyStateMissing = Boolean(selectedPartyId && !partyState);
+
+  // Auto-determine GST mode whenever business, party, or partyState changes
+  useEffect(() => {
+    if (!selectedPartyId) {
+      setGstMode('INTRA_STATE');
+      return;
+    }
+    const computedMode = determineGstMode(
+      currentBusiness,
+      partyStateOverride ? { state: partyStateOverride } : selectedParty,
+      bizState
+    );
+    setGstMode(computedMode);
+  }, [bizState, selectedParty, partyStateOverride, selectedPartyId, currentBusiness]);
+
+  // Handle party state change
+  const handlePartyStateChange = (newState: string) => {
+    setPartyStateOverride(newState);
+    if (selectedParty) {
+      setSelectedParty((prev: any) => (prev ? { ...prev, state: newState } : prev));
+    }
+    const newGstMode = determineGstMode(currentBusiness, { state: newState }, bizState);
+    setGstMode(newGstMode);
+  };
 
   // Lines (initialized with a pristine blank row)
   const [lines, setLines] = useState<VoucherLineItem[]>([createEmptyVoucherLine('row')]);
@@ -227,6 +268,10 @@ export const NormalSalesVoucherPage: React.FC<Props> = ({ onNavigate, onSuccess,
             if (inv.invoiceDate) setInvoiceDate(inv.invoiceDate.split('T')[0]);
             if (inv.dueDate) setDueDate(inv.dueDate.split('T')[0]);
             if (inv.gstMode) setGstMode(inv.gstMode);
+            if (inv.courierCharges) setCourierCharges(parseFloat(inv.courierCharges) || 0);
+            if (inv.discountTotal) setInvoiceDiscount(parseFloat(inv.discountTotal) || 0);
+            const loadedGst = parseFloat(inv.igstRate || (inv.cgstRate ? (parseFloat(inv.cgstRate) * 2).toString() : '0'));
+            setInvoiceGstRate(loadedGst);
             if (inv.paymentTerms) setPaymentTerms(inv.paymentTerms);
             if (inv.notes) {
               const refMatch = inv.notes.match(/Ref:\s*([^|]+)/i);
@@ -374,22 +419,28 @@ export const NormalSalesVoucherPage: React.FC<Props> = ({ onNavigate, onSuccess,
   // Handle party change & auto-detect GST mode + credit check
   const handlePartyChange = async (partyId: string, partyObj?: any) => {
     setSelectedPartyId(partyId);
-    const party = partyObj || parties.find(p => p.id === partyId) || null;
+    setPartyStateOverride('');
+    let party = partyObj || parties.find(p => p.id === partyId) || null;
+    
+    // If not found in memory, fetch party details from API
+    if (partyId && !party) {
+      try {
+        party = await apiRequest<any>(`/api/parties/${partyId}`);
+      } catch (e) {
+        console.warn('Could not fetch party details:', e);
+      }
+    }
     setSelectedParty(party);
 
     if (!party) {
       setPartyCreditInfo(null);
+      setGstMode('INTRA_STATE');
       return;
     }
 
-    // Auto-detect GST Mode
-    if (party.state && currentBusiness?.state) {
-      if (party.state.trim().toLowerCase() !== currentBusiness.state.trim().toLowerCase()) {
-        setGstMode('INTER_STATE');
-      } else {
-        setGstMode('INTRA_STATE');
-      }
-    }
+    // Auto-detect GST Mode based on party state vs business state
+    const newGstMode = determineGstMode(currentBusiness, party, bizState);
+    setGstMode(newGstMode);
 
     // Fetch live party credit check & ledger balance
     try {
@@ -429,15 +480,11 @@ export const NormalSalesVoucherPage: React.FC<Props> = ({ onNavigate, onSuccess,
     // 2. Select the customer immediately
     setSelectedPartyId(newParty.id);
     setSelectedParty(normalizedParty);
+    setPartyStateOverride('');
 
     // 3. Immediately auto-detect GST Mode based on the new customer's state
-    if (normalizedParty.state && currentBusiness?.state) {
-      if (normalizedParty.state.trim().toLowerCase() !== currentBusiness.state.trim().toLowerCase()) {
-        setGstMode('INTER_STATE');
-      } else {
-        setGstMode('INTRA_STATE');
-      }
-    }
+    const newGstMode = determineGstMode(currentBusiness, normalizedParty, bizState);
+    setGstMode(newGstMode);
 
     // 4. Update party credit info
     setPartyCreditInfo({
@@ -844,62 +891,99 @@ export const NormalSalesVoucherPage: React.FC<Props> = ({ onNavigate, onSuccess,
   };
 
   // Calculations
-  const computedLines: ComputedVoucherLine[] = lines.map(line => {
-    const gross = (line.quantity || 0) * (line.rate || 0);
-    const disc =
-      line.discountType === 'PERCENTAGE'
-        ? (gross * (line.discountValue || 0)) / 100
-        : line.discountType === 'FIXED'
-        ? Math.min(gross, line.discountValue || 0)
-        : (gross * (line.discountValue || 0)) / 100; // treat raw number as % if default
-    const taxable = Math.max(0, gross - disc);
-    const taxRate = gstMode === 'EXEMPT' ? 0 : line.gstRate || 0;
-    const tax = (taxable * taxRate) / 100;
-    const total = taxable + tax;
+  const computedLines: ComputedVoucherLine[] = useMemo(() => {
+    return lines.map(line => {
+      const gross = (line.quantity || 0) * (line.rate || 0);
+      return {
+        ...line,
+        gross,
+        disc: 0,
+        taxable: gross,
+        tax: 0,
+        cgst: 0,
+        sgst: 0,
+        igst: 0,
+        total: gross,
+      };
+    });
+  }, [lines]);
 
-    let cgst = 0;
-    let sgst = 0;
-    let igst = 0;
-    if (gstMode === 'INTER_STATE') {
-      igst = tax;
-    } else if (gstMode === 'INTRA_STATE') {
-      cgst = tax / 2;
-      sgst = tax / 2;
+  const subtotal = useMemo(() => {
+    return computedLines.reduce((acc, l) => acc + l.gross, 0);
+  }, [computedLines]);
+
+  const discountTotal = useMemo(() => {
+    return Math.round(Math.min(subtotal, Math.max(0, invoiceDiscount || 0)) * 100) / 100;
+  }, [subtotal, invoiceDiscount]);
+
+  const taxableAmount = useMemo(() => {
+    return Math.round(Math.max(0, subtotal - discountTotal) * 100) / 100;
+  }, [subtotal, discountTotal]);
+
+  const effectiveGstRate = useMemo(() => {
+    return gstMode === 'EXEMPT' ? 0 : Math.max(0, invoiceGstRate || 0);
+  }, [gstMode, invoiceGstRate]);
+
+  const totalTax = useMemo(() => {
+    return Math.round(((taxableAmount * effectiveGstRate) / 100) * 100) / 100;
+  }, [taxableAmount, effectiveGstRate]);
+
+  const { cgstAmount, sgstAmount, igstAmount, cgstRate, sgstRate, igstRate } = useMemo(() => {
+    if (effectiveGstRate === 0 || totalTax === 0 || gstMode === 'EXEMPT') {
+      return { cgstAmount: 0, sgstAmount: 0, igstAmount: 0, cgstRate: 0, sgstRate: 0, igstRate: 0 };
     }
-
+    if (gstMode === 'INTER_STATE') {
+      return {
+        cgstAmount: 0,
+        sgstAmount: 0,
+        igstAmount: totalTax,
+        cgstRate: 0,
+        sgstRate: 0,
+        igstRate: effectiveGstRate,
+      };
+    }
+    const halfRate = Math.round((effectiveGstRate / 2) * 100) / 100;
+    const halfTax = Math.round((totalTax / 2) * 100) / 100;
+    const remainderTax = Math.round((totalTax - halfTax) * 100) / 100;
     return {
-      ...line,
-      gross,
-      disc,
-      taxable,
-      tax,
-      cgst,
-      sgst,
-      igst,
-      total,
+      cgstAmount: halfTax,
+      sgstAmount: remainderTax,
+      igstAmount: 0,
+      cgstRate: halfRate,
+      sgstRate: halfRate,
+      igstRate: 0,
     };
-  });
+  }, [gstMode, effectiveGstRate, totalTax]);
 
-  const subtotal = computedLines.reduce((acc, l) => acc + l.gross, 0);
-  const discountTotal = computedLines.reduce((acc, l) => acc + l.disc, 0);
-  const taxableAmount = computedLines.reduce((acc, l) => acc + l.taxable, 0);
-  const cgstAmount = computedLines.reduce((acc, l) => acc + l.cgst, 0);
-  const sgstAmount = computedLines.reduce((acc, l) => acc + l.sgst, 0);
-  const igstAmount = computedLines.reduce((acc, l) => acc + l.igst, 0);
-  const totalTax = cgstAmount + sgstAmount + igstAmount;
-  const rawGrandTotal = taxableAmount + totalTax;
-  const grandTotal = Math.round(rawGrandTotal);
-  const roundOff = grandTotal - rawGrandTotal;
-  const totalQuantity = lines.reduce((acc, l) => acc + (l.quantity || 0), 0);
+  const rawGrandTotal = useMemo(() => {
+    return Math.round((taxableAmount + totalTax + (courierCharges || 0)) * 100) / 100;
+  }, [taxableAmount, totalTax, courierCharges]);
+
+  const grandTotal = useMemo(() => {
+    return Math.round(rawGrandTotal);
+  }, [rawGrandTotal]);
+
+  const roundOff = useMemo(() => {
+    return Math.round((grandTotal - rawGrandTotal) * 100) / 100;
+  }, [grandTotal, rawGrandTotal]);
+
+  const totalQuantity = useMemo(() => {
+    return lines.reduce((acc, l) => acc + (l.quantity || 0), 0);
+  }, [lines]);
 
   const totals: VoucherTotals = {
     subtotal,
     discountTotal,
     taxableAmount,
+    gstRate: effectiveGstRate,
+    cgstRate,
     cgstAmount,
+    sgstRate,
     sgstAmount,
+    igstRate,
     igstAmount,
     totalTax,
+    courierCharges: courierCharges || 0,
     roundOff,
     grandTotal,
     totalQuantity,
@@ -907,19 +991,24 @@ export const NormalSalesVoucherPage: React.FC<Props> = ({ onNavigate, onSuccess,
   };
 
   // Save Voucher (DRAFT or POSTED)
-  const handleSaveVoucher = async (targetStatus: 'DRAFT' | 'POSTED') => {
+  const handleSaveVoucher = async (targetStatus: 'DRAFT' | 'POSTED', isSaveAndNew: boolean = false): Promise<any | null> => {
     setFormError(null);
 
     if (!selectedPartyId) {
       setFormError('Please select a Customer / Party to create the invoice.');
-      return;
+      return null;
+    }
+
+    if (targetStatus === 'POSTED' && isPartyStateMissing) {
+      setFormError('Party registered state is missing. Please update customer profile with state to determine GST place of supply.');
+      return null;
     }
 
     const nonBlankLines = lines.filter(l => !isVoucherLineEmpty(l));
 
     if (nonBlankLines.length === 0) {
       setFormError('Invoice must contain at least one stock item line.');
-      return;
+      return null;
     }
 
     for (let i = 0; i < nonBlankLines.length; i++) {
@@ -929,31 +1018,31 @@ export const NormalSalesVoucherPage: React.FC<Props> = ({ onNavigate, onSuccess,
 
       if (!l.uniqueItemId) {
         setFormError(`Line #${lineNum}: Stock Item is required.`);
-        return;
+        return null;
       }
 
       if (l.maintainBatches !== false) {
         if (!l.batches || l.batches.length === 0) {
           setFormError(`Line #${lineNum} (${itemName}): Batch allocations are required. Please allocate at least one batch.`);
-          return;
+          return null;
         }
         const unresolved = l.batches.filter(b => (b as any).unresolved || !b.batchId);
         if (unresolved.length > 0) {
           setFormError(
             `Line #${lineNum} (${itemName}): Contains ${unresolved.length} unresolved batch power(s). Please open batch allocations and select or create valid batches.`
           );
-          return;
+          return null;
         }
         const batchSum = l.batches.reduce((sum, b) => sum + Number(b.quantity || 0), 0);
         if (batchSum <= 0 || Math.abs(batchSum - l.quantity) > 0.001) {
           setFormError(`Line #${lineNum} (${itemName}): Sum of batch quantities (${batchSum.toFixed(2)}) must match line quantity (${l.quantity.toFixed(2)}).`);
-          return;
+          return null;
         }
         for (const b of l.batches) {
           const bVal = validateQuantity(b.quantity, l.unit || 'PRS');
           if (!bVal.valid) {
             setFormError(`Line #${lineNum} (${itemName}) batch allocation: ${bVal.error}`);
-            return;
+            return null;
           }
         }
       }
@@ -961,11 +1050,11 @@ export const NormalSalesVoucherPage: React.FC<Props> = ({ onNavigate, onSuccess,
       const qVal = validateQuantity(l.quantity, l.unit || 'PRS');
       if (!qVal.valid) {
         setFormError(`Line #${lineNum} (${itemName}): ${qVal.error}`);
-        return;
+        return null;
       }
       if (l.rate < 0) {
         setFormError(`Line #${lineNum} (${itemName}) has negative unit price.`);
-        return;
+        return null;
       }
     }
 
@@ -978,19 +1067,17 @@ export const NormalSalesVoucherPage: React.FC<Props> = ({ onNavigate, onSuccess,
         invoiceDate: invoiceDate,
         gstMode: gstMode,
         status: targetStatus,
-        notes: (() => {
-          const cleaned = cleanNarrationNotes(notes);
-          return cleaned
-            ? `${cleaned}${referenceNumber ? ` | Ref: ${referenceNumber}` : ''}`
-            : (referenceNumber ? `Ref: ${referenceNumber}` : undefined);
-        })(),
+        discountTotal: discountTotal,
+        gstRate: effectiveGstRate,
+        courierCharges: courierCharges || 0,
+        notes: cleanNarrationNotes(notes) || undefined,
         lines: nonBlankLines.map(l => ({
           uniqueItemId: l.uniqueItemId,
           quantity: l.quantity,
           rate: l.rate,
-          discountType: l.discountType === 'FIXED' ? 'FIXED' : 'PERCENTAGE',
-          discountValue: l.discountValue,
-          gstRate: gstMode === 'EXEMPT' ? 0 : l.gstRate,
+          discountType: 'NONE',
+          discountValue: 0,
+          gstRate: effectiveGstRate,
           batches:
             l.batches && l.batches.length > 0
               ? l.batches.map(b => ({
@@ -1020,13 +1107,17 @@ export const NormalSalesVoucherPage: React.FC<Props> = ({ onNavigate, onSuccess,
       });
 
       setCreatedInvoice(result);
-      setShowPrintModal(true);
+      if (!isSaveAndNew) {
+        setShowPrintModal(true);
+      }
+      return result;
     } catch (err: any) {
       console.error('Save invoice error:', err);
       setFormError(
         err.message ||
           'Failed to save sales invoice. Please check batch quantities and try again.'
       );
+      return null;
     } finally {
       setSubmitting(false);
     }
@@ -1035,18 +1126,50 @@ export const NormalSalesVoucherPage: React.FC<Props> = ({ onNavigate, onSuccess,
   const handleResetForm = () => {
     setCreatedInvoice(null);
     setShowPrintModal(false);
+    setIsPrintPreviewOpen(false);
     setConvertingOrderId(null);
     setConvertedOrderNumber(null);
     setSelectedPartyId('');
     setSelectedParty(null);
+    setPartyStateOverride('');
     setPartyCreditInfo(null);
     setInvoiceDate(new Date().toISOString().split('T')[0]);
     setNotes('');
     setReferenceNumber('');
+    setCourierCharges(0);
+    setInvoiceDiscount(0);
+    setInvoiceGstRate(0);
     setLines([createEmptyVoucherLine('row')]);
     setFormError(null);
     loadPrerequisites();
   };
+
+  // Save & New (Ctrl+A)
+  const handleSaveAndNew = async () => {
+    if (submitting) return;
+    const saved = await handleSaveVoucher('POSTED', true);
+    if (saved) {
+      handleResetForm();
+    }
+  };
+
+  // Print Shortcut (Ctrl+P)
+  const handlePrintShortcut = async () => {
+    if (submitting) return;
+    let inv = createdInvoice;
+    if (!inv && !editInvoiceId) {
+      inv = await handleSaveVoucher('POSTED', false);
+      if (!inv) return;
+    }
+    const previewBeforePrint = settings?.print?.previewBeforePrint ?? true;
+    setAutoInvokePrint(!previewBeforePrint);
+    setIsPrintPreviewOpen(true);
+  };
+
+  const saveAndNewRef = useRef(handleSaveAndNew);
+  saveAndNewRef.current = handleSaveAndNew;
+  const printShortcutRef = useRef(handlePrintShortcut);
+  printShortcutRef.current = handlePrintShortcut;
 
   const handleRemoveLine = (index: number) => {
     setLines(prev => {
@@ -1072,10 +1195,17 @@ export const NormalSalesVoucherPage: React.FC<Props> = ({ onNavigate, onSuccess,
       partyState: selectedParty?.state || '',
       partyPhone: selectedParty?.phone || '',
       party: selectedParty,
+      subtotal: totals.subtotal,
+      discountTotal: totals.discountTotal,
       taxableAmount: totals.taxableAmount,
+      gstRate: totals.gstRate,
+      cgstRate: totals.cgstRate,
       cgstAmount: totals.cgstAmount,
+      sgstRate: totals.sgstRate,
       sgstAmount: totals.sgstAmount,
+      igstRate: totals.igstRate,
       igstAmount: totals.igstAmount,
+      courierCharges: totals.courierCharges,
       roundOff: totals.roundOff,
       grandTotal: totals.grandTotal,
       lines: computedLines.filter(l => l.uniqueItemId && l.quantity > 0).map(l => ({
@@ -1085,11 +1215,11 @@ export const NormalSalesVoucherPage: React.FC<Props> = ({ onNavigate, onSuccess,
         quantity: l.quantity,
         unit: 'PRS',
         rate: l.rate,
-        taxableAmount: l.taxable,
-        cgstAmount: l.cgst,
-        sgstAmount: l.sgst,
-        igstAmount: l.igst,
-        lineTotal: l.total,
+        taxableAmount: l.gross,
+        cgstAmount: 0,
+        sgstAmount: 0,
+        igstAmount: 0,
+        lineTotal: l.gross,
         batches: l.batches || [],
       })),
       notes: notes,
@@ -1113,7 +1243,7 @@ export const NormalSalesVoucherPage: React.FC<Props> = ({ onNavigate, onSuccess,
         return {
           id: p.id,
           title: p.name,
-          subtitle: `${p.phone || p.mobile || ''} ${p.city ? `• ${p.city}` : ''}`.trim() || undefined,
+          subtitle: `${p.phone || p.mobile || ''} ${p.city ? `• ${p.city}` : ''} ${p.state ? `• ${p.state}` : ''}`.trim() || undefined,
           badge: p.partyType === 'CUSTOMER' ? 'Sundry Debtors' : p.partyType,
           badgeColor: 'blue' as const,
           rightText: bal !== 0 ? `₹${Math.abs(bal).toFixed(2)} ${bal < 0 ? 'Cr' : 'Dr'}` : '₹0.00',
@@ -1372,7 +1502,13 @@ export const NormalSalesVoucherPage: React.FC<Props> = ({ onNavigate, onSuccess,
       }
 
       // Hotkeys for voucher actions
-      if (e.altKey && e.key.toLowerCase() === 'd' && editInvoiceId && canDelete) {
+      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'a') {
+        e.preventDefault();
+        saveAndNewRef.current();
+      } else if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'p') {
+        e.preventDefault();
+        printShortcutRef.current();
+      } else if (e.altKey && e.key.toLowerCase() === 'd' && editInvoiceId && canDelete) {
         e.preventDefault();
         setShowDeleteConfirm(true);
       } else if (e.altKey && e.key.toLowerCase() === 'x' && editInvoiceId && canCancel) {
@@ -1380,9 +1516,7 @@ export const NormalSalesVoucherPage: React.FC<Props> = ({ onNavigate, onSuccess,
         setShowCancelConfirm(true);
       } else if (e.altKey && e.key.toLowerCase() === 'p') {
         e.preventDefault();
-        const previewBeforePrint = settings?.print?.previewBeforePrint ?? true;
-        setAutoInvokePrint(!previewBeforePrint);
-        setIsPrintPreviewOpen(true);
+        printShortcutRef.current();
       }
     };
 
@@ -1467,6 +1601,13 @@ export const NormalSalesVoucherPage: React.FC<Props> = ({ onNavigate, onSuccess,
             onReferenceNumberChange={setReferenceNumber}
             gstMode={gstMode}
             onGstModeChange={setGstMode}
+            partyStateValidation={{
+              bizState: getDisplayStateName(bizState),
+              partyState: getDisplayStateName(partyState),
+              isMissing: isPartyStateMissing,
+              isInterState: gstMode === 'INTER_STATE',
+            }}
+            onPartyStateChange={handlePartyStateChange}
             submitting={submitting}
             onSavePost={() => handleSaveVoucher('POSTED')}
             onPrint={() => {
@@ -1537,8 +1678,15 @@ export const NormalSalesVoucherPage: React.FC<Props> = ({ onNavigate, onSuccess,
             voucherType="SALES"
             totals={totals}
             gstMode={gstMode}
+            onGstModeChange={setGstMode}
             narration={notes}
             onNarrationChange={setNotes}
+            discount={invoiceDiscount}
+            onDiscountChange={setInvoiceDiscount}
+            gstRate={invoiceGstRate}
+            onGstRateChange={setInvoiceGstRate}
+            courierCharges={courierCharges}
+            onCourierChargesChange={setCourierCharges}
             previousBalance={
               partyCreditInfo
                 ? {
@@ -1558,13 +1706,10 @@ export const NormalSalesVoucherPage: React.FC<Props> = ({ onNavigate, onSuccess,
             canCancel={canCancel}
             submitting={submitting}
             onSave={() => handleSaveVoucher('POSTED')}
+            onSaveAndNew={handleSaveAndNew}
             onDelete={() => setShowDeleteConfirm(true)}
             onCancelVoucher={() => setShowCancelConfirm(true)}
-            onPrint={() => {
-              const previewBeforePrint = settings?.print?.previewBeforePrint ?? true;
-              setAutoInvokePrint(!previewBeforePrint);
-              setIsPrintPreviewOpen(true);
-            }}
+            onPrint={handlePrintShortcut}
             onBack={() => (onBack ? onBack() : onNavigate ? onNavigate('/sales/invoices') : window.history.back())}
           />
         </div>

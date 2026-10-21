@@ -750,6 +750,7 @@ export const purchaseInvoices = pgTable('purchase_invoices', {
   cgstAmount: numeric('cgst_amount', { precision: 12, scale: 2 }).default('0.00').notNull(),
   sgstRate: numeric('sgst_rate', { precision: 5, scale: 2 }).default('0.00').notNull(),
   sgstAmount: numeric('sgst_amount', { precision: 12, scale: 2 }).default('0.00').notNull(),
+  courierCharges: numeric('courier_charges', { precision: 12, scale: 2 }).default('0.00').notNull(),
   roundOff: numeric('round_off', { precision: 8, scale: 2 }).default('0.00').notNull(),
   grandTotal: numeric('grand_total', { precision: 12, scale: 2 }).default('0.00').notNull(),
   
@@ -1086,6 +1087,7 @@ export const salesInvoices = pgTable('sales_invoices', {
   cgstAmount: numeric('cgst_amount', { precision: 12, scale: 2 }).default('0.00').notNull(),
   sgstRate: numeric('sgst_rate', { precision: 5, scale: 2 }).default('0.00').notNull(),
   sgstAmount: numeric('sgst_amount', { precision: 12, scale: 2 }).default('0.00').notNull(),
+  courierCharges: numeric('courier_charges', { precision: 12, scale: 2 }).default('0.00').notNull(),
   roundOff: numeric('round_off', { precision: 12, scale: 2 }).default('0.00').notNull(),
   grandTotal: numeric('grand_total', { precision: 12, scale: 2 }).default('0.00').notNull(),
 

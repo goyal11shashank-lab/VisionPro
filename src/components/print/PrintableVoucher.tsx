@@ -118,13 +118,16 @@ export const PrintableVoucher: React.FC<PrintableVoucherProps> = ({
 
   // Financial Totals
   const lines: any[] = voucher.lines || [];
+  const subtotal = parseFloat(String(voucher.subtotal || 0));
+  const discountTotal = parseFloat(String(voucher.discountTotal || voucher.discount || 0));
+  const courierCharges = parseFloat(String(voucher.courierCharges || 0));
   const taxableAmount = parseFloat(String(voucher.taxableAmount || voucher.taxableValue || 0));
   const cgstAmount = parseFloat(String(voucher.cgstAmount || 0));
   const sgstAmount = parseFloat(String(voucher.sgstAmount || 0));
   const igstAmount = parseFloat(String(voucher.igstAmount || 0));
   const totalGst = cgstAmount + sgstAmount + igstAmount;
   const roundOff = parseFloat(String(voucher.roundOff || 0));
-  const grandTotal = parseFloat(String(voucher.grandTotal || voucher.totalAmount || voucher.amount || (taxableAmount + totalGst + roundOff)));
+  const grandTotal = parseFloat(String(voucher.grandTotal || voucher.totalAmount || voucher.amount || (taxableAmount + totalGst + roundOff + courierCharges)));
   const amountInWords = numberToIndianWords(grandTotal);
 
   return (
@@ -440,7 +443,19 @@ export const PrintableVoucher: React.FC<PrintableVoucherProps> = ({
         {/* Right: Commercial Totals */}
         <div className="border border-slate-300 rounded p-3 bg-slate-50 flex flex-col justify-between font-mono text-[11px]">
           <div className="space-y-1">
-            <div className="flex justify-between text-slate-600 font-sans">
+            {subtotal > 0 && (
+              <div className="flex justify-between text-slate-600 font-sans">
+                <span>Subtotal (Gross):</span>
+                <span className="font-mono">₹{subtotal.toFixed(2)}</span>
+              </div>
+            )}
+            {discountTotal > 0 && (
+              <div className="flex justify-between text-emerald-800 font-sans">
+                <span>Less Discount:</span>
+                <span className="font-mono">-₹{discountTotal.toFixed(2)}</span>
+              </div>
+            )}
+            <div className="flex justify-between text-slate-700 font-bold font-sans">
               <span>Taxable Subtotal:</span>
               <span className="font-mono">₹{taxableAmount.toFixed(2)}</span>
             </div>
@@ -460,6 +475,12 @@ export const PrintableVoucher: React.FC<PrintableVoucherProps> = ({
               <div className="flex justify-between text-slate-600 font-sans">
                 <span>IGST:</span>
                 <span className="font-mono">₹{igstAmount.toFixed(2)}</span>
+              </div>
+            )}
+            {courierCharges > 0 && (
+              <div className="flex justify-between text-slate-600 font-sans">
+                <span>Courier Charges:</span>
+                <span className="font-mono">+₹{courierCharges.toFixed(2)}</span>
               </div>
             )}
             {roundOff !== 0 && (

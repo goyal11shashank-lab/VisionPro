@@ -9,6 +9,7 @@ import {
   purchaseLots,
   supplierLedgers,
   parties,
+  businesses,
   uniqueItems,
   primaryItems,
   categories,
@@ -16,7 +17,7 @@ import {
   opticalStocks,
   stockLedger,
 } from '../db/schema.js';
-import { eq, and, desc, count, ilike, or } from 'drizzle-orm';
+import { eq, and, desc, count, ilike, or, gte, lte } from 'drizzle-orm';
 import { calculateLineTax, calculateInvoiceTotals, round2 } from './taxCalculationService.js';
 import { findOrCreateOpticalBatch, OpticalPowerInput } from './opticalMasterService.js';
 import { AuditService } from './auditService.js';
@@ -77,6 +78,9 @@ export interface CreatePurchaseInvoiceDTO {
   supplierInvoiceNumber?: string;
   supplierInvoiceDate?: string | Date;
   gstMode?: 'INTRA_STATE' | 'INTER_STATE';
+  discountTotal?: number;
+  gstRate?: number;
+  courierCharges?: number;
   status?: 'DRAFT' | 'POSTED';
   notes?: string;
   lines: PurchaseLineInput[];
@@ -166,6 +170,27 @@ export class PurchaseService {
       throw new Error('Selected party is a CUSTOMER. Only parties of type SUPPLIER or BOTH can be used for purchase.');
     }
 
+    const [biz] = await db
+      .select()
+      .from(businesses)
+      .where(eq(businesses.id, businessId))
+      .limit(1);
+
+    const bizState = (biz?.state || '').trim();
+    const supplierState = (supplier?.state || '').trim();
+    const targetStatus = data.status || 'DRAFT';
+
+    if (targetStatus === 'POSTED' && (!bizState || !supplierState)) {
+      throw new Error(
+        `State information is required to determine GST place of supply. ${
+          !bizState ? 'Business registered state is missing. ' : ''
+        }${!supplierState ? 'Supplier registered state is missing. Please update supplier profile with state.' : ''}`.trim()
+      );
+    }
+
+    const isInterState = bizState && supplierState && bizState.toLowerCase() !== supplierState.toLowerCase();
+    const gstMode = data.gstMode || (isInterState ? 'INTER_STATE' : 'INTRA_STATE');
+
     const invoiceDate = new Date(data.invoiceDate || new Date());
     const creditDaysSnapshot = parseInt(String((supplier as any)?.creditDays || (supplier as any)?.credit_days || 0), 10) || 0;
     const dueDate = data.dueDate
@@ -173,7 +198,6 @@ export class PurchaseService {
       : new Date(invoiceDate.getTime() + creditDaysSnapshot * 24 * 60 * 60 * 1000);
 
     const supplierInvoiceDate = data.supplierInvoiceDate ? new Date(data.supplierInvoiceDate) : null;
-    const gstMode = data.gstMode || 'INTRA_STATE';
 
     // 2. Validate Unique Items and calculate line values
     const processedLines = [];
@@ -210,7 +234,7 @@ export class PurchaseService {
         rate,
         discountType: line.discountType,
         discountValue: line.discountValue,
-        gstRate: line.gstRate !== undefined ? line.gstRate : itemGst,
+        gstRate: line.gstRate !== undefined ? line.gstRate : (data.gstRate !== undefined ? data.gstRate : itemGst),
       });
 
       calculatedLineTaxResults.push(taxRes);
@@ -290,6 +314,9 @@ export class PurchaseService {
     const totals = calculateInvoiceTotals({
       lines: calculatedLineTaxResults,
       gstMode,
+      invoiceDiscount: data.discountTotal,
+      invoiceGstRate: data.gstRate,
+      courierCharges: data.courierCharges,
     });
 
     // 4. Insert into database inside transaction
@@ -310,15 +337,17 @@ export class PurchaseService {
           supplier_invoice_number, supplier_invoice_date, gst_mode,
           subtotal, discount_total, taxable_amount,
           igst_rate, igst_amount, cgst_rate, cgst_amount, sgst_rate, sgst_amount,
-          round_off, grand_total, payment_status, status, notes,
+          courier_charges, round_off, grand_total, payment_status, status, notes,
           created_by, updated_by
         ) VALUES (
           $1, $2, $3, $4, $5,
           $6, $7,
           $8, $9, $10,
-          $11, $12, $13, $14, $15, $16,
-          $17, $18, $19, $20, $21, 'UNPAID', 'DRAFT', $22,
-          $23, $23
+          $11, $12, $13,
+          $14, $15, $16, $17, $18, $19,
+          $20, $21, $22,
+          'UNPAID', 'DRAFT', $23,
+          $24, $24
         ) RETURNING *`,
         [
           businessId,
@@ -340,6 +369,7 @@ export class PurchaseService {
           totals.cgstAmount.toFixed(2),
           totals.sgstRate.toFixed(2),
           totals.sgstAmount.toFixed(2),
+          totals.courierCharges.toFixed(2),
           totals.roundOff.toFixed(2),
           totals.grandTotal.toFixed(2),
           data.notes || null,
@@ -729,6 +759,9 @@ export class PurchaseService {
       const totals = calculateInvoiceTotals({
         lines: calculatedLineTaxResults,
         gstMode,
+        invoiceDiscount: data.discountTotal,
+        invoiceGstRate: data.gstRate,
+        courierCharges: data.courierCharges,
       });
 
       // Delete old line batches & invoice lines
@@ -760,13 +793,14 @@ export class PurchaseService {
           cgst_amount = $12,
           sgst_rate = $13,
           sgst_amount = $14,
-          round_off = $15,
-          grand_total = $16,
-          status = $17,
-          notes = $18,
-          updated_by = $19,
+          courier_charges = $15,
+          round_off = $16,
+          grand_total = $17,
+          status = $18,
+          notes = $19,
+          updated_by = $20,
           updated_at = NOW()
-        WHERE business_id = $20 AND id = $21`,
+        WHERE business_id = $21 AND id = $22`,
         [
           data.supplierPartyId,
           invoiceDate.toISOString(),
@@ -782,6 +816,7 @@ export class PurchaseService {
           totals.cgstAmount.toFixed(2),
           totals.sgstRate.toFixed(2),
           totals.sgstAmount.toFixed(2),
+          totals.courierCharges.toFixed(2),
           totals.roundOff.toFixed(2),
           totals.grandTotal.toFixed(2),
           targetStatus,
@@ -1072,9 +1107,11 @@ export class PurchaseService {
       search?: string;
       limit?: number;
       offset?: number;
+      fromDate?: string;
+      toDate?: string;
     } = {}
   ) {
-    const limit = Math.min(filters.limit || 50, 200);
+    const limit = Math.min(filters.limit || 100, 500);
     const offset = filters.offset || 0;
 
     let conditions = [eq(purchaseInvoices.businessId, businessId)];
@@ -1097,6 +1134,22 @@ export class PurchaseService {
       );
     }
 
+    if (filters.fromDate) {
+      const from = new Date(filters.fromDate);
+      if (!isNaN(from.getTime())) {
+        from.setHours(0, 0, 0, 0);
+        conditions.push(gte(purchaseInvoices.invoiceDate, from));
+      }
+    }
+
+    if (filters.toDate) {
+      const to = new Date(filters.toDate);
+      if (!isNaN(to.getTime())) {
+        to.setHours(23, 59, 59, 999);
+        conditions.push(lte(purchaseInvoices.invoiceDate, to));
+      }
+    }
+
     const rows = await db
       .select({
         invoice: purchaseInvoices,
@@ -1105,7 +1158,11 @@ export class PurchaseService {
       .from(purchaseInvoices)
       .innerJoin(parties, eq(purchaseInvoices.supplierPartyId, parties.id))
       .where(and(...conditions))
-      .orderBy(desc(purchaseInvoices.invoiceDate), desc(purchaseInvoices.createdAt))
+      .orderBy(
+        desc(purchaseInvoices.invoiceDate),
+        desc(purchaseInvoices.createdAt),
+        desc(purchaseInvoices.invoiceNumber)
+      )
       .limit(limit)
       .offset(offset);
 
@@ -2902,6 +2959,9 @@ export class PurchaseService {
       supplierInvoiceNumber: invoiceOverrides?.supplierInvoiceNumber || order.supplier_reference || undefined,
       supplierInvoiceDate: invoiceOverrides?.supplierInvoiceDate,
       gstMode: invoiceOverrides?.gstMode || (order.gst_mode as any),
+      discountTotal: invoiceOverrides?.discountTotal,
+      gstRate: invoiceOverrides?.gstRate,
+      courierCharges: invoiceOverrides?.courierCharges,
       notes: invoiceOverrides?.notes || (order.notes ? `Converted from PO #${order.order_number}. ${order.notes}` : `Converted from PO #${order.order_number}`),
       status: 'POSTED',
       lines: linesToConvert,

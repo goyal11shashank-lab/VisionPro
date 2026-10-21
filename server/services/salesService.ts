@@ -16,7 +16,7 @@ import {
   stockLedger,
   stockReservations,
 } from '../db/schema.js';
-import { eq, and, desc, count, ilike, or, sql, inArray } from 'drizzle-orm';
+import { eq, and, desc, count, ilike, or, sql, inArray, gte, lte } from 'drizzle-orm';
 import { calculateLineTax, calculateInvoiceTotals, round2 } from './taxCalculationService.js';
 import { AuditService } from './auditService.js';
 import { rankSearchMatch, formatOpticalBatchName } from '../utils/searchNormalization.js';
@@ -69,6 +69,9 @@ export interface CreateSalesInvoiceDTO {
   gstMode?: 'INTRA_STATE' | 'INTER_STATE';
   paymentTerms?: string;
   notes?: string;
+  discountTotal?: number;
+  gstRate?: number;
+  courierCharges?: number;
   lines: SalesLineInput[];
   status?: 'DRAFT' | 'POSTED';
   idempotencyKey?: string;
@@ -1505,8 +1508,19 @@ export class SalesService {
     }
 
     const [biz] = await db.select().from(businesses).where(eq(businesses.id, businessId)).limit(1);
-    const isInterState =
-      biz?.state && customer?.state && biz.state.trim().toLowerCase() !== customer.state.trim().toLowerCase();
+    const bizState = (biz?.state || '').trim();
+    const customerState = (customer?.state || '').trim();
+    const targetStatus = data.status || 'DRAFT';
+
+    if (targetStatus === 'POSTED' && (!bizState || !customerState)) {
+      throw new Error(
+        `State information is required to determine GST place of supply. ${
+          !bizState ? 'Business registered state is missing. ' : ''
+        }${!customerState ? 'Customer registered state is missing. Please update customer profile with state.' : ''}`.trim()
+      );
+    }
+
+    const isInterState = bizState && customerState && bizState.toLowerCase() !== customerState.toLowerCase();
     const gstMode = data.gstMode || (isInterState ? 'INTER_STATE' : 'INTRA_STATE');
 
     const invoiceDate = new Date(data.invoiceDate || new Date());
@@ -1514,7 +1528,6 @@ export class SalesService {
     const dueDate = data.dueDate
       ? new Date(data.dueDate)
       : new Date(invoiceDate.getTime() + creditDaysSnapshot * 24 * 60 * 60 * 1000);
-    const targetStatus = data.status || 'DRAFT';
 
     const lineItemIds = data.lines.map(l => l.uniqueItemId);
     const lineItems = lineItemIds.length > 0
@@ -1546,7 +1559,7 @@ export class SalesService {
         rate: line.rate,
         discountType: discType,
         discountValue: discVal,
-        gstRate: line.gstRate ?? 0.0,
+        gstRate: line.gstRate ?? (data.gstRate ?? 0.0),
       });
 
       return {
@@ -1558,6 +1571,9 @@ export class SalesService {
     const totals = calculateInvoiceTotals({
       lines: computedLines.map(l => l.taxRes),
       gstMode,
+      invoiceDiscount: data.discountTotal,
+      invoiceGstRate: data.gstRate,
+      courierCharges: data.courierCharges,
     });
 
     const client = await pool.connect();
@@ -1577,13 +1593,13 @@ export class SalesService {
           due_date, credit_days_snapshot,
           subtotal, discount_total, taxable_amount,
           igst_rate, igst_amount, cgst_rate, cgst_amount, sgst_rate, sgst_amount,
-          round_off, grand_total, status, notes, created_by, updated_by
+          courier_charges, round_off, grand_total, status, notes, created_by, updated_by
         ) VALUES (
           $1, $2, $3, $4, $5,
           $6, $7,
           $8, $9, $10,
           $11, $12, $13, $14, $15, $16,
-          $17, $18, $19, $20, $21, $22
+          $17, $18, $19, $20, $21, $22, $23
         ) RETURNING id`,
         [
           businessId,
@@ -1602,6 +1618,7 @@ export class SalesService {
           totals.cgstAmount.toFixed(2),
           totals.sgstRate.toFixed(2),
           totals.sgstAmount.toFixed(2),
+          totals.courierCharges.toFixed(2),
           totals.roundOff.toFixed(2),
           totals.grandTotal.toFixed(2),
           targetStatus,
@@ -1813,12 +1830,22 @@ export class SalesService {
       }
 
       const [biz] = await db.select().from(businesses).where(eq(businesses.id, businessId)).limit(1);
-      const isInterState =
-        biz?.state && customer?.state && biz.state.trim().toLowerCase() !== customer.state.trim().toLowerCase();
+      const bizState = (biz?.state || '').trim();
+      const customerState = (customer?.state || '').trim();
+      const targetStatus = data.status || existingInv.status;
+
+      if (targetStatus === 'POSTED' && (!bizState || !customerState)) {
+        throw new Error(
+          `State information is required to determine GST place of supply. ${
+            !bizState ? 'Business registered state is missing. ' : ''
+          }${!customerState ? 'Customer registered state is missing. Please update customer profile with state.' : ''}`.trim()
+        );
+      }
+
+      const isInterState = bizState && customerState && bizState.toLowerCase() !== customerState.toLowerCase();
       const gstMode = data.gstMode || (isInterState ? 'INTER_STATE' : 'INTRA_STATE');
 
       const invoiceDate = new Date(data.invoiceDate || existingInv.invoice_date);
-      const targetStatus = data.status || existingInv.status;
 
       const computedLines = data.lines.map(line => {
         if (line.quantity <= 0) throw new Error('Line quantity must be greater than zero');
@@ -1836,7 +1863,7 @@ export class SalesService {
           rate: line.rate,
           discountType: discType,
           discountValue: discVal,
-          gstRate: line.gstRate ?? 0.0,
+          gstRate: line.gstRate ?? (data.gstRate ?? 0.0),
         });
 
         return {
@@ -1848,6 +1875,9 @@ export class SalesService {
       const totals = calculateInvoiceTotals({
         lines: computedLines.map(l => l.taxRes),
         gstMode,
+        invoiceDiscount: data.discountTotal,
+        invoiceGstRate: data.gstRate,
+        courierCharges: data.courierCharges,
       });
 
       if (targetStatus === 'POSTED') {
@@ -1883,13 +1913,14 @@ export class SalesService {
           cgst_amount = $9,
           sgst_rate = $10,
           sgst_amount = $11,
-          round_off = $12,
-          grand_total = $13,
-          status = $14,
-          notes = $15,
-          updated_by = $16,
+          courier_charges = $12,
+          round_off = $13,
+          grand_total = $14,
+          status = $15,
+          notes = $16,
+          updated_by = $17,
           updated_at = NOW()
-        WHERE business_id = $17 AND id = $18`,
+        WHERE business_id = $18 AND id = $19`,
         [
           data.partyId,
           invoiceDate,
@@ -1902,6 +1933,7 @@ export class SalesService {
           totals.cgstAmount.toFixed(2),
           totals.sgstRate.toFixed(2),
           totals.sgstAmount.toFixed(2),
+          totals.courierCharges.toFixed(2),
           totals.roundOff.toFixed(2),
           totals.grandTotal.toFixed(2),
           targetStatus,
@@ -3117,9 +3149,11 @@ export class SalesService {
       search?: string;
       limit?: number;
       offset?: number;
+      fromDate?: string;
+      toDate?: string;
     }
   ) {
-    const limit = filters?.limit || 50;
+    const limit = Math.min(filters?.limit || 100, 500);
     const offset = filters?.offset || 0;
 
     let conditions = [eq(salesInvoices.businessId, businessId)];
@@ -3138,6 +3172,20 @@ export class SalesService {
         )!
       );
     }
+    if (filters?.fromDate) {
+      const from = new Date(filters.fromDate);
+      if (!isNaN(from.getTime())) {
+        from.setHours(0, 0, 0, 0);
+        conditions.push(gte(salesInvoices.invoiceDate, from));
+      }
+    }
+    if (filters?.toDate) {
+      const to = new Date(filters.toDate);
+      if (!isNaN(to.getTime())) {
+        to.setHours(23, 59, 59, 999);
+        conditions.push(lte(salesInvoices.invoiceDate, to));
+      }
+    }
 
     const [totalCountRes] = await db
       .select({ count: count() })
@@ -3155,7 +3203,11 @@ export class SalesService {
       .leftJoin(parties, eq(salesInvoices.partyId, parties.id))
       .leftJoin(salesOrders, eq(salesInvoices.salesOrderId, salesOrders.id))
       .where(and(...conditions))
-      .orderBy(desc(salesInvoices.invoiceDate), desc(salesInvoices.createdAt))
+      .orderBy(
+        desc(salesInvoices.invoiceDate),
+        desc(salesInvoices.createdAt),
+        desc(salesInvoices.invoiceNumber)
+      )
       .limit(limit)
       .offset(offset);
 

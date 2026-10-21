@@ -49,6 +49,9 @@ async function runTests() {
       throw new Error('No supplier party available.');
     } else {
       supplierId = allSuppliers[0].id;
+      if (!allSuppliers[0].state) {
+        await db.update(parties).set({ state: allBusinesses[0].state || 'Delhi' }).where(eq(parties.id, supplierId));
+      }
     }
 
     // Find an optical SV item

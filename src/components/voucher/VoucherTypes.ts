@@ -47,10 +47,15 @@ export interface VoucherTotals {
   subtotal: number;
   discountTotal: number;
   taxableAmount: number;
+  gstRate?: number;
+  cgstRate?: number;
   cgstAmount: number;
+  sgstRate?: number;
   sgstAmount: number;
+  igstRate?: number;
   igstAmount: number;
   totalTax: number;
+  courierCharges?: number;
   roundOff: number;
   grandTotal: number;
   totalQuantity: number;
