@@ -12,6 +12,7 @@ import {
   Link2,
 } from 'lucide-react';
 import { useAuth } from '../../context/AuthContext.js';
+import { useUnsavedChanges } from '../../context/UnsavedChangesContext.js';
 import { GlobalSearchModal } from '../search/GlobalSearchModal.js';
 
 interface HeaderProps {
@@ -26,6 +27,7 @@ export const Header: React.FC<HeaderProps> = ({
   onNavigate,
 }) => {
   const { user, currentBusiness, accessibleBusinesses, switchBusiness } = useAuth();
+  const { confirmAction } = useUnsavedChanges();
   const [isBizDropdownOpen, setIsBizDropdownOpen] = useState<boolean>(false);
   const [isSearchOpen, setIsSearchOpen] = useState<boolean>(false);
   const [isSwitching, setIsSwitching] = useState<boolean>(false);
@@ -36,13 +38,15 @@ export const Header: React.FC<HeaderProps> = ({
       setIsBizDropdownOpen(false);
       return;
     }
-    setIsSwitching(true);
-    try {
-      await switchBusiness(bizId);
-    } finally {
-      setIsSwitching(false);
-      setIsBizDropdownOpen(false);
-    }
+    confirmAction(async () => {
+      setIsSwitching(true);
+      try {
+        await switchBusiness(bizId);
+      } finally {
+        setIsSwitching(false);
+        setIsBizDropdownOpen(false);
+      }
+    }, 'Switching business will discard your unsaved changes. Do you wish to leave?');
   };
 
   const userInitials = user?.fullName

@@ -41,10 +41,11 @@ import { ReportsCenterPage } from './pages/reports/ReportsCenterPage.js';
 import { StockReservationsPage } from './pages/sales/StockReservationsPage.js';
 import { OpeningStockPage } from './pages/inventory/OpeningStockPage.js';
 import { RefreshCw, ShieldCheck, Building2, LogOut } from 'lucide-react';
+import { UnsavedChangesProvider, useUnsavedChanges } from './context/UnsavedChangesContext.js';
 
 const AppContent: React.FC = () => {
   const { user, isLoading, currentBusiness, accessibleBusinesses, logout, hasPermission, roles, refreshUser } = useAuth();
-  const [currentPath, setCurrentPath] = useState<string>('/dashboard');
+  const { currentPath, setCurrentPath, navigate } = useUnsavedChanges();
 
   const canConfigureDealer = Boolean(
     user?.isSuperAdmin ||
@@ -261,13 +262,13 @@ const AppContent: React.FC = () => {
     switch (pathOnly) {
       case '/dealer/onboarding':
         if (currentBusiness?.businessType === 'MAIN') {
-          return <DashboardPage onNavigate={setCurrentPath} />;
+          return <DashboardPage onNavigate={navigate} />;
         }
         return (
           <DealerOnboardingPage
-            onNavigate={setCurrentPath}
+            onNavigate={navigate}
             onComplete={() => {
-              setCurrentPath('/dealer/dashboard');
+              navigate('/dealer/dashboard');
               refreshUser();
             }}
           />
@@ -275,15 +276,15 @@ const AppContent: React.FC = () => {
       case '/':
       case '/dashboard':
         if (currentBusiness?.businessType === 'DEALER') {
-          return <DealerDashboardPage onNavigate={setCurrentPath} />;
+          return <DealerDashboardPage onNavigate={navigate} />;
         }
-        return <DashboardPage onNavigate={setCurrentPath} />;
+        return <DashboardPage onNavigate={navigate} />;
       case '/dealer/dashboard':
-        return <DealerDashboardPage onNavigate={setCurrentPath} />;
+        return <DealerDashboardPage onNavigate={navigate} />;
       case '/dealers':
       case '/sales/dealers':
       case '/admin/dealers':
-        return <DealerControlCenterPage onNavigate={setCurrentPath} />;
+        return <DealerControlCenterPage onNavigate={navigate} />;
       case '/admin/businesses':
         return <BusinessesPage />;
       case '/admin/users':
@@ -318,7 +319,7 @@ const AppContent: React.FC = () => {
       case '/master/batches':
         return (
           <OpticalBatchesPage
-            onNavigate={setCurrentPath}
+            onNavigate={navigate}
             initialStockFilter={
               (searchParams.get('stockFilter') as any) ||
               (searchParams.get('stockStatus') === 'NEGATIVE_STOCK'
@@ -332,15 +333,15 @@ const AppContent: React.FC = () => {
       case '/inventory/dealer-availability':
       case '/dealer/availability':
       case '/inventory/main-warehouse':
-        return <DealerMainWarehouseAvailabilityPage onNavigate={setCurrentPath} />;
+        return <DealerMainWarehouseAvailabilityPage onNavigate={navigate} />;
       case '/dealer/orders':
       case '/inventory/dealer-orders':
-        return <DealerOrdersListPage onNavigate={setCurrentPath} />;
+        return <DealerOrdersListPage onNavigate={navigate} />;
       case '/dealer/payments':
       case '/dealer/payment-advices':
         return (
           <div className="p-6 max-w-7xl mx-auto space-y-6">
-            <DealerPaymentAdvicesList onNavigate={setCurrentPath} />
+            <DealerPaymentAdvicesList onNavigate={navigate} />
           </div>
         );
 
@@ -349,30 +350,26 @@ const AppContent: React.FC = () => {
         return (
           <SalesOrdersPage
             onNavigateToInvoice={(orderId) => {
-              const target = `/sales/invoices/new?orderId=${orderId}`;
-              if (typeof window !== 'undefined') {
-                window.history.pushState(null, '', target);
-              }
-              setCurrentPath(target);
+              navigate(`/sales/invoices/new?orderId=${orderId}`);
             }}
           />
         );
       case '/sales/invoices':
-        return <SalesInvoicesPage onNavigate={setCurrentPath} />;
+        return <SalesInvoicesPage onNavigate={navigate} />;
       case '/sales/pos':
-        return <SalesInvoicesPage initialOpenPos={true} onNavigate={setCurrentPath} />;
+        return <SalesInvoicesPage initialOpenPos={true} onNavigate={navigate} />;
       case '/sales/invoices/new':
       case '/sales/voucher/new':
       case '/sales/voucher':
       case '/sales/new':
-        return <NormalSalesVoucherPage onNavigate={setCurrentPath} orderId={orderIdParam} />;
+        return <NormalSalesVoucherPage onNavigate={navigate} orderId={orderIdParam} />;
       default:
         if (pathOnly.startsWith('/sales/invoices/') && pathOnly.endsWith('/print')) {
           const invId = pathOnly.replace('/sales/invoices/', '').replace('/print', '');
           return (
             <SalesInvoicePrintPage
               invoiceId={invId}
-              onBack={() => setCurrentPath('/sales/invoices')}
+              onBack={() => navigate('/sales/invoices')}
             />
           );
         }
@@ -381,7 +378,7 @@ const AppContent: React.FC = () => {
           return (
             <SalesInvoicePrintPage
               invoiceId={invId}
-              onBack={() => setCurrentPath('/sales/invoices')}
+              onBack={() => navigate('/sales/invoices')}
             />
           );
         }
@@ -390,9 +387,9 @@ const AppContent: React.FC = () => {
           return (
             <NormalSalesVoucherPage
               editInvoiceId={editId}
-              onNavigate={setCurrentPath}
-              onBack={() => setCurrentPath('/sales/invoices')}
-              onSuccess={() => setCurrentPath('/sales/invoices')}
+              onNavigate={navigate}
+              onBack={() => navigate('/sales/invoices')}
+              onSuccess={() => navigate('/sales/invoices')}
             />
           );
         }
@@ -401,9 +398,9 @@ const AppContent: React.FC = () => {
           return (
             <NormalSalesVoucherPage
               editInvoiceId={editId}
-              onNavigate={setCurrentPath}
-              onBack={() => setCurrentPath('/sales/invoices')}
-              onSuccess={() => setCurrentPath('/sales/invoices')}
+              onNavigate={navigate}
+              onBack={() => navigate('/sales/invoices')}
+              onSuccess={() => navigate('/sales/invoices')}
             />
           );
         }
@@ -417,10 +414,10 @@ const AppContent: React.FC = () => {
         return <CustomerLedgerPage />;
       case '/sales/reservations':
       case '/sales/stock-reservations':
-        return <StockReservationsPage onNavigate={setCurrentPath} />;
+        return <StockReservationsPage onNavigate={navigate} />;
       case '/inventory/opening-stock':
       case '/master/opening-stock':
-        return <OpeningStockPage onNavigate={setCurrentPath} />;
+        return <OpeningStockPage onNavigate={navigate} />;
 
       case '/sales/prescriptions':
         return (
@@ -448,14 +445,14 @@ const AppContent: React.FC = () => {
       case '/purchases/new':
         return (
           <CreatePurchaseInvoicePage
-            onBack={() => setCurrentPath('/purchase/invoices')}
-            onSuccess={() => setCurrentPath('/purchase/invoices')}
+            onBack={() => navigate('/purchase/invoices')}
+            onSuccess={() => navigate('/purchase/invoices')}
           />
         );
 
       case '/purchases/orders':
       case '/purchase/orders':
-        return <PurchaseOrdersPage onNavigate={setCurrentPath} />;
+        return <PurchaseOrdersPage onNavigate={navigate} />;
 
       case '/purchases/invoices':
       case '/purchase/invoices':
@@ -492,7 +489,7 @@ const AppContent: React.FC = () => {
       case '/accounts/payments':
         return <SupplierPaymentsPage />;
       case '/accounts/outstanding':
-        return <OutstandingAgingPage onNavigate={setCurrentPath} />;
+        return <OutstandingAgingPage onNavigate={navigate} />;
       case '/accounts/ledgers':
         return <ReportsCenterPage initialTab="party-statement" />;
 
@@ -523,19 +520,19 @@ const AppContent: React.FC = () => {
       default:
         if (pathOnly.startsWith('/dealers/')) {
           const dealerId = pathOnly.replace('/dealers/', '');
-          return <DealerControlCenterPage onNavigate={setCurrentPath} initialDealerId={dealerId} />;
+          return <DealerControlCenterPage onNavigate={navigate} initialDealerId={dealerId} />;
         }
         if (currentBusiness?.businessType === 'DEALER') {
-          return <DealerDashboardPage onNavigate={setCurrentPath} />;
+          return <DealerDashboardPage onNavigate={navigate} />;
         }
-        return <DashboardPage onNavigate={setCurrentPath} />;
+        return <DashboardPage onNavigate={navigate} />;
     }
   };
 
   return (
     <MainLayout
       currentPath={currentPath}
-      onNavigate={setCurrentPath}
+      onNavigate={navigate}
       title={getPageTitle()}
     >
       <div key={currentBusiness?.id || 'no-business'}>
@@ -549,7 +546,9 @@ export default function App() {
   return (
     <AuthProvider>
       <SettingsProvider>
-        <AppContent />
+        <UnsavedChangesProvider>
+          <AppContent />
+        </UnsavedChangesProvider>
       </SettingsProvider>
     </AuthProvider>
   );

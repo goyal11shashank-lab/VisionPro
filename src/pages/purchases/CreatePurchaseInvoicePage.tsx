@@ -41,6 +41,20 @@ import {
 } from '../../components/voucher/VoucherTypes';
 import { InlinePartyModal } from '../../components/common/InlinePartyModal';
 import { determineGstMode, resolveEntityState, getDisplayStateName } from '../../utils/gstHelper';
+import { useUnsavedChanges } from '../../context/UnsavedChangesContext';
+import { VoucherDraftRecoveryBanner } from '../../components/common/VoucherDraftRecoveryBanner';
+import {
+  VoucherFormState,
+  isVoucherDirty,
+  hasEnteredVoucherData,
+  normalizeVoucherSnapshot,
+} from '../../utils/voucherDirtyHelper';
+import {
+  saveVoucherDraft,
+  getVoucherDraft,
+  clearVoucherDraft,
+  VoucherDraft,
+} from '../../utils/voucherDraftStorage';
 
 interface Props {
   editInvoiceId?: string | null;
@@ -63,7 +77,8 @@ export const CreatePurchaseInvoicePage: React.FC<Props> = ({
   onSuccess,
   onNavigate,
 }) => {
-  const { currentBusiness, hasPermission } = useAuth();
+  const { user, currentBusiness, hasPermission } = useAuth();
+  const { setDirty } = useUnsavedChanges();
 
   const detectedOrderId = (() => {
     if (fromPurchaseOrderId) return fromPurchaseOrderId;
@@ -204,6 +219,161 @@ export const CreatePurchaseInvoicePage: React.FC<Props> = ({
     hasPermission('purchase.edit') ||
     hasPermission('admin')
   );
+
+  // Unsaved Changes and Baseline Tracking
+  const baselineSnapshotRef = useRef<VoucherFormState>(normalizeVoucherSnapshot(null));
+  const [isBaselineReady, setIsBaselineReady] = useState<boolean>(false);
+  const [availableDraft, setAvailableDraft] = useState<VoucherDraft | null>(null);
+
+  // Compute current voucher snapshot for comparison and draft saving
+  const currentVoucherSnapshot: VoucherFormState = useMemo(() => ({
+    partyId: supplierPartyId,
+    invoiceDate,
+    dueDate,
+    paymentMode,
+    paymentTerms,
+    referenceNumber: supplierInvoiceNumber,
+    supplierInvoiceDate,
+    notes,
+    courierCharges,
+    invoiceDiscount,
+    invoiceGstRate,
+    partyStateOverride,
+    gstMode,
+    lines: lines.map(l => ({
+      uniqueItemId: l.uniqueItemId,
+      quantity: l.quantity,
+      rate: l.rate,
+      discountType: l.discountType || 'NONE',
+      discountValue: l.discountValue || 0,
+      gstRate: l.gstRate || 0,
+      batches: l.batches?.map(b => ({
+        batchId: b.batchId,
+        quantity: b.quantity,
+        rate: b.rate,
+        sph: b.sph,
+        cyl: b.cyl,
+        axis: b.axis,
+        add: b.add,
+        side: b.side,
+      })) || [],
+    })),
+  }), [
+    supplierPartyId,
+    invoiceDate,
+    dueDate,
+    paymentMode,
+    paymentTerms,
+    supplierInvoiceNumber,
+    supplierInvoiceDate,
+    notes,
+    courierCharges,
+    invoiceDiscount,
+    invoiceGstRate,
+    partyStateOverride,
+    gstMode,
+    lines,
+  ]);
+
+  // Compute whether the voucher is truly dirty
+  const isDirty = useMemo(() => {
+    if (!isBaselineReady) return false;
+    return isVoucherDirty(currentVoucherSnapshot, baselineSnapshotRef.current);
+  }, [isBaselineReady, currentVoucherSnapshot]);
+
+  // Inform central navigation and browser beforeunload guard
+  useEffect(() => {
+    setDirty(isDirty, 'You have unsaved changes in this Purchase Voucher. If you leave this page, your changes may be lost.');
+  }, [isDirty, setDirty]);
+
+  // Clean up dirty state on unmount
+  useEffect(() => {
+    return () => {
+      setDirty(false);
+    };
+  }, [setDirty]);
+
+  // Check for unsaved draft in local storage on mount / business change
+  useEffect(() => {
+    if (!currentBusiness?.id || !user?.id) return;
+    const draft = getVoucherDraft(currentBusiness.id, user.id, 'PURCHASE', editInvoiceId || editOrderId || null);
+    if (draft && draft.form && hasEnteredVoucherData(draft.form)) {
+      setAvailableDraft(draft);
+    }
+  }, [currentBusiness?.id, user?.id, editInvoiceId, editOrderId]);
+
+  // Auto-save draft on debounced modification when dirty
+  useEffect(() => {
+    if (!isBaselineReady || !isDirty || !currentBusiness?.id || !user?.id) return;
+    if (!hasEnteredVoucherData(currentVoucherSnapshot)) return;
+
+    const timer = setTimeout(() => {
+      saveVoucherDraft(currentBusiness.id, user.id, 'PURCHASE', editInvoiceId || editOrderId || null, currentVoucherSnapshot);
+    }, 1000);
+
+    return () => clearTimeout(timer);
+  }, [isBaselineReady, isDirty, currentVoucherSnapshot, currentBusiness?.id, user?.id, editInvoiceId, editOrderId]);
+
+  const handleRestoreDraft = () => {
+    if (!availableDraft?.form) return;
+    const f = availableDraft.form;
+    if (f.partyId) {
+      setSupplierPartyId(f.partyId);
+      const foundParty = suppliers.find(p => p.id === f.partyId);
+      if (foundParty) setSelectedParty(foundParty);
+    }
+    if (f.invoiceDate) setInvoiceDate(f.invoiceDate);
+    if (f.dueDate) setDueDate(f.dueDate);
+    if (f.paymentMode) setPaymentMode(f.paymentMode);
+    if (f.paymentTerms) setPaymentTerms(f.paymentTerms);
+    if (f.referenceNumber !== undefined) setSupplierInvoiceNumber(f.referenceNumber || '');
+    if (f.supplierInvoiceDate !== undefined) setSupplierInvoiceDate(f.supplierInvoiceDate || '');
+    if (f.notes !== undefined) setNotes(f.notes || '');
+    if (f.courierCharges !== undefined) setCourierCharges(Number(f.courierCharges || 0));
+    if (f.invoiceDiscount !== undefined) setInvoiceDiscount(Number(f.invoiceDiscount || 0));
+    if (f.invoiceGstRate !== undefined) setInvoiceGstRate(Number(f.invoiceGstRate || 0));
+    if (f.partyStateOverride !== undefined) setPartyStateOverride(f.partyStateOverride || '');
+    if (f.gstMode) setGstMode(f.gstMode as any);
+
+    if (f.lines && f.lines.length > 0) {
+      const restoredLines: VoucherLineItem[] = f.lines.map((l, idx) => {
+        const itemMatch = uniqueItemsList.find(u => u.id === l.uniqueItemId);
+        return {
+          id: `restored-p-line-${Date.now()}-${idx}`,
+          uniqueItemId: l.uniqueItemId || null,
+          uniqueItemName: itemMatch?.name || 'Stock Item',
+          uniqueItemCode: itemMatch?.itemCode || itemMatch?.code || '',
+          categoryCode: itemMatch?.categoryCode || 'SV',
+          unit: itemMatch?.unit || 'PRS',
+          maintainBatches: itemMatch?.maintainBatches !== false,
+          quantity: Number(l.quantity || 1),
+          rate: Number(l.rate || 0),
+          discountType: (l.discountType as any) || 'NONE',
+          discountValue: Number(l.discountValue || 0),
+          gstRate: Number(l.gstRate || 0),
+          batches: (l.batches || []).map(b => ({
+            batchId: b.batchId || '',
+            quantity: Number(b.quantity || 0),
+            rate: Number(b.rate || 0),
+            sph: b.sph !== undefined && b.sph !== null ? String(b.sph) : '0.00',
+            cyl: b.cyl !== undefined && b.cyl !== null ? String(b.cyl) : '0.00',
+            axis: b.axis !== undefined && b.axis !== null ? String(b.axis) : '',
+            add: b.add !== undefined && b.add !== null ? String(b.add) : '',
+            side: (b.side as any) || 'NONE',
+          })),
+        };
+      });
+      setLines(ensureTrailingBlankRow(restoredLines, 'p-row'));
+    }
+    setAvailableDraft(null);
+  };
+
+  const handleDiscardDraft = () => {
+    if (currentBusiness?.id && user?.id) {
+      clearVoucherDraft(currentBusiness.id, user.id, 'PURCHASE', editInvoiceId || editOrderId || null);
+    }
+    setAvailableDraft(null);
+  };
 
   // Tally Contextual Panel State
   const [contextualType, setContextualType] = useState<'PARTY' | 'STOCK_ITEM' | 'BATCH' | null>(null);
@@ -369,8 +539,44 @@ export const CreatePurchaseInvoicePage: React.FC<Props> = ({
               })),
             }));
             setLines(ensureTrailingBlankRow(loadedLines, 'p-row'));
+            baselineSnapshotRef.current = {
+              partyId: initialSupId,
+              invoiceDate: ord.orderDate ? new Date(ord.orderDate).toISOString().split('T')[0] : '',
+              dueDate: '',
+              paymentMode: 'CREDIT',
+              paymentTerms: 'NET 30',
+              referenceNumber: ord.supplierReference || '',
+              supplierInvoiceDate: '',
+              notes: ord.notes || '',
+              courierCharges: ord.courierCharges ? parseFloat(ord.courierCharges) : 0,
+              invoiceDiscount: ord.discountTotal ? parseFloat(ord.discountTotal) : 0,
+              invoiceGstRate: ord.gstRate ? parseFloat(ord.gstRate) : 0,
+              partyStateOverride: '',
+              gstMode: ord.gstMode || 'INTRA_STATE',
+              lines: loadedLines.map(l => ({
+                uniqueItemId: l.uniqueItemId,
+                quantity: l.quantity,
+                rate: l.rate,
+                discountType: l.discountType || 'NONE',
+                discountValue: l.discountValue || 0,
+                gstRate: l.gstRate || 0,
+                batches: l.batches?.map(b => ({
+                  batchId: b.batchId,
+                  quantity: b.quantity,
+                  rate: b.rate,
+                  sph: b.sph,
+                  cyl: b.cyl,
+                  axis: b.axis,
+                  add: b.add,
+                  side: b.side,
+                })) || [],
+              })),
+            };
+            setIsBaselineReady(true);
           } else {
             setLines([createEmptyVoucherLine('p-row')]);
+            baselineSnapshotRef.current = normalizeVoucherSnapshot(null);
+            setIsBaselineReady(true);
           }
         }
       } else if (!isOrder && detectedOrderId) {
@@ -483,8 +689,44 @@ export const CreatePurchaseInvoicePage: React.FC<Props> = ({
               };
             });
             setLines(ensureTrailingBlankRow(loadedLines, 'p-row'));
+            baselineSnapshotRef.current = {
+              partyId: initialSupId,
+              invoiceDate: invoiceDate,
+              dueDate: '',
+              paymentMode: 'CREDIT',
+              paymentTerms: 'NET 30',
+              referenceNumber: po.supplierReference || po.order?.supplierReference || '',
+              supplierInvoiceDate: '',
+              notes: poNotes ? `Ref: PO #${poOrderNumber}. ${poNotes}` : `Ref: PO #${poOrderNumber}`,
+              courierCharges: po.courierCharges ? parseFloat(po.courierCharges) : (po.order?.courierCharges ? parseFloat(po.order.courierCharges) : 0),
+              invoiceDiscount: po.discountTotal ? parseFloat(po.discountTotal) : (po.order?.discountTotal ? parseFloat(po.order.discountTotal) : 0),
+              invoiceGstRate: po.gstRate ? parseFloat(po.gstRate) : (po.order?.gstRate ? parseFloat(po.order.gstRate) : 0),
+              partyStateOverride: '',
+              gstMode: authoritativeGstMode,
+              lines: loadedLines.map(l => ({
+                uniqueItemId: l.uniqueItemId,
+                quantity: l.quantity,
+                rate: l.rate,
+                discountType: l.discountType || 'NONE',
+                discountValue: l.discountValue || 0,
+                gstRate: l.gstRate || 0,
+                batches: l.batches?.map(b => ({
+                  batchId: b.batchId,
+                  quantity: b.quantity,
+                  rate: b.rate,
+                  sph: b.sph,
+                  cyl: b.cyl,
+                  axis: b.axis,
+                  add: b.add,
+                  side: b.side,
+                })) || [],
+              })),
+            };
+            setIsBaselineReady(true);
           } else {
             setLines([createEmptyVoucherLine('p-row')]);
+            baselineSnapshotRef.current = normalizeVoucherSnapshot(null);
+            setIsBaselineReady(true);
           }
         }
       } else if (editInvoiceId) {
@@ -564,12 +806,50 @@ export const CreatePurchaseInvoicePage: React.FC<Props> = ({
               })),
             }));
             setLines(ensureTrailingBlankRow(loadedLines, 'p-row'));
+            baselineSnapshotRef.current = {
+              partyId: initialSupId,
+              invoiceDate: inv.invoiceDate ? new Date(inv.invoiceDate).toISOString().split('T')[0] : '',
+              dueDate: inv.dueDate ? new Date(inv.dueDate).toISOString().split('T')[0] : '',
+              paymentMode: inv.paymentMode || 'CREDIT',
+              paymentTerms: inv.paymentTerms || 'NET 30',
+              referenceNumber: inv.supplierInvoiceNumber || '',
+              supplierInvoiceDate: inv.supplierInvoiceDate ? new Date(inv.supplierInvoiceDate).toISOString().split('T')[0] : '',
+              notes: inv.notes || '',
+              courierCharges: inv.courierCharges ? parseFloat(inv.courierCharges) : 0,
+              invoiceDiscount: inv.discountTotal ? parseFloat(inv.discountTotal) : 0,
+              invoiceGstRate: inv.gstRate ? parseFloat(inv.gstRate) : 0,
+              partyStateOverride: '',
+              gstMode: inv.gstMode || 'INTRA_STATE',
+              lines: loadedLines.map(l => ({
+                uniqueItemId: l.uniqueItemId,
+                quantity: l.quantity,
+                rate: l.rate,
+                discountType: l.discountType || 'NONE',
+                discountValue: l.discountValue || 0,
+                gstRate: l.gstRate || 0,
+                batches: l.batches?.map(b => ({
+                  batchId: b.batchId,
+                  quantity: b.quantity,
+                  rate: b.rate,
+                  sph: b.sph,
+                  cyl: b.cyl,
+                  axis: b.axis,
+                  add: b.add,
+                  side: b.side,
+                })) || [],
+              })),
+            };
+            setIsBaselineReady(true);
           } else {
             setLines([createEmptyVoucherLine('p-row')]);
+            baselineSnapshotRef.current = normalizeVoucherSnapshot(null);
+            setIsBaselineReady(true);
           }
         }
       } else {
         setLines(prev => (prev.length === 0 ? [createEmptyVoucherLine('p-row')] : prev));
+        baselineSnapshotRef.current = normalizeVoucherSnapshot(null);
+        setIsBaselineReady(true);
       }
     } catch (err: any) {
       setError(err.message || 'Failed to load master items for purchase voucher');
@@ -1126,6 +1406,9 @@ export const CreatePurchaseInvoicePage: React.FC<Props> = ({
   };
 
   const handleResetForm = () => {
+    if (currentBusiness?.id && user?.id) {
+      clearVoucherDraft(currentBusiness.id, user.id, 'PURCHASE', editInvoiceId || editOrderId || null);
+    }
     setCreatedInvoice(null);
     setShowPrintModal(false);
     setSupplierPartyId('');
@@ -1140,6 +1423,8 @@ export const CreatePurchaseInvoicePage: React.FC<Props> = ({
     setInvoiceGstRate(0);
     setLines([createEmptyVoucherLine('p-row')]);
     setError(null);
+    baselineSnapshotRef.current = normalizeVoucherSnapshot(null);
+    setDirty(false);
     loadData();
   };
 
@@ -1377,6 +1662,12 @@ export const CreatePurchaseInvoicePage: React.FC<Props> = ({
       }
 
       setCreatedInvoice(finalInvoice);
+      if (currentBusiness?.id && user?.id) {
+        clearVoucherDraft(currentBusiness.id, user.id, 'PURCHASE', editInvoiceId || editOrderId || null);
+      }
+      baselineSnapshotRef.current = currentVoucherSnapshot;
+      setDirty(false);
+
       if (!isSaveAndNew) {
         setShowPrintModal(true);
       }
@@ -1835,6 +2126,21 @@ export const CreatePurchaseInvoicePage: React.FC<Props> = ({
       <div className="flex-1 min-h-0 flex flex-row overflow-hidden relative">
         {/* Left: Complete Voucher Workspace */}
         <div className="flex-1 min-w-0 flex flex-col h-full overflow-hidden bg-white border border-slate-300 rounded-xs shadow-2xs">
+          {/* Unsaved Draft Recovery Banner */}
+          {availableDraft && (
+            <VoucherDraftRecoveryBanner
+              savedAt={availableDraft.savedAt}
+              itemCount={availableDraft.form.lines?.length || 0}
+              partyName={
+                availableDraft.form.partyId
+                  ? suppliers.find(p => p.id === availableDraft.form.partyId)?.name
+                  : undefined
+              }
+              onRestore={handleRestoreDraft}
+              onDiscard={handleDiscardDraft}
+            />
+          )}
+
           {/* 1. Tally-style Voucher Header */}
           <VoucherHeader
             voucherType={isOrder ? 'PURCHASE_ORDER' : 'PURCHASE'}

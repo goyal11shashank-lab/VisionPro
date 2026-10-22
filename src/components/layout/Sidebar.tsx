@@ -34,6 +34,7 @@ import {
   BookmarkCheck,
 } from 'lucide-react';
 import { useAuth } from '../../context/AuthContext.js';
+import { useUnsavedChanges } from '../../context/UnsavedChangesContext.js';
 
 interface SidebarProps {
   currentPath: string;
@@ -72,6 +73,13 @@ export const Sidebar: React.FC<SidebarProps> = ({
   onCloseMobile,
 }) => {
   const { user, currentBusiness, logout, hasPermission } = useAuth();
+  const { confirmAction } = useUnsavedChanges();
+
+  const handleLogout = () => {
+    confirmAction(() => {
+      logout();
+    }, 'Logging out will discard any unsaved changes on this page. Are you sure you want to log out?');
+  };
 
   const [openSection, setOpenSection] = useState<string | null>('Master Data');
   const [openSubNav, setOpenSubNav] = useState<string | null>('sales-create-invoice');
@@ -444,7 +452,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
             </div>
             <button
               id="sidebar-logout-button"
-              onClick={logout}
+              onClick={handleLogout}
               title="Log Out"
               className="p-1.5 text-slate-400 hover:text-red-400 hover:bg-white/5 rounded-md transition-colors"
             >
