@@ -21,6 +21,7 @@
     "test:phase7": "tsx server/tests/phase7ImportExport.test.ts",
     "test:phase10": "tsx server/tests/phase10ProductionAcceptance.test.ts",
     "test:purchase-parties": "tsx server/tests/purchaseAndParties.test.ts",
+    "test:whatsapp": "tsx server/tests/whatsappIntegration.test.ts",
     "preview": "vite preview",
     "clean": "rm -rf dist server.js",
     "lint": "tsc --noEmit"
@@ -35,6 +36,7 @@
     "@types/jsonwebtoken": "^9.0.10",
     "@types/multer": "^2.2.0",
     "@types/pg": "^8.23.1",
+    "@types/qrcode": "^1.5.6",
     "@vitejs/plugin-react": "^5.0.4",
     "bcryptjs": "^3.0.3",
     "dotenv": "^17.2.3",
@@ -49,6 +51,7 @@
     "motion": "^12.23.24",
     "multer": "^2.2.0",
     "pg": "^8.23.0",
+    "qrcode": "^1.5.4",
     "react": "^19.0.1",
     "react-dom": "^19.0.1",
     "serverless-http": "^4.0.0",

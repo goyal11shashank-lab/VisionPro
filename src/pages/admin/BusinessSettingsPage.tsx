@@ -19,11 +19,13 @@ import {
   Search,
   Check,
   HelpCircle,
+  MessageSquare,
 } from 'lucide-react';
 import { apiRequest } from '../../api/client.js';
 import { useAuth } from '../../context/AuthContext.js';
 import { useBusinessSettings } from '../../context/SettingsContext.js';
 import { AppSettings, DEFAULT_APP_SETTINGS } from '../../types/settings.js';
+import { WhatsAppSettingsSection } from '../../components/whatsapp/WhatsAppSettingsSection.js';
 
 interface Props {
   initialTab?: string;
@@ -62,6 +64,7 @@ export const BusinessSettingsPage: React.FC<Props> = ({ initialTab = 'general' }
       print: 'print',
       display: 'display',
       advanced: 'advanced',
+      whatsapp: 'whatsapp',
     };
     return map[tab] || tab || 'general';
   };
@@ -218,6 +221,13 @@ export const BusinessSettingsPage: React.FC<Props> = ({ initialTab = 'general' }
       description: 'Backdated entry limits, cancellation remarks, and audit trail options',
       count: 5,
     },
+    {
+      id: 'whatsapp',
+      name: 'WhatsApp Integration',
+      icon: MessageSquare,
+      description: 'QR-login connection, invoice PDF sharing, auto-send policy, and message templates',
+      count: 6,
+    },
   ];
 
   // Helper for updating nested formData
@@ -327,7 +337,7 @@ export const BusinessSettingsPage: React.FC<Props> = ({ initialTab = 'general' }
             <div className="flex items-center gap-2">
               <h1 className="text-xl font-bold text-slate-900 tracking-tight">Application Settings</h1>
               <span className="px-2 py-0.5 text-xs font-semibold bg-blue-50 text-blue-700 rounded border border-blue-200">
-                12 Modules
+                {settingGroups.length} Modules
               </span>
             </div>
             <p className="text-xs text-slate-500 mt-0.5">
@@ -995,6 +1005,24 @@ export const BusinessSettingsPage: React.FC<Props> = ({ initialTab = 'general' }
                         Automatically pop open print preview dialog immediately upon posting a sales invoice
                       </span>
                     </label>
+
+                    <label className="flex items-start gap-2 cursor-pointer pt-1">
+                      <input
+                        id="toggle-sales-show-success-popup"
+                        type="checkbox"
+                        checked={formData.voucher.showSuccessModalAfterSave ?? false}
+                        onChange={(e) => handleUpdate('voucher', 'showSuccessModalAfterSave', e.target.checked)}
+                        className="mt-0.5 w-4 h-4 text-blue-600 rounded border-slate-300 focus:ring-blue-500"
+                      />
+                      <div className="flex flex-col">
+                        <span className="text-xs text-slate-800 font-semibold">
+                          Show Voucher Success Popup After Save
+                        </span>
+                        <span className="text-[11px] text-slate-500">
+                          When Off (default), Save &amp; New / Ctrl+A immediately opens a fresh blank voucher. When On, displays the &quot;Voucher Saved Successfully!&quot; modal after saving.
+                        </span>
+                      </div>
+                    </label>
                   </div>
                 </div>
               )}
@@ -1340,6 +1368,24 @@ export const BusinessSettingsPage: React.FC<Props> = ({ initialTab = 'general' }
                         Make Narration mandatory before saving or posting vouchers
                       </span>
                     </label>
+
+                    <label className="flex items-start gap-2 cursor-pointer pt-1">
+                      <input
+                        id="toggle-voucher-show-success-popup"
+                        type="checkbox"
+                        checked={formData.voucher.showSuccessModalAfterSave ?? false}
+                        onChange={(e) => handleUpdate('voucher', 'showSuccessModalAfterSave', e.target.checked)}
+                        className="mt-0.5 w-4 h-4 text-blue-600 rounded border-slate-300 focus:ring-blue-500"
+                      />
+                      <div className="flex flex-col">
+                        <span className="text-xs text-slate-800 font-semibold">
+                          Show Voucher Success Popup After Save
+                        </span>
+                        <span className="text-[11px] text-slate-500">
+                          When Off (default), Save &amp; New / Ctrl+A immediately opens a fresh blank voucher. When On, displays the &quot;Voucher Saved Successfully!&quot; modal after saving.
+                        </span>
+                      </div>
+                    </label>
                   </div>
                 </div>
               )}
@@ -1651,6 +1697,17 @@ export const BusinessSettingsPage: React.FC<Props> = ({ initialTab = 'general' }
                       </span>
                     </label>
                   </div>
+                </div>
+              )}
+
+              {/* Group 13: WhatsApp Integration */}
+              {activeTab === 'whatsapp' && (
+                <div id="section-settings-whatsapp">
+                  <WhatsAppSettingsSection
+                    businessId={currentBusiness?.id || ''}
+                    businessName={bizInfo.name || currentBusiness?.name}
+                    tradeName={bizInfo.tradeName || currentBusiness?.tradeName}
+                  />
                 </div>
               )}
             </div>

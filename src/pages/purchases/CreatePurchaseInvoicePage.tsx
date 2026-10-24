@@ -17,6 +17,7 @@ import { Party, UniqueItem } from '../../types/index';
 import { VoucherHeader } from '../../components/voucher/VoucherHeader';
 import { VoucherItemGrid } from '../../components/voucher/VoucherItemGrid';
 import { VoucherFooter } from '../../components/voucher/VoucherFooter';
+import { useBusinessSettings } from '../../context/BusinessSettingsContext';
 import { OpticalBatchModal } from '../../components/voucher/OpticalBatchModal';
 import { StockItemChangeModal } from '../../components/voucher/StockItemChangeModal';
 import {
@@ -79,6 +80,7 @@ export const CreatePurchaseInvoicePage: React.FC<Props> = ({
 }) => {
   const { user, currentBusiness, hasPermission } = useAuth();
   const { setDirty } = useUnsavedChanges();
+  const { settings } = useBusinessSettings();
 
   const detectedOrderId = (() => {
     if (fromPurchaseOrderId) return fromPurchaseOrderId;
@@ -1426,10 +1428,19 @@ export const CreatePurchaseInvoicePage: React.FC<Props> = ({
     baselineSnapshotRef.current = normalizeVoucherSnapshot(null);
     setDirty(false);
     loadData();
+
+    setTimeout(() => {
+      const partyInput = document.getElementById('voucher-header-party-input') as HTMLInputElement;
+      if (partyInput) {
+        partyInput.focus();
+        partyInput.select();
+      }
+    }, 120);
   };
 
   // Save / Post Invoice
   const handleSaveInvoice = async (andPost: boolean = false, isSaveAndNew: boolean = false): Promise<any | null> => {
+    if (submitting) return null;
     if (existingStatus === 'CANCELLED') {
       setError(
         'Cannot edit this Purchase Invoice because it has been CANCELLED. Cancelled invoices are permanently read-only.'
@@ -1668,11 +1679,14 @@ export const CreatePurchaseInvoicePage: React.FC<Props> = ({
       baselineSnapshotRef.current = currentVoucherSnapshot;
       setDirty(false);
 
-      if (!isSaveAndNew) {
+      const showSuccessPopup = settings?.voucher?.showSuccessModalAfterSave ?? false;
+      if (!isSaveAndNew || showSuccessPopup) {
         setShowPrintModal(true);
+      } else {
+        setShowPrintModal(false);
       }
 
-      if (onSuccess && resultId) {
+      if (!isSaveAndNew && onSuccess && resultId) {
         onSuccess(resultId);
       }
       return finalInvoice;
@@ -1687,8 +1701,9 @@ export const CreatePurchaseInvoicePage: React.FC<Props> = ({
   // Save & New (Ctrl+A)
   const handleSaveAndNew = async () => {
     if (submitting) return;
+    const showSuccessPopup = settings?.voucher?.showSuccessModalAfterSave ?? false;
     const saved = await handleSaveInvoice(true, true);
-    if (saved) {
+    if (saved && !showSuccessPopup) {
       handleResetForm();
     }
   };
@@ -2174,7 +2189,8 @@ export const CreatePurchaseInvoicePage: React.FC<Props> = ({
             supplierInvoiceDate={supplierInvoiceDate}
             onSupplierInvoiceDateChange={setSupplierInvoiceDate}
             submitting={submitting}
-            onSavePost={() => handleSaveInvoice(true)}
+            onSavePost={() => handleSaveInvoice(true, false)}
+            onSaveAndNew={handleSaveAndNew}
             onPrint={() => {
               setAutoInvokePrint(false);
               setIsPrintPreviewOpen(true);
@@ -2257,7 +2273,7 @@ export const CreatePurchaseInvoicePage: React.FC<Props> = ({
             canDelete={canDelete}
             canCancel={canCancel}
             submitting={submitting}
-            onSave={() => handleSaveInvoice(true)}
+            onSave={() => handleSaveInvoice(true, false)}
             onSaveAndNew={handleSaveAndNew}
             onDelete={() => setShowDeleteConfirm(true)}
             onCancelVoucher={() => setShowCancelConfirm(true)}

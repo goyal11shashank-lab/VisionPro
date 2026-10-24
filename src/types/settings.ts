@@ -107,6 +107,7 @@ export interface AppSettings {
     };
     enableNarration: boolean;
     requireNarration: boolean;
+    showSuccessModalAfterSave?: boolean;
   };
   print: {
     invoiceTitle?: string;
@@ -309,6 +310,7 @@ export const DEFAULT_APP_SETTINGS: AppSettings = {
     },
     enableNarration: true,
     requireNarration: false,
+    showSuccessModalAfterSave: false,
   },
   print: {
     invoiceTitle: 'TAX INVOICE',

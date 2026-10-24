@@ -73,6 +73,7 @@ export const PartiesPage: React.FC<{ initialType?: 'ALL' | 'SUPPLIER' | 'CUSTOME
     creditLimit: '0',
     creditDays: '0',
     status: 'ACTIVE' as 'ACTIVE' | 'INACTIVE',
+    whatsappOptIn: true,
     notes: '',
   });
   const [formSubmitting, setFormSubmitting] = useState<boolean>(false);
@@ -126,6 +127,7 @@ export const PartiesPage: React.FC<{ initialType?: 'ALL' | 'SUPPLIER' | 'CUSTOME
       creditLimit: '0',
       creditDays: '30',
       status: 'ACTIVE',
+      whatsappOptIn: true,
       notes: '',
     });
     setFormError(null);
@@ -152,6 +154,7 @@ export const PartiesPage: React.FC<{ initialType?: 'ALL' | 'SUPPLIER' | 'CUSTOME
       creditLimit: String(party.creditLimit || '0'),
       creditDays: String(party.creditDays || '0'),
       status: party.status,
+      whatsappOptIn: party.whatsappOptIn ?? true,
       notes: party.notes || '',
     });
     setFormError(null);
@@ -773,6 +776,15 @@ export const PartiesPage: React.FC<{ initialType?: 'ALL' | 'SUPPLIER' | 'CUSTOME
                         onChange={e => setFormData({ ...formData, mobile: e.target.value })}
                         className="w-full px-3.5 py-2 text-sm bg-slate-50 border border-slate-200 rounded-xl focus:bg-white focus:ring-2 focus:ring-purple-500/20 focus:border-purple-600"
                       />
+                      <label className="flex items-center gap-2 mt-2 cursor-pointer">
+                        <input
+                          type="checkbox"
+                          checked={formData.whatsappOptIn}
+                          onChange={e => setFormData({ ...formData, whatsappOptIn: e.target.checked })}
+                          className="w-4 h-4 text-emerald-600 rounded border-slate-300 focus:ring-emerald-500 cursor-pointer"
+                        />
+                        <span className="text-xs text-slate-600 font-medium">WhatsApp Opt-in (Invoice sharing)</span>
+                      </label>
                     </div>
 
                     <div>

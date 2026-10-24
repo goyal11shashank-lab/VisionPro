@@ -1234,6 +1234,7 @@ export const NormalSalesVoucherPage: React.FC<Props> = ({ onNavigate, onSuccess,
 
   // Save Voucher (DRAFT or POSTED)
   const handleSaveVoucher = async (targetStatus: 'DRAFT' | 'POSTED', isSaveAndNew: boolean = false): Promise<any | null> => {
+    if (submitting) return null;
     setFormError(null);
 
     if (!selectedPartyId) {
@@ -1353,10 +1354,11 @@ export const NormalSalesVoucherPage: React.FC<Props> = ({ onNavigate, onSuccess,
         clearVoucherDraft(currentBusiness.id, user.id, 'SALES', editInvoiceId || null);
       }
       baselineSnapshotRef.current = currentVoucherSnapshot;
-      setDirty(false);
-
-      if (!isSaveAndNew) {
+      const showSuccessPopup = settings?.voucher?.showSuccessModalAfterSave ?? false;
+      if (!isSaveAndNew || showSuccessPopup) {
         setShowPrintModal(true);
+      } else {
+        setShowPrintModal(false);
       }
       return result;
     } catch (err: any) {
@@ -1395,13 +1397,22 @@ export const NormalSalesVoucherPage: React.FC<Props> = ({ onNavigate, onSuccess,
     baselineSnapshotRef.current = normalizeVoucherSnapshot(null);
     setDirty(false);
     loadPrerequisites();
+
+    setTimeout(() => {
+      const partyInput = document.getElementById('voucher-header-party-input') as HTMLInputElement;
+      if (partyInput) {
+        partyInput.focus();
+        partyInput.select();
+      }
+    }, 120);
   };
 
   // Save & New (Ctrl+A)
   const handleSaveAndNew = async () => {
     if (submitting) return;
+    const showSuccessPopup = settings?.voucher?.showSuccessModalAfterSave ?? false;
     const saved = await handleSaveVoucher('POSTED', true);
-    if (saved) {
+    if (saved && !showSuccessPopup) {
       handleResetForm();
     }
   };
@@ -1877,7 +1888,8 @@ export const NormalSalesVoucherPage: React.FC<Props> = ({ onNavigate, onSuccess,
             }}
             onPartyStateChange={handlePartyStateChange}
             submitting={submitting}
-            onSavePost={() => handleSaveVoucher('POSTED')}
+            onSavePost={() => handleSaveVoucher('POSTED', false)}
+            onSaveAndNew={handleSaveAndNew}
             onPrint={() => {
               const previewBeforePrint = settings?.print?.previewBeforePrint ?? true;
               setAutoInvokePrint(!previewBeforePrint);
@@ -1973,7 +1985,7 @@ export const NormalSalesVoucherPage: React.FC<Props> = ({ onNavigate, onSuccess,
             canDelete={canDelete}
             canCancel={canCancel}
             submitting={submitting}
-            onSave={() => handleSaveVoucher('POSTED')}
+            onSave={() => handleSaveVoucher('POSTED', false)}
             onSaveAndNew={handleSaveAndNew}
             onDelete={() => setShowDeleteConfirm(true)}
             onCancelVoucher={() => setShowCancelConfirm(true)}

@@ -22,6 +22,7 @@ export interface CreatePartyDTO {
   creditLimit?: number | string;
   creditDays?: string | number;
   status?: 'ACTIVE' | 'INACTIVE';
+  whatsappOptIn?: boolean;
   notes?: string;
 }
 
@@ -43,6 +44,7 @@ export interface UpdatePartyDTO {
   creditLimit?: number | string;
   creditDays?: string | number;
   status?: 'ACTIVE' | 'INACTIVE';
+  whatsappOptIn?: boolean;
   notes?: string;
 }
 
@@ -143,6 +145,7 @@ export class PartyService {
         creditLimit: String(data.creditLimit || '0.00'),
         creditDays: String(data.creditDays || '0'),
         status: data.status || 'ACTIVE',
+        whatsappOptIn: data.whatsappOptIn !== undefined ? data.whatsappOptIn : true,
         notes: data.notes?.trim() || null,
         createdBy: userId || null,
         updatedBy: userId || null,
@@ -285,6 +288,7 @@ export class PartyService {
         creditLimit: data.creditLimit !== undefined ? String(data.creditLimit) : existing.creditLimit,
         creditDays: data.creditDays !== undefined ? String(data.creditDays) : existing.creditDays,
         status: data.status !== undefined ? data.status : existing.status,
+        whatsappOptIn: data.whatsappOptIn !== undefined ? data.whatsappOptIn : existing.whatsappOptIn,
         notes: data.notes !== undefined ? data.notes.trim() : existing.notes,
         updatedAt: new Date(),
         updatedBy: userId || null,

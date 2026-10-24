@@ -26,6 +26,7 @@ import { findOrCreateOpticalBatch } from './opticalMasterService.js';
 import { BusinessSettingsService } from './businessSettingsService.js';
 import { validateQuantity, assertValidQuantity } from '../utils/quantityValidator.js';
 import { DocumentSequenceService } from './documentSequenceService.js';
+import { WhatsAppService } from './whatsapp/whatsappService.js';
 
 const UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 function isValidUUID(id: string): boolean {
@@ -1713,6 +1714,18 @@ export class SalesService {
 
       await client.query('COMMIT');
 
+      // Auto-send WhatsApp notification to customer if configured
+      WhatsAppService.handleInvoiceSavedAutoSend({
+        businessId,
+        invoiceId,
+        invoiceNumber,
+        grandTotal: totals.grandTotal,
+        invoiceDate,
+        partyId: data.partyId,
+      }).catch((autoErr) => {
+        console.error('[WhatsApp Auto-Send Error in createSalesInvoice]', autoErr);
+      });
+
       await AuditService.log({
         businessId,
         userId,
@@ -2222,6 +2235,18 @@ export class SalesService {
 
       await client.query('COMMIT');
 
+      // Auto-send WhatsApp notification to customer if configured
+      WhatsAppService.handleInvoiceSavedAutoSend({
+        businessId,
+        invoiceId,
+        invoiceNumber: invoice.invoice_number,
+        grandTotal: invoice.grand_total,
+        invoiceDate: invoice.invoice_date,
+        partyId: invoice.party_id,
+      }).catch((autoErr) => {
+        console.error('[WhatsApp Auto-Send Error in postSalesInvoice]', autoErr);
+      });
+
       await AuditService.log({
         businessId,
         userId,
@@ -2596,6 +2621,18 @@ export class SalesService {
       );
 
       await client.query('COMMIT');
+
+      // Auto-send WhatsApp notification to customer if configured
+      WhatsAppService.handleInvoiceSavedAutoSend({
+        businessId,
+        invoiceId,
+        invoiceNumber,
+        grandTotal,
+        invoiceDate,
+        partyId: order.party_id,
+      }).catch((autoErr) => {
+        console.error('[WhatsApp Auto-Send Error in convertSalesOrderToInvoice]', autoErr);
+      });
 
       await AuditService.log({
         businessId,
@@ -3135,6 +3172,7 @@ export class SalesService {
           batches: enrichedBatches,
         };
       }),
+      whatsappStatus: (await WhatsAppService.getInvoiceWhatsAppStatus(businessId, invoiceId).catch(() => ({ status: 'NONE' }))).status,
     };
   }
 
@@ -3272,17 +3310,42 @@ export class SalesService {
       }
     }
 
+    // Batch load latest WhatsApp status for all retrieved invoices
+    const whatsappMap = new Map<string, { status: string; sentAt?: Date | null; phone?: string }>();
+    if (invoiceIds.length > 0) {
+      const waRows = await pool.query(
+        `SELECT DISTINCT ON (invoice_id) invoice_id, status, sent_at, recipient_phone, created_at
+         FROM whatsapp_messages_queue
+         WHERE business_id = $1 AND invoice_id = ANY($2::uuid[])
+         ORDER BY invoice_id, created_at DESC`,
+        [businessId, invoiceIds]
+      );
+      for (const r of waRows.rows) {
+        whatsappMap.set(r.invoice_id, {
+          status: r.status,
+          sentAt: r.sent_at,
+          phone: r.recipient_phone,
+        });
+      }
+    }
+
     return {
       total: Number(totalCountRes?.count || 0),
-      invoices: invoices.map(i => ({
-        ...i.invoice,
-        party: i.party,
-        partyName: i.party?.name || i.party?.displayName || '',
-        partyGstin: i.party?.gstin || '',
-        partyState: i.party?.state || '',
-        salesOrderNumber: i.salesOrderNumber || null,
-        lines: linesByInvoice.get(i.invoice.id) || [],
-      })),
+      invoices: invoices.map(i => {
+        const waInfo = whatsappMap.get(i.invoice.id);
+        return {
+          ...i.invoice,
+          party: i.party,
+          partyName: i.party?.name || i.party?.displayName || '',
+          partyGstin: i.party?.gstin || '',
+          partyState: i.party?.state || '',
+          salesOrderNumber: i.salesOrderNumber || null,
+          lines: linesByInvoice.get(i.invoice.id) || [],
+          whatsappStatus: waInfo?.status || 'NONE',
+          whatsappSentAt: waInfo?.sentAt || null,
+          whatsappRecipientPhone: waInfo?.phone || null,
+        };
+      }),
     };
   }
 

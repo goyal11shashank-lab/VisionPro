@@ -403,6 +403,7 @@ export interface Party {
   creditLimit: string | number;
   creditDays: string | number;
   status: 'ACTIVE' | 'INACTIVE';
+  whatsappOptIn?: boolean;
   notes?: string | null;
   currentBalance?: string | number;
   createdAt?: string;

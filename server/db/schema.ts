@@ -628,6 +628,7 @@ export const parties = pgTable('parties', {
   creditLimit: numeric('credit_limit', { precision: 12, scale: 2 }).default('0.00'),
   creditDays: varchar('credit_days', { length: 10 }).default('0'),
   status: varchar('status', { length: 20 }).default('ACTIVE').notNull(), // ACTIVE, INACTIVE
+  whatsappOptIn: boolean('whatsapp_opt_in').default(true).notNull(),
   notes: text('notes'),
   createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
   updatedAt: timestamp('updated_at', { withTimezone: true }).defaultNow().notNull(),
@@ -1970,4 +1971,62 @@ export const idempotencyRecords = pgTable('idempotency_records', {
   uniqueIndex('idempotency_records_biz_type_key_idx').on(table.businessId, table.resourceType, table.idempotencyKey),
   index('idempotency_records_biz_idx').on(table.businessId),
 ]);
+
+/**
+ * 51. WhatsApp Web Sessions
+ * Business-isolated WhatsApp Web connection session state, QR codes, and credentials metadata.
+ */
+export const whatsappSessions = pgTable('whatsapp_sessions', {
+  id: uuid('id').defaultRandom().primaryKey(),
+  businessId: uuid('business_id').references(() => businesses.id, { onDelete: 'cascade' }).notNull().unique(),
+  status: varchar('status', { length: 30 }).default('NOT_CONNECTED').notNull(), // NOT_CONNECTED, CONNECTING, CONNECTED, DISCONNECTED, ERROR
+  qrCodeData: text('qr_code_data'), // Base64 data URL or raw QR text
+  qrExpiresAt: timestamp('qr_expires_at', { withTimezone: true }),
+  connectedPhone: varchar('connected_phone', { length: 50 }),
+  connectedPushname: varchar('connected_pushname', { length: 255 }),
+  lastConnectedAt: timestamp('last_connected_at', { withTimezone: true }),
+  lastDisconnectedAt: timestamp('last_disconnected_at', { withTimezone: true }),
+  lastError: text('last_error'),
+  sessionMetadata: jsonb('session_metadata').default({}).notNull(),
+  createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
+  updatedAt: timestamp('updated_at', { withTimezone: true }).defaultNow().notNull(),
+}, (table) => [
+  uniqueIndex('whatsapp_sessions_biz_idx').on(table.businessId),
+  index('whatsapp_sessions_status_idx').on(table.status),
+]);
+
+/**
+ * 52. WhatsApp Messages Queue
+ * Durable server-side message dispatch queue with idempotency, exponential backoff, and audit trail.
+ */
+export const whatsappMessagesQueue = pgTable('whatsapp_messages_queue', {
+  id: uuid('id').defaultRandom().primaryKey(),
+  businessId: uuid('business_id').references(() => businesses.id, { onDelete: 'cascade' }).notNull(),
+  invoiceId: uuid('invoice_id').references(() => salesInvoices.id, { onDelete: 'cascade' }),
+  recipientPartyId: uuid('recipient_party_id').references(() => parties.id, { onDelete: 'set null' }),
+  recipientPhone: varchar('recipient_phone', { length: 30 }).notNull(),
+  recipientName: varchar('recipient_name', { length: 255 }),
+  messageType: varchar('message_type', { length: 50 }).default('INVOICE_PDF').notNull(), // INVOICE_PDF, TEXT, TEST_MESSAGE
+  messageText: text('message_text').notNull(),
+  mediaUrl: text('media_url'),
+  mediaFileName: varchar('media_file_name', { length: 255 }),
+  status: varchar('status', { length: 30 }).default('PENDING').notNull(), // PENDING, PROCESSING, SENT, FAILED, CANCELLED
+  idempotencyKey: varchar('idempotency_key', { length: 255 }).notNull(),
+  attemptCount: integer('attempt_count').default(0).notNull(),
+  maxAttempts: integer('max_attempts').default(3).notNull(),
+  lastAttemptAt: timestamp('last_attempt_at', { withTimezone: true }),
+  sentAt: timestamp('sent_at', { withTimezone: true }),
+  failedAt: timestamp('failed_at', { withTimezone: true }),
+  errorMessage: text('error_message'),
+  metadata: jsonb('metadata').default({}).notNull(),
+  createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
+  updatedAt: timestamp('updated_at', { withTimezone: true }).defaultNow().notNull(),
+}, (table) => [
+  uniqueIndex('whatsapp_queue_biz_idempotency_idx').on(table.businessId, table.idempotencyKey),
+  index('whatsapp_queue_biz_idx').on(table.businessId),
+  index('whatsapp_queue_invoice_idx').on(table.invoiceId),
+  index('whatsapp_queue_status_idx').on(table.status),
+  index('whatsapp_queue_created_at_idx').on(table.createdAt),
+]);
+
 

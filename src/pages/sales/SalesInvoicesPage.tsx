@@ -25,6 +25,7 @@ import {
   Pencil,
   RefreshCw,
   Download,
+  MessageSquare,
 } from 'lucide-react';
 import { useAuth } from '../../context/AuthContext.js';
 import { useBusinessSettings } from '../../context/BusinessSettingsContext.js';
@@ -35,6 +36,8 @@ import { PrintableVoucher } from '../../components/print/PrintableVoucher.js';
 import { exportToExcel, ExcelColumn } from '../../utils/excelExporter.js';
 import { exportToCsv } from '../../utils/csvExporter.js';
 import { cleanNarrationNotes } from '../../utils/narrationHelper.js';
+import { WhatsAppStatusBadge } from '../../components/whatsapp/WhatsAppStatusBadge.js';
+import { WhatsAppShareModal } from '../../components/whatsapp/WhatsAppShareModal.js';
 
 interface SalesInvoiceLineBatch {
   id?: string;
@@ -94,6 +97,8 @@ interface SalesInvoice {
   paymentTerms?: string;
   lines: SalesInvoiceLine[];
   createdAt: string;
+  whatsappStatus?: 'SENT' | 'PENDING' | 'PROCESSING' | 'FAILED' | 'NONE';
+  whatsappSentAt?: string;
 }
 
 export const SalesInvoicesPage: React.FC<{
@@ -120,6 +125,7 @@ export const SalesInvoicesPage: React.FC<{
   const [isDirectCreateOpen, setIsDirectCreateOpen] = useState(false);
   const [isConvertModalOpen, setIsConvertModalOpen] = useState(false);
   const [autoInvokePrint, setAutoInvokePrint] = useState<boolean>(false);
+  const [whatsappModalInvoice, setWhatsappModalInvoice] = useState<SalesInvoice | null>(null);
 
   // Form State
   const [parties, setParties] = useState<any[]>([]);
@@ -1111,6 +1117,7 @@ export const SalesInvoicesPage: React.FC<{
                   <th className="py-3.5 px-4">Customer</th>
                   <th className="py-3.5 px-4">Source Order</th>
                   <th className="py-3.5 px-4">Status</th>
+                  <th className="py-3.5 px-4 text-center">WhatsApp</th>
                   <th className="py-3.5 px-4 text-right">Taxable</th>
                   <th className="py-3.5 px-4 text-right">Grand Total</th>
                   <th className="py-3.5 px-4 text-center">Actions</th>
@@ -1139,6 +1146,12 @@ export const SalesInvoicesPage: React.FC<{
                       )}
                     </td>
                     <td className="py-3.5 px-4">{getStatusBadge(inv.status)}</td>
+                    <td className="py-3.5 px-4 text-center">
+                      <WhatsAppStatusBadge
+                        status={inv.whatsappStatus}
+                        onClick={() => setWhatsappModalInvoice(inv)}
+                      />
+                    </td>
                     <td className="py-3.5 px-4 text-right font-mono text-slate-700">
                       ₹{parseFloat(String(inv.taxableAmount)).toLocaleString('en-IN', { minimumFractionDigits: 2 })}
                     </td>
@@ -1147,6 +1160,14 @@ export const SalesInvoicesPage: React.FC<{
                     </td>
                     <td className="py-3.5 px-4 text-center">
                       <div className="flex items-center justify-center gap-1">
+                        <button
+                          id={`btn-whatsapp-invoice-${inv.id}`}
+                          onClick={() => setWhatsappModalInvoice(inv)}
+                          className="p-1.5 text-slate-500 hover:text-emerald-600 hover:bg-emerald-50 rounded transition"
+                          title="Share on WhatsApp"
+                        >
+                          <MessageSquare className="w-4 h-4" />
+                        </button>
                         <button
                           id={`btn-view-invoice-${inv.id}`}
                           onClick={() => handleViewInvoice(inv)}
@@ -1749,6 +1770,17 @@ export const SalesInvoicesPage: React.FC<{
                   Print
                 </button>
                 <button
+                  id="btn-whatsapp-detail-modal-action"
+                  onClick={() => {
+                    setWhatsappModalInvoice(selectedInvoice);
+                  }}
+                  className="flex items-center gap-1.5 px-3 py-1.5 bg-emerald-700 hover:bg-emerald-600 text-xs font-semibold rounded-lg transition text-white shadow-xs"
+                  title="Share invoice on WhatsApp"
+                >
+                  <MessageSquare className="w-3.5 h-3.5" />
+                  WhatsApp
+                </button>
+                <button
                   onClick={() => setIsDetailOpen(false)}
                   className="text-slate-400 hover:text-white text-lg font-bold p-1"
                 >
@@ -2169,6 +2201,27 @@ export const SalesInvoicesPage: React.FC<{
             />
           )}
         </PrintPreviewModal>
+      )}
+
+      {/* WHATSAPP SHARE & DISPATCH MODAL */}
+      {whatsappModalInvoice && (
+        <WhatsAppShareModal
+          invoice={whatsappModalInvoice}
+          currentBusiness={currentBusiness}
+          onClose={() => setWhatsappModalInvoice(null)}
+          onSuccess={() => {
+            fetchInvoices();
+          }}
+          onOpenSettings={() => {
+            setWhatsappModalInvoice(null);
+            if (onNavigate) onNavigate('settings');
+          }}
+          onDownloadPdf={() => {
+            setAutoInvokePrint(false);
+            setPrintPreviewInvoice(whatsappModalInvoice);
+            setIsPrintPreviewOpen(true);
+          }}
+        />
       )}
     </div>
   );

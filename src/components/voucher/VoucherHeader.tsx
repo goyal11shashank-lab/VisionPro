@@ -1,18 +1,8 @@
 import React, { useRef, useEffect, useState, useMemo } from 'react';
 import {
-  FileSpreadsheet,
   ArrowLeft,
-  Save,
-  Send,
   Search,
-  CheckCircle2,
   AlertTriangle,
-  RefreshCw,
-  Printer,
-  DollarSign,
-  Building2,
-  Plus,
-  BookOpen,
   X,
 } from 'lucide-react';
 import { SearchableMasterSelect, SearchableOption } from '../common/SearchableMasterSelect';
@@ -158,16 +148,21 @@ export const VoucherHeader: React.FC<VoucherHeaderProps> = ({
   };
 
   // Keyboard hotkeys:
-  // - Ctrl+A: Save & Post
+  // - Ctrl+A: Save & New / Accept
   // - F2: Focus Date
   // - Alt+C: Inline Create Party
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.defaultPrevented) return;
       if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'a') {
         const target = e.target as HTMLElement;
         if (target.tagName !== 'TEXTAREA') {
           e.preventDefault();
-          onSavePost();
+          if (onSaveAndNew) {
+            onSaveAndNew();
+          } else {
+            onSavePost();
+          }
         }
       } else if (e.key === 'F2') {
         e.preventDefault();
@@ -186,7 +181,7 @@ export const VoucherHeader: React.FC<VoucherHeaderProps> = ({
     };
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [onSavePost, onRequestCreateParty, partyInputText]);
+  }, [onSavePost, onSaveAndNew, onRequestCreateParty, partyInputText]);
 
   return (
     <div
@@ -275,59 +270,6 @@ export const VoucherHeader: React.FC<VoucherHeaderProps> = ({
               onChange={e => onVoucherDateChange(e.target.value)}
               className="px-1.5 py-0.5 text-xs font-bold text-slate-900 border border-slate-400 rounded bg-white focus:bg-white focus:ring-1 focus:ring-blue-600 font-mono shadow-2xs"
             />
-          </div>
-
-          {/* Quick Action Buttons */}
-          <div className="flex items-center gap-1.5 font-sans">
-            {onPrint && (
-              <button
-                type="button"
-                id="btn-voucher-header-print"
-                onClick={onPrint}
-                className="px-2 py-0.5 text-[11px] font-bold text-slate-700 bg-white hover:bg-slate-100 rounded border border-slate-300 transition-colors flex items-center gap-1 shadow-2xs cursor-pointer"
-                title="Print Voucher (Alt+P)"
-              >
-                <Printer className="w-3 h-3 text-slate-600" />
-                <span>Print</span>
-              </button>
-            )}
-
-            {onSaveDraft && (
-              <button
-                type="button"
-                disabled={submitting}
-                onClick={onSaveDraft}
-                className="px-2 py-0.5 text-[11px] font-medium text-slate-700 bg-slate-100 hover:bg-slate-200 rounded border border-slate-300 transition-colors disabled:opacity-50 cursor-pointer"
-              >
-                {isEditing ? 'Update Draft' : 'Draft'}
-              </button>
-            )}
-
-            <button
-              type="button"
-              disabled={submitting}
-              onClick={onSavePost}
-              className={`px-3 py-1 text-xs font-black text-white rounded shadow-2xs transition-all flex items-center gap-1.5 disabled:opacity-50 cursor-pointer ${
-                isOrder
-                  ? 'bg-blue-700 hover:bg-blue-800'
-                  : isSales
-                  ? 'bg-emerald-700 hover:bg-emerald-800'
-                  : 'bg-indigo-700 hover:bg-indigo-800'
-              }`}
-              title="Accept & Post Voucher (Ctrl+A)"
-            >
-              {submitting ? (
-                <>
-                  <RefreshCw className="w-3 h-3 animate-spin" />
-                  <span>Saving...</span>
-                </>
-              ) : (
-                <>
-                  <Send className="w-3 h-3" />
-                  <span>{isEditing ? 'Update' : 'Accept & New (Ctrl+A)'}</span>
-                </>
-              )}
-            </button>
           </div>
         </div>
       </div>

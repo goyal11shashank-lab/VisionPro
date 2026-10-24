@@ -20,6 +20,7 @@ import reportRoutes from './routes/reports.js';
 import stockItemLedgerRoutes from './routes/stockItemLedger.js';
 import dealerRoutes from './routes/dealer.js';
 import mainDealersRoutes from './routes/mainDealers.js';
+import whatsappRoutes from './routes/whatsapp.js';
 
 export function createExpressApp() {
   const app = express();
@@ -74,6 +75,7 @@ export function createExpressApp() {
   app.use('/api/inventory/dealer', dealerRoutes);
   app.use('/api/main/dealers', mainDealersRoutes);
   app.use('/api/dealers', mainDealersRoutes);
+  app.use('/api/whatsapp', whatsappRoutes);
 
   // Catch-all 404 handler for any undefined API route so it never falls through to Vite HTML
   app.all('/api/*', (req: Request, res: Response) => {

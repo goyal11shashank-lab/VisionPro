@@ -1809,6 +1809,56 @@ export async function runMigrations(): Promise<{ success: boolean; message: stri
       ALTER TABLE "purchase_returns" ADD COLUMN IF NOT EXISTS "cancellation_reason" TEXT;
       ALTER TABLE "payments" ADD COLUMN IF NOT EXISTS "cancellation_reason" TEXT;
       ALTER TABLE "unique_items" ALTER COLUMN "gst_rate" SET DEFAULT 0.00;
+
+      -- WhatsApp Integration schema
+      ALTER TABLE "parties" ADD COLUMN IF NOT EXISTS "whatsapp_opt_in" BOOLEAN DEFAULT TRUE NOT NULL;
+
+      CREATE TABLE IF NOT EXISTS "whatsapp_sessions" (
+        "id" UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+        "business_id" UUID REFERENCES "businesses"("id") ON DELETE CASCADE UNIQUE NOT NULL,
+        "status" VARCHAR(30) NOT NULL DEFAULT 'NOT_CONNECTED',
+        "qr_code_data" TEXT,
+        "qr_expires_at" TIMESTAMP WITH TIME ZONE,
+        "connected_phone" VARCHAR(50),
+        "connected_pushname" VARCHAR(255),
+        "last_connected_at" TIMESTAMP WITH TIME ZONE,
+        "last_disconnected_at" TIMESTAMP WITH TIME ZONE,
+        "last_error" TEXT,
+        "session_metadata" JSONB NOT NULL DEFAULT '{}'::jsonb,
+        "created_at" TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW(),
+        "updated_at" TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW()
+      );
+      CREATE UNIQUE INDEX IF NOT EXISTS "whatsapp_sessions_biz_idx" ON "whatsapp_sessions" ("business_id");
+      CREATE INDEX IF NOT EXISTS "whatsapp_sessions_status_idx" ON "whatsapp_sessions" ("status");
+
+      CREATE TABLE IF NOT EXISTS "whatsapp_messages_queue" (
+        "id" UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+        "business_id" UUID REFERENCES "businesses"("id") ON DELETE CASCADE NOT NULL,
+        "invoice_id" UUID REFERENCES "sales_invoices"("id") ON DELETE CASCADE,
+        "recipient_party_id" UUID REFERENCES "parties"("id") ON DELETE SET NULL,
+        "recipient_phone" VARCHAR(30) NOT NULL,
+        "recipient_name" VARCHAR(255),
+        "message_type" VARCHAR(50) NOT NULL DEFAULT 'INVOICE_PDF',
+        "message_text" TEXT NOT NULL,
+        "media_url" TEXT,
+        "media_file_name" VARCHAR(255),
+        "status" VARCHAR(30) NOT NULL DEFAULT 'PENDING',
+        "idempotency_key" VARCHAR(255) NOT NULL,
+        "attempt_count" INTEGER NOT NULL DEFAULT 0,
+        "max_attempts" INTEGER NOT NULL DEFAULT 3,
+        "last_attempt_at" TIMESTAMP WITH TIME ZONE,
+        "sent_at" TIMESTAMP WITH TIME ZONE,
+        "failed_at" TIMESTAMP WITH TIME ZONE,
+        "error_message" TEXT,
+        "metadata" JSONB NOT NULL DEFAULT '{}'::jsonb,
+        "created_at" TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW(),
+        "updated_at" TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW()
+      );
+      CREATE UNIQUE INDEX IF NOT EXISTS "whatsapp_queue_biz_idempotency_idx" ON "whatsapp_messages_queue" ("business_id", "idempotency_key");
+      CREATE INDEX IF NOT EXISTS "whatsapp_queue_biz_idx" ON "whatsapp_messages_queue" ("business_id");
+      CREATE INDEX IF NOT EXISTS "whatsapp_queue_invoice_idx" ON "whatsapp_messages_queue" ("invoice_id");
+      CREATE INDEX IF NOT EXISTS "whatsapp_queue_status_idx" ON "whatsapp_messages_queue" ("status");
+      CREATE INDEX IF NOT EXISTS "whatsapp_queue_created_at_idx" ON "whatsapp_messages_queue" ("created_at");
     `);
 
     // Verify all created tables
