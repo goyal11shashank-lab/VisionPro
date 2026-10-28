@@ -3,6 +3,7 @@ import { whatsappSessions, whatsappMessagesQueue, parties, salesInvoices, busine
 import { eq, and, desc } from 'drizzle-orm';
 import QRCode from 'qrcode';
 import crypto from 'crypto';
+import { WhatsAppConnectionManager } from './whatsappConnectionManager.js';
 
 export interface PhoneValidationResult {
   valid: boolean;
@@ -183,97 +184,40 @@ export class WhatsAppService {
    * Gets current WhatsApp connection session for a business
    */
   static async getSession(businessId: string) {
-    const [session] = await db
-      .select()
-      .from(whatsappSessions)
-      .where(eq(whatsappSessions.businessId, businessId))
-      .limit(1);
+    return await WhatsAppConnectionManager.getStatus(businessId);
+  }
 
-    if (!session) {
-      return {
-        businessId,
-        status: 'NOT_CONNECTED',
-        connectedPhone: null,
-        connectedPushname: null,
-        lastConnectedAt: null,
-        lastDisconnectedAt: null,
-        lastError: null,
-        qrCodeData: null,
-        qrExpiresAt: null,
-        isQrExpired: false,
-      };
+  /**
+   * Initiates a new linking session and returns QR Code challenge
+   */
+  static async initiateLinkSession(businessId: string) {
+    const initial = await WhatsAppConnectionManager.connect(businessId, true);
+
+    // If socket is initializing, wait briefly (up to 1.5s) for initial Baileys QR event
+    let current = initial;
+    if (current.status === 'INITIALIZING') {
+      for (let i = 0; i < 15; i++) {
+        await new Promise((r) => setTimeout(r, 100));
+        current = await WhatsAppConnectionManager.getStatus(businessId);
+        if (current.status !== 'INITIALIZING') break;
+      }
     }
 
-    // Check if QR code has expired
-    const isQrExpired = session.qrExpiresAt && new Date(session.qrExpiresAt).getTime() < Date.now();
-
     return {
-      ...session,
-      qrCodeData: isQrExpired ? null : session.qrCodeData,
-      isQrExpired,
+      status: current.status,
+      qrCodeData: current.qrCodeData,
+      qrExpiresAt: current.qrExpiresAt,
+      expiresInSeconds: current.qrExpiresAt
+        ? Math.max(0, Math.floor((current.qrExpiresAt.getTime() - Date.now()) / 1000))
+        : 0,
     };
   }
 
   /**
-   * Initiates a new linking session and generates a real QR Code data URL
+   * Retrieves current QR challenge directly
    */
-  static async initiateLinkSession(businessId: string) {
-    const sessionToken = `WA-LINK-${businessId}-${Date.now()}-${crypto.randomBytes(8).toString('hex')}`;
-    const qrExpiresAt = new Date(Date.now() + 120 * 1000); // 2 minutes validity
-
-    // Format string for WhatsApp web QR pairing
-    const qrPayload = `2@${sessionToken},${Date.now()},${businessId}`;
-    const qrDataUrl = await QRCode.toDataURL(qrPayload, {
-      width: 280,
-      margin: 2,
-      color: {
-        dark: '#0f172a',
-        light: '#ffffff',
-      },
-    });
-
-    const [existing] = await db
-      .select()
-      .from(whatsappSessions)
-      .where(eq(whatsappSessions.businessId, businessId))
-      .limit(1);
-
-    if (existing) {
-      await db
-        .update(whatsappSessions)
-        .set({
-          status: 'CONNECTING',
-          qrCodeData: qrDataUrl,
-          qrExpiresAt,
-          lastError: null,
-          sessionMetadata: {
-            token: sessionToken,
-            initiatedAt: new Date().toISOString(),
-          },
-          updatedAt: new Date(),
-        })
-        .where(eq(whatsappSessions.businessId, businessId));
-    } else {
-      await db
-        .insert(whatsappSessions)
-        .values({
-          businessId,
-          status: 'CONNECTING',
-          qrCodeData: qrDataUrl,
-          qrExpiresAt,
-          sessionMetadata: {
-            token: sessionToken,
-            initiatedAt: new Date().toISOString(),
-          },
-        });
-    }
-
-    return {
-      status: 'CONNECTING',
-      qrCodeData: qrDataUrl,
-      qrExpiresAt,
-      expiresInSeconds: 120,
-    };
+  static async getQR(businessId: string) {
+    return await WhatsAppConnectionManager.getQR(businessId);
   }
 
   /**
@@ -313,6 +257,8 @@ export class WhatsAppService {
       ]
     );
 
+    WhatsAppConnectionManager.setConnected(businessId, phone, pushname);
+
     return {
       status: 'CONNECTED',
       connectedPhone: phone,
@@ -325,23 +271,7 @@ export class WhatsAppService {
    * Disconnects WhatsApp session cleanly
    */
   static async disconnectSession(businessId: string) {
-    await pool.query(
-      `UPDATE whatsapp_sessions
-       SET status = 'NOT_CONNECTED',
-           qr_code_data = NULL,
-           qr_expires_at = NULL,
-           connected_phone = NULL,
-           connected_pushname = NULL,
-           last_disconnected_at = NOW(),
-           updated_at = NOW()
-       WHERE business_id = $1`,
-      [businessId]
-    );
-
-    return {
-      status: 'NOT_CONNECTED',
-      disconnectedAt: new Date(),
-    };
+    return await WhatsAppConnectionManager.disconnect(businessId);
   }
 
   /**

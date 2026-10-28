@@ -1,5 +1,6 @@
 import { pool, db } from '../db/index.js';
 import { WhatsAppService, DEFAULT_WHATSAPP_CONFIG } from '../services/whatsapp/whatsappService.js';
+import { WhatsAppConnectionManager } from '../services/whatsapp/whatsappConnectionManager.js';
 import { whatsappSessions, whatsappMessagesQueue, businesses, parties, salesInvoices } from '../db/schema.js';
 import { eq, and } from 'drizzle-orm';
 
@@ -17,6 +18,31 @@ async function runWhatsAppTests() {
       testsFailed++;
     }
   }
+
+  // Set mock transport for test execution
+  let activeMock: any = null;
+  WhatsAppConnectionManager.setTransportFactory(async ({ businessId, saveCreds }) => {
+    const listeners: Record<string, Function[]> = {};
+    activeMock = {
+      user: undefined,
+      ev: {
+        on: (event: string, handler: Function) => {
+          listeners[event] = listeners[event] || [];
+          listeners[event].push(handler);
+        },
+      },
+      emit: (event: string, ...args: any[]) => {
+        (listeners[event] || []).forEach((h) => h(...args));
+      },
+      logout: async () => {},
+      end: () => {},
+    };
+    await saveCreds();
+    setTimeout(() => {
+      activeMock?.emit('connection.update', { qr: '2@MOCK-TEST-QR-TOKEN' });
+    }, 20);
+    return activeMock;
+  });
 
   try {
     // =========================================================================
@@ -81,14 +107,16 @@ async function runWhatsAppTests() {
     // Test 3a: Initiate QR session
     const linkRes = await WhatsAppService.initiateLinkSession(testBusinessId);
     assert(
-      linkRes.status === 'CONNECTING' && linkRes.qrCodeData?.startsWith('data:image/png;base64,'),
+      (linkRes.status === 'QR_REQUIRED' || (linkRes.status as any) === 'CONNECTING') &&
+        typeof linkRes.qrCodeData === 'string' &&
+        linkRes.qrCodeData.startsWith('data:image/png;base64,'),
       'QR code link session initiated with real PNG data URL'
     );
 
     const sessionState = await WhatsAppService.getSession(testBusinessId);
     assert(
-      sessionState.status === 'CONNECTING' && !sessionState.isQrExpired,
-      'Session persisted in database with CONNECTING state'
+      (sessionState.status === 'QR_REQUIRED' || (sessionState.status as any) === 'CONNECTING') && !sessionState.isQrExpired,
+      'Session persisted in database with QR_REQUIRED/CONNECTING state'
     );
 
     // Test 3b: Confirm authentication
@@ -153,7 +181,10 @@ async function runWhatsAppTests() {
 
     // Test 4b: Clean Disconnect
     const discRes = await WhatsAppService.disconnectSession(testBusinessId);
-    assert(discRes.status === 'NOT_CONNECTED', 'Session cleanly disconnected');
+    assert(
+      discRes.status === 'DISCONNECTED' || (discRes.status as any) === 'NOT_CONNECTED',
+      'Session cleanly disconnected'
+    );
 
     // =========================================================================
     // Summary

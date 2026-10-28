@@ -64,7 +64,9 @@ export const BusinessSettingsPage: React.FC<Props> = ({ initialTab = 'general' }
       print: 'print',
       display: 'display',
       advanced: 'advanced',
-      whatsapp: 'whatsapp',
+      whatsapp: 'transactionMessage',
+      'transaction-message': 'transactionMessage',
+      transactionMessage: 'transactionMessage',
     };
     return map[tab] || tab || 'general';
   };
@@ -222,10 +224,10 @@ export const BusinessSettingsPage: React.FC<Props> = ({ initialTab = 'general' }
       count: 5,
     },
     {
-      id: 'whatsapp',
-      name: 'WhatsApp Integration',
+      id: 'transactionMessage',
+      name: 'Transaction Message',
       icon: MessageSquare,
-      description: 'QR-login connection, invoice PDF sharing, auto-send policy, and message templates',
+      description: 'WhatsApp Web Login, automated voucher sharing rules, and customer message templates',
       count: 6,
     },
   ];
@@ -1700,9 +1702,19 @@ export const BusinessSettingsPage: React.FC<Props> = ({ initialTab = 'general' }
                 </div>
               )}
 
-              {/* Group 13: WhatsApp Integration */}
-              {activeTab === 'whatsapp' && (
-                <div id="section-settings-whatsapp">
+              {/* Group 13: Transaction Message */}
+              {activeTab === 'transactionMessage' && (
+                <div id="section-settings-transaction-message" className="space-y-6">
+                  <div className="border-b border-slate-100 pb-3">
+                    <h2 className="text-base font-bold text-slate-900 flex items-center gap-2">
+                      <MessageSquare className="w-5 h-5 text-emerald-600" />
+                      Transaction Message
+                    </h2>
+                    <p className="text-xs text-slate-500">
+                      Configure WhatsApp Web Login, automated voucher sharing rules, and transactional customer message templates
+                    </p>
+                  </div>
+
                   <WhatsAppSettingsSection
                     businessId={currentBusiness?.id || ''}
                     businessName={bizInfo.name || currentBusiness?.name}

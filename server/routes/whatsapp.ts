@@ -57,6 +57,24 @@ router.post('/connect', async (req: Request, res: Response) => {
 });
 
 /**
+ * GET /api/whatsapp/qr
+ * Fetch current QR code challenge when authentication is required
+ */
+router.get('/qr', async (req: Request, res: Response) => {
+  try {
+    const businessId = (req as any).businessId;
+    const qrData = await WhatsAppService.getQR(businessId);
+
+    res.json({
+      success: true,
+      ...qrData,
+    });
+  } catch (err: any) {
+    res.status(500).json({ success: false, error: err.message || 'Failed to fetch QR code' });
+  }
+});
+
+/**
  * POST /api/whatsapp/confirm-auth
  * Confirm authentication for the linking session
  */

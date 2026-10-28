@@ -2,6 +2,7 @@ import path from 'path';
 import { createExpressApp } from './server/app.js';
 import { checkDatabaseConnection } from './server/db/index.js';
 import { seedInitialDatabase } from './server/db/seed.js';
+import { WhatsAppConnectionManager } from './server/services/whatsapp/whatsappConnectionManager.js';
 import express from 'express';
 import dotenv from 'dotenv';
 
@@ -29,7 +30,7 @@ async function startServer() {
   }
 
   // Listen on port 3000 immediately so dev server is responsive right away
-  app.listen(PORT, '0.0.0.0', () => {
+  const server = app.listen(PORT, '0.0.0.0', () => {
     console.log(`[Optical ERP] Server running at http://0.0.0.0:${PORT}`);
 
     // Asynchronously verify DB and run seed in background without blocking server listen
@@ -43,6 +44,13 @@ async function startServer() {
           } catch (e: any) {
             console.warn('[Database] Initial auto-seed warning (may already be initialized):', e.message);
           }
+
+          // Restore persistent WhatsApp sessions across restarts
+          try {
+            await WhatsAppConnectionManager.restoreAllSessions();
+          } catch (e: any) {
+            console.warn('[WhatsApp Startup Warning]:', e.message);
+          }
         } else {
           console.warn('[Database Notice] PostgreSQL is currently offline or DATABASE_URL not yet connected. Error:', dbHealth.error);
           console.warn('[Database Notice] Configure DATABASE_URL in environment or settings to connect to Netlify Database / PostgreSQL.');
@@ -52,6 +60,20 @@ async function startServer() {
         console.error('[Database Startup Check Error]', err);
       });
   });
+
+  // Graceful shutdown
+  const handleShutdown = async (signal: string) => {
+    console.log(`[Server] Received ${signal}. Shutting down cleanly...`);
+    try {
+      await WhatsAppConnectionManager.shutdown();
+    } catch {}
+    server.close(() => {
+      process.exit(0);
+    });
+  };
+
+  process.on('SIGTERM', () => handleShutdown('SIGTERM'));
+  process.on('SIGINT', () => handleShutdown('SIGINT'));
 }
 
 startServer().catch((err) => {

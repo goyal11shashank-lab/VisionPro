@@ -944,7 +944,7 @@ router.get(
           d.notes,
           d.created_at,
           so.order_date,
-          so.converted_invoice_id,
+          po.converted_invoice_id,
           p.name as party_name,
           mw.name as main_warehouse_name
         FROM dealer_orders d

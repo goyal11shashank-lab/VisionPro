@@ -300,6 +300,10 @@ const AppContent: React.FC = () => {
         return <BusinessSettingsPage initialTab="gst" />;
       case '/admin/barcode-settings':
         return <BusinessSettingsPage initialTab="barcode" />;
+      case '/settings/transaction-message':
+      case '/admin/transaction-message':
+      case '/admin/transaction-message-settings':
+        return <BusinessSettingsPage initialTab="transactionMessage" />;
       case '/admin/audit-logs':
         return <AuditLogsPage />;
 

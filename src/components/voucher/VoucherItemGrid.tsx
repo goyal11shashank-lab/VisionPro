@@ -126,10 +126,10 @@ export const VoucherItemGrid: React.FC<VoucherItemGridProps> = ({
       .every(l => expandedRows[l.id]);
 
   // Programmatic keyboard navigation & scroll container ref
-  const inputRefs = useRef<{ [key: string]: HTMLElement | null }>({});
+  const inputRefs = useRef<{ [key: string]: any }>({});
   const tableContainerRef = useRef<HTMLDivElement>(null);
 
-  const setRef = (row: number, col: string, el: HTMLElement | null) => {
+  const setRef = (row: number, col: string, el: any) => {
     inputRefs.current[`${row}-${col}`] = el;
   };
 
@@ -138,14 +138,22 @@ export const VoucherItemGrid: React.FC<VoucherItemGridProps> = ({
     setTimeout(() => {
       const el = inputRefs.current[`${row}-${col}`];
       if (el) {
-        if ('focus' in el) (el as HTMLElement).focus();
-        if ('select' in el && typeof (el as any).select === 'function') {
-          (el as any).select();
+        if (typeof el.focus === 'function') {
+          el.focus();
         }
-        try {
-          el.scrollIntoView({ block: 'nearest', inline: 'nearest', behavior: 'smooth' });
-        } catch {
-          el.scrollIntoView();
+        if (typeof el.select === 'function') {
+          el.select();
+        }
+        if (typeof el.scrollIntoView === 'function') {
+          try {
+            el.scrollIntoView({ block: 'nearest', inline: 'nearest', behavior: 'smooth' });
+          } catch {
+            try {
+              el.scrollIntoView();
+            } catch {
+              // Silently ignore if scrolling into view is not supported by container
+            }
+          }
         }
       }
     }, 40);

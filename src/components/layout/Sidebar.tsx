@@ -32,6 +32,7 @@ import {
   Store,
   ShoppingBag,
   BookmarkCheck,
+  MessageSquare,
 } from 'lucide-react';
 import { useAuth } from '../../context/AuthContext.js';
 import { useUnsavedChanges } from '../../context/UnsavedChangesContext.js';
@@ -182,6 +183,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
         { id: 'admin-users', label: 'Users', icon: Users, path: '/admin/users', permission: 'admin:manage_users' },
         { id: 'admin-roles', label: 'Roles & Permissions', icon: KeyRound, path: '/admin/roles', permission: 'admin:manage_roles' },
         { id: 'admin-business', label: 'Business Settings', icon: Settings, path: '/admin/business-settings', permission: 'admin:manage_settings' },
+        { id: 'admin-transaction-message', label: 'Transaction Message', icon: MessageSquare, path: '/admin/transaction-message-settings', permission: 'admin:manage_settings' },
         { id: 'admin-gst', label: 'GST Settings', icon: Percent, path: '/admin/gst-settings', permission: 'admin:manage_settings' },
         { id: 'admin-barcode', label: 'Barcode Settings', icon: Barcode, path: '/admin/barcode-settings', permission: 'admin:manage_settings' },
         { id: 'admin-audit', label: 'Audit Logs', icon: History, path: '/admin/audit-logs', permission: 'admin:view_audit_logs' },
@@ -236,6 +238,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
       icon: Settings,
       items: [
         { id: 'dealer-biz-settings', label: 'Business Settings', icon: Settings, path: '/admin/business-settings', permission: 'admin:manage_settings' },
+        { id: 'dealer-transaction-message', label: 'Transaction Message', icon: MessageSquare, path: '/admin/transaction-message-settings', permission: 'admin:manage_settings' },
         { id: 'dealer-onboarding-restart', label: 'Setup Wizard', icon: Sparkles, path: '/dealer/onboarding', permission: 'admin:manage_settings' },
       ],
     },

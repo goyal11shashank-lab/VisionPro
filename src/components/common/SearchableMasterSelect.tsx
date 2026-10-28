@@ -50,6 +50,8 @@ export interface SearchableMasterSelectRef {
   blur: () => void;
   open: () => void;
   close: () => void;
+  scrollIntoView?: (options?: boolean | ScrollIntoViewOptions) => void;
+  getInputElement?: () => HTMLInputElement | null;
 }
 
 export const SearchableMasterSelect = forwardRef<SearchableMasterSelectRef, SearchableMasterSelectProps>(
@@ -107,7 +109,7 @@ export const SearchableMasterSelect = forwardRef<SearchableMasterSelectRef, Sear
       return q ? `+ Create "${q}"` : '+ Create New';
     };
 
-    // Expose focus/open/close controls to parent via ref
+    // Expose focus/open/close/scroll controls to parent via ref
     useImperativeHandle(ref, () => ({
       focus: () => {
         inputRef.current?.focus();
@@ -122,6 +124,13 @@ export const SearchableMasterSelect = forwardRef<SearchableMasterSelectRef, Sear
       close: () => {
         setIsOpen(false);
       },
+      scrollIntoView: (options?: boolean | ScrollIntoViewOptions) => {
+        const target = inputRef.current || containerRef.current;
+        if (target && typeof target.scrollIntoView === 'function') {
+          target.scrollIntoView(options);
+        }
+      },
+      getInputElement: () => inputRef.current,
     }));
 
     const isFocusedRef = useRef(false);
