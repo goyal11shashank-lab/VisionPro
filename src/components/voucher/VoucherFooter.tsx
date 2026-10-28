@@ -99,7 +99,7 @@ export const VoucherFooter: React.FC<VoucherFooterProps> = ({
   return (
     <footer
       id="tally-voucher-footer"
-      className="bg-white border-t border-slate-300 shadow-2xs shrink-0 select-none text-xs font-sans"
+      className="bg-white border-t border-slate-300 shadow-sm shrink-0 select-none text-xs font-sans sticky bottom-0 z-30"
     >
       {/* Optional Form Error Banner */}
       {errorMessage && (
@@ -109,8 +109,8 @@ export const VoucherFooter: React.FC<VoucherFooterProps> = ({
         </div>
       )}
 
-      {/* Main Totals & Narration Section */}
-      <div className="px-2.5 py-1.5 grid grid-cols-1 lg:grid-cols-12 gap-2.5 items-start">
+      {/* Main Totals & Narration Section (Bounded height with clean scrollbar if needed) */}
+      <div className="px-2.5 py-1.5 grid grid-cols-1 lg:grid-cols-12 gap-2.5 items-start max-h-[210px] overflow-y-auto custom-scrollbar">
         {/* Left: Narration & Quantities (col 7) */}
         <div className="lg:col-span-7 flex flex-col justify-between space-y-1.5 h-full">
           <div className="flex items-start gap-1.5">
@@ -344,7 +344,7 @@ export const VoucherFooter: React.FC<VoucherFooterProps> = ({
       </div>
 
       {/* Fixed Bottom Command Bar (Tally-Style Full-Width Strip) */}
-      <div className="bg-[#0f2e54] text-white px-3 py-1 flex flex-wrap items-center justify-between border-t border-blue-950 font-mono text-xs">
+      <div className="bg-[#0f2e54] text-white px-3 py-1.5 flex flex-wrap items-center justify-between gap-2 border-t border-blue-950 font-mono text-xs shrink-0">
         {/* Left Command Buttons */}
         <div className="flex items-center gap-1.5 flex-wrap">
           {onBack && (
@@ -354,8 +354,30 @@ export const VoucherFooter: React.FC<VoucherFooterProps> = ({
               className="px-2 py-0.5 text-[11px] font-bold text-slate-200 bg-white/10 hover:bg-white/20 hover:text-white rounded border border-white/20 transition-colors flex items-center gap-1 cursor-pointer"
               title="Quit / Exit Voucher (Esc)"
             >
-              <kbd className="px-1 py-0.2 bg-black/40 rounded text-[9px] text-cyan-300">Esc</kbd>
+              <kbd className="px-1.5 py-0.2 bg-black/50 text-cyan-300 font-bold border border-cyan-500/30 rounded text-[9px]">Esc</kbd>
               <span>Quit</span>
+            </button>
+          )}
+
+          {onSave && (
+            <button
+              type="button"
+              disabled={submitting}
+              onClick={onSave}
+              className="px-2.5 py-0.5 text-[11px] font-bold text-white bg-blue-600 hover:bg-blue-500 rounded border border-blue-400/50 shadow-2xs transition-colors flex items-center gap-1.5 disabled:opacity-50 cursor-pointer"
+              title="Accept & Save Voucher (Ctrl+S)"
+            >
+              {submitting ? (
+                <>
+                  <RefreshCw className="w-3 h-3 animate-spin text-cyan-200" />
+                  <span>Saving...</span>
+                </>
+              ) : (
+                <>
+                  <kbd className="px-1.5 py-0.2 bg-black/50 text-cyan-300 font-bold border border-cyan-500/30 rounded text-[9px]">Ctrl+S</kbd>
+                  <span>{isEditing ? 'Accept (Update)' : 'Accept (Save)'}</span>
+                </>
+              )}
             </button>
           )}
 
@@ -364,7 +386,7 @@ export const VoucherFooter: React.FC<VoucherFooterProps> = ({
               type="button"
               disabled={submitting}
               onClick={onSaveAndNew}
-              className="px-2.5 py-0.5 text-[11px] font-black text-white bg-emerald-600 hover:bg-emerald-500 rounded border border-emerald-400/50 shadow-2xs transition-colors flex items-center gap-1 disabled:opacity-50 cursor-pointer"
+              className="px-2.5 py-0.5 text-[11px] font-black text-white bg-emerald-600 hover:bg-emerald-500 rounded border border-emerald-400/50 shadow-2xs transition-colors flex items-center gap-1.5 disabled:opacity-50 cursor-pointer"
               title="Save Voucher and Open New (Ctrl+A)"
             >
               {submitting ? (
@@ -374,29 +396,8 @@ export const VoucherFooter: React.FC<VoucherFooterProps> = ({
                 </>
               ) : (
                 <>
-                  <kbd className="px-1 py-0.2 bg-black/40 rounded text-[9px] text-cyan-300">Ctrl+A</kbd>
+                  <kbd className="px-1.5 py-0.2 bg-black/50 text-cyan-300 font-bold border border-cyan-500/30 rounded text-[9px]">Ctrl+A</kbd>
                   <span>Save &amp; New</span>
-                </>
-              )}
-            </button>
-          )}
-
-          {onSave && (
-            <button
-              type="button"
-              disabled={submitting}
-              onClick={onSave}
-              className="px-2.5 py-0.5 text-[11px] font-bold text-slate-200 bg-white/10 hover:bg-white/20 hover:text-white rounded border border-white/20 shadow-2xs transition-colors flex items-center gap-1 disabled:opacity-50 cursor-pointer"
-              title="Accept & Save Voucher"
-            >
-              {submitting ? (
-                <>
-                  <RefreshCw className="w-3 h-3 animate-spin text-cyan-200" />
-                  <span>Saving...</span>
-                </>
-              ) : (
-                <>
-                  <span>{isEditing ? 'Accept (Update)' : 'Accept (Save)'}</span>
                 </>
               )}
             </button>
@@ -406,10 +407,10 @@ export const VoucherFooter: React.FC<VoucherFooterProps> = ({
             <button
               type="button"
               onClick={onPrint}
-              className="px-2.5 py-0.5 text-[11px] font-bold text-slate-200 bg-white/10 hover:bg-white/20 hover:text-white rounded border border-white/20 transition-colors flex items-center gap-1 cursor-pointer"
+              className="px-2.5 py-0.5 text-[11px] font-bold text-slate-200 bg-white/10 hover:bg-white/20 hover:text-white rounded border border-white/20 transition-colors flex items-center gap-1.5 cursor-pointer"
               title="Print Preview Voucher (Ctrl+P)"
             >
-              <kbd className="px-1 py-0.2 bg-black/40 rounded text-[9px] text-cyan-300">Ctrl+P</kbd>
+              <kbd className="px-1.5 py-0.2 bg-black/50 text-cyan-300 font-bold border border-cyan-500/30 rounded text-[9px]">Ctrl+P</kbd>
               <Printer className="w-3 h-3" />
               <span>Print Preview</span>
             </button>
@@ -419,10 +420,10 @@ export const VoucherFooter: React.FC<VoucherFooterProps> = ({
             <button
               type="button"
               onClick={onDelete}
-              className="px-2 py-0.5 text-[11px] font-bold text-rose-200 bg-rose-900/60 hover:bg-rose-800 rounded border border-rose-700/50 transition-colors flex items-center gap-1 cursor-pointer"
+              className="px-2 py-0.5 text-[11px] font-bold text-rose-200 bg-rose-900/60 hover:bg-rose-800 rounded border border-rose-700/50 transition-colors flex items-center gap-1.5 cursor-pointer"
               title="Delete Voucher (Alt+D)"
             >
-              <kbd className="px-1 py-0.2 bg-black/40 rounded text-[9px] text-rose-300">Alt+D</kbd>
+              <kbd className="px-1.5 py-0.2 bg-black/50 text-rose-300 font-bold border border-rose-500/30 rounded text-[9px]">Alt+D</kbd>
               <span>Delete</span>
             </button>
           )}
@@ -431,23 +432,11 @@ export const VoucherFooter: React.FC<VoucherFooterProps> = ({
             <button
               type="button"
               onClick={onCancelVoucher}
-              className="px-2 py-0.5 text-[11px] font-bold text-amber-200 bg-amber-900/60 hover:bg-amber-800 rounded border border-amber-700/50 transition-colors flex items-center gap-1 cursor-pointer"
+              className="px-2 py-0.5 text-[11px] font-bold text-amber-200 bg-amber-900/60 hover:bg-amber-800 rounded border border-amber-700/50 transition-colors flex items-center gap-1.5 cursor-pointer"
               title="Cancel Voucher (Alt+X)"
             >
-              <kbd className="px-1 py-0.2 bg-black/40 rounded text-[9px] text-amber-300">Alt+X</kbd>
+              <kbd className="px-1.5 py-0.2 bg-black/50 text-amber-300 font-bold border border-amber-500/30 rounded text-[9px]">Alt+X</kbd>
               <span>Cancel Voucher</span>
-            </button>
-          )}
-
-          {onPrint && (
-            <button
-              type="button"
-              onClick={onPrint}
-              className="px-2 py-0.5 text-[11px] font-bold text-slate-200 bg-white/10 hover:bg-white/20 hover:text-white rounded border border-white/20 transition-colors flex items-center gap-1 cursor-pointer"
-              title="Print Voucher (Alt+P)"
-            >
-              <kbd className="px-1 py-0.2 bg-black/40 rounded text-[9px] text-cyan-300">Alt+P</kbd>
-              <span>Print</span>
             </button>
           )}
         </div>
@@ -455,13 +444,13 @@ export const VoucherFooter: React.FC<VoucherFooterProps> = ({
         {/* Right Status / Navigation Help */}
         <div className="flex items-center gap-3 text-[10px] text-cyan-200/80">
           <span>
-            <kbd className="px-1 py-0.2 bg-black/40 rounded text-[9px] text-cyan-300">F2</kbd> Date
+            <kbd className="px-1 py-0.2 bg-black/50 text-cyan-300 font-bold border border-cyan-500/30 rounded text-[9px]">F2</kbd> Date
           </span>
           <span>
-            <kbd className="px-1 py-0.2 bg-black/40 rounded text-[9px] text-cyan-300">Enter</kbd> Next
+            <kbd className="px-1 py-0.2 bg-black/50 text-cyan-300 font-bold border border-cyan-500/30 rounded text-[9px]">Enter</kbd> Next
           </span>
           <span>
-            <kbd className="px-1 py-0.2 bg-black/40 rounded text-[9px] text-cyan-300">Alt+C</kbd> Create Master
+            <kbd className="px-1 py-0.2 bg-black/50 text-cyan-300 font-bold border border-cyan-500/30 rounded text-[9px]">Alt+C</kbd> Master
           </span>
         </div>
       </div>

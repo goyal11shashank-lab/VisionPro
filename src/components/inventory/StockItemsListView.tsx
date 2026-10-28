@@ -7,6 +7,7 @@ import {
 import { UniqueItem, Category } from '../../types/index.js';
 import { rankSearchMatch } from '../../utils/searchNormalization.js';
 import { formatQuantity } from '../../utils/numberFormatting.js';
+import { apiRequest } from '../../api/client.js';
 
 interface StockItemsListViewProps {
   items: UniqueItem[];
@@ -61,28 +62,68 @@ export const StockItemsListView: React.FC<StockItemsListViewProps> = ({
   const totalAvailable = useMemo(() => safeItems.reduce((sum, item) => sum + (Number(item.available) || 0), 0), [safeItems]);
   const totalBatches = useMemo(() => safeItems.reduce((sum, item) => sum + (Number(item.batchesCount) || 0), 0), [safeItems]);
 
-  const handleExportCSV = () => {
-    const headers = ['Stock Item Name', 'Code', 'Category', 'Unit', 'Maintain Batches', 'Batches Count', 'Stock', 'Reserved', 'Available'];
-    const rows = filteredItems.map(item => [
-      item.name,
-      item.code,
-      item.opticalCategory || item.categoryCode || 'SV',
-      item.unit || 'PRS',
-      item.maintainBatches !== false ? 'YES' : 'NO',
-      item.batchesCount || 0,
-      item.stock || 0,
-      item.reserved || 0,
-      item.available || 0,
-    ]);
+  const [exportingCSV, setExportingCSV] = useState<boolean>(false);
 
-    const csvContent = 'data:text/csv;charset=utf-8,' + [headers.join(','), ...rows.map(r => r.map(c => `"${c}"`).join(','))].join('\n');
-    const encodedUri = encodeURI(csvContent);
-    const link = document.createElement('a');
-    link.setAttribute('href', encodedUri);
-    link.setAttribute('download', `Stock_Items_Report_${new Date().toISOString().slice(0, 10)}.csv`);
-    document.body.appendChild(link);
-    link.click();
-    document.body.removeChild(link);
+  const handleExportCSV = async () => {
+    try {
+      setExportingCSV(true);
+      // Fetch complete details of current stock with batchwise details
+      const res = await apiRequest<{ success: boolean; batches: any[] }>(`/api/optical-master/batches`);
+      const allBatches = res.batches || [];
+
+      // Filter by category or search if applied
+      let batchesToExport = allBatches;
+      if (selectedCategory) {
+        batchesToExport = batchesToExport.filter(b => b.categoryId === selectedCategory);
+      }
+      if (search.trim()) {
+        const q = search.trim().toLowerCase();
+        batchesToExport = batchesToExport.filter(b =>
+          (b.uniqueItemName && b.uniqueItemName.toLowerCase().includes(q)) ||
+          (b.formattedName && b.formattedName.toLowerCase().includes(q)) ||
+          (b.barcode && b.barcode.toLowerCase().includes(q))
+        );
+      }
+
+      const headers = ['item name', 'batch name', 'sph', 'cyl', 'axis', 'addition', 'side', 'current stock'];
+      const rows = batchesToExport.map(b => {
+        const sphNum = Number(b.sph || 0);
+        const cylNum = Number(b.cyl || 0);
+        const axisNum = Number(b.axis || 0);
+        const addNum = Number(b.add || 0);
+        const sideVal = b.side && b.side !== 'NONE' ? b.side : '';
+        const currentStock = b.physicalStock !== null && b.physicalStock !== undefined ? Number(b.physicalStock) : 0;
+
+        const sphStr = sphNum > 0 ? `+${sphNum.toFixed(2)}` : sphNum.toFixed(2);
+        const cylStr = cylNum > 0 ? `+${cylNum.toFixed(2)}` : cylNum.toFixed(2);
+        const axisStr = cylNum !== 0 && axisNum > 0 ? String(Math.round(axisNum)) : '0';
+        const addStr = addNum > 0 ? `+${addNum.toFixed(2)}` : '';
+
+        return [
+          b.uniqueItemName || '',
+          b.formattedName || '',
+          sphStr,
+          cylStr,
+          axisStr,
+          addStr,
+          sideVal,
+          currentStock,
+        ];
+      });
+
+      const csvContent = 'data:text/csv;charset=utf-8,' + [headers.join(','), ...rows.map(r => r.map(c => `"${c}"`).join(','))].join('\n');
+      const encodedUri = encodeURI(csvContent);
+      const link = document.createElement('a');
+      link.setAttribute('href', encodedUri);
+      link.setAttribute('download', `Optical_Batches_Stock_${new Date().toISOString().slice(0, 10)}.csv`);
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+    } catch (err: any) {
+      console.error('Batchwise CSV export failed:', err);
+    } finally {
+      setExportingCSV(false);
+    }
   };
 
   const handlePrint = () => {
@@ -118,11 +159,12 @@ export const StockItemsListView: React.FC<StockItemsListViewProps> = ({
 
             <button
               onClick={handleExportCSV}
-              className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold text-slate-700 bg-white hover:bg-slate-100 border border-slate-200 rounded-lg transition-colors shadow-2xs cursor-pointer"
-              title="Export Stock Items to CSV"
+              disabled={exportingCSV}
+              className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold text-slate-700 bg-white hover:bg-slate-100 border border-slate-200 rounded-lg transition-colors shadow-2xs cursor-pointer disabled:opacity-50"
+              title="Export complete batchwise current stock details to CSV"
             >
-              <Download className="h-3.5 w-3.5" />
-              <span>Export CSV</span>
+              <Download className={`h-3.5 w-3.5 ${exportingCSV ? 'animate-bounce text-blue-600' : ''}`} />
+              <span>{exportingCSV ? 'Exporting...' : 'Export CSV'}</span>
             </button>
 
             <button

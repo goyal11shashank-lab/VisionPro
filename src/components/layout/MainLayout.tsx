@@ -27,6 +27,7 @@ export const MainLayout: React.FC<MainLayoutProps> = ({
     currentPath === '/sales/new' ||
     currentPath.startsWith('/sales/invoices/new') ||
     currentPath.startsWith('/sales/invoices/edit') ||
+    currentPath.startsWith('/sales/voucher') ||
     currentPath.includes('/purchase/new') ||
     currentPath.includes('/purchases/new') ||
     currentPath.includes('/purchase/voucher') ||
@@ -55,14 +56,14 @@ export const MainLayout: React.FC<MainLayoutProps> = ({
         <main
           className={
             isVoucherPage
-              ? 'flex-1 overflow-hidden p-0 sm:p-1 flex flex-col min-h-0'
+              ? 'flex-1 overflow-hidden p-0 sm:p-1 flex flex-col min-h-0 h-full'
               : 'flex-1 overflow-y-auto px-3.5 py-3 sm:px-5 sm:py-3.5 lg:px-7 lg:py-4 custom-scrollbar'
           }
         >
           <div
             className={
               isVoucherPage
-                ? 'w-full h-full flex flex-col flex-1 min-h-0'
+                ? 'w-full h-full flex flex-col flex-1 min-h-0 overflow-hidden'
                 : 'w-full space-y-3.5'
             }
           >

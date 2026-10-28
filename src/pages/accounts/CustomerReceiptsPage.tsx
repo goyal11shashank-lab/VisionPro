@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useMemo } from 'react';
+import React, { useState, useEffect, useMemo, useRef } from 'react';
 import {
   TallyContextualPanel,
   ContextualPanelItem,
@@ -25,6 +25,8 @@ import {
   ShieldCheck,
   Ban,
   TrendingUp,
+  Edit2,
+  Trash2,
 } from 'lucide-react';
 import { useAuth } from '../../context/AuthContext.js';
 import { getStoredToken } from '../../api/client.js';
@@ -91,10 +93,15 @@ export const CustomerReceiptsPage: React.FC = () => {
   // Customer List for Select
   const [customers, setCustomers] = useState<any[]>([]);
 
-  // Create Modal State
+  // Create & Edit Modal State
   const [showCreateModal, setShowCreateModal] = useState(false);
+  const [editingVoucherId, setEditingVoucherId] = useState<string | null>(null);
+  const [editingVoucherNumber, setEditingVoucherNumber] = useState<string>('');
+  const [deleteModalVoucher, setDeleteModalVoucher] = useState<PaymentVoucher | null>(null);
+  const [deleting, setDeleting] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const [formError, setFormError] = useState<string | null>(null);
+  const skipNextPartyEffect = useRef(false);
 
   // Form Fields
   const [partyId, setPartyId] = useState('');
@@ -128,13 +135,14 @@ export const CustomerReceiptsPage: React.FC = () => {
 
     return filtered.map(c => {
       const bal = Number(c.balance ?? c.currentBalance ?? 0);
+      const formattedBal = c.balanceFormatted || (bal !== 0 ? `₹${Math.abs(bal).toLocaleString('en-IN', { minimumFractionDigits: 2 })} ${bal < 0 ? 'Cr' : 'Dr'}` : '₹0.00');
       return {
         id: c.id,
         title: c.name,
         subtitle: `${c.phone || c.mobile || ''} ${c.city ? `• ${c.city}` : ''}`.trim() || undefined,
         badge: c.partyType === 'CUSTOMER' ? 'Sundry Debtors' : c.partyType || 'Customer',
         badgeColor: 'blue' as const,
-        rightText: bal !== 0 ? `₹${Math.abs(bal).toLocaleString('en-IN', { minimumFractionDigits: 2 })} ${bal < 0 ? 'Cr' : 'Dr'}` : '₹0.00',
+        rightText: formattedBal,
         rightSubText: c.gstin ? `GST: ${c.gstin}` : undefined,
         meta: c,
       };
@@ -240,7 +248,7 @@ export const CustomerReceiptsPage: React.FC = () => {
   const fetchCustomers = async () => {
     if (!currentBusiness) return;
     try {
-      const res = await fetch('/api/parties', {
+      const res = await fetch('/api/parties?partyType=CUSTOMER&limit=500', {
         headers: {
           Authorization: `Bearer ${getStoredToken()}`,
           'X-Business-Id': currentBusiness.id,
@@ -266,8 +274,13 @@ export const CustomerReceiptsPage: React.FC = () => {
     fetchCustomers();
   }, [currentBusiness]);
 
-  // When customer changes in create modal, load their unpaid invoices
+  // When customer changes in create modal, load their unpaid invoices and refresh live ledger balance
   useEffect(() => {
+    if (skipNextPartyEffect.current) {
+      skipNextPartyEffect.current = false;
+      return;
+    }
+
     if (!partyId || !currentBusiness) {
       setUnpaidInvoices([]);
       setAllocationsMap({});
@@ -277,16 +290,43 @@ export const CustomerReceiptsPage: React.FC = () => {
     const loadUnpaid = async () => {
       try {
         setLoadingInvoices(true);
-        const res = await fetch(`/api/payments/unpaid-invoices/${partyId}?paymentType=RECEIPT`, {
-          headers: {
-            Authorization: `Bearer ${getStoredToken()}`,
-            'X-Business-Id': currentBusiness.id,
-          },
-        });
-        if (res.ok) {
-          const data = await res.json();
+        const [invRes, ledgerRes] = await Promise.all([
+          fetch(`/api/payments/unpaid-invoices/${partyId}?paymentType=RECEIPT`, {
+            headers: {
+              Authorization: `Bearer ${getStoredToken()}`,
+              'X-Business-Id': currentBusiness.id,
+            },
+          }),
+          fetch(`/api/parties/${partyId}/ledger`, {
+            headers: {
+              Authorization: `Bearer ${getStoredToken()}`,
+              'X-Business-Id': currentBusiness.id,
+            },
+          }).catch(() => null),
+        ]);
+
+        if (invRes.ok) {
+          const data = await invRes.json();
           setUnpaidInvoices(data.unpaidInvoices || []);
           setAllocationsMap({});
+        }
+
+        if (ledgerRes && ledgerRes.ok) {
+          const lData = await ledgerRes.json();
+          const rawBal = lData?.summary?.closingBalanceRaw !== undefined
+            ? Number(lData.summary.closingBalanceRaw)
+            : (lData?.summary?.closingBalance !== undefined ? Number(lData.summary.closingBalance) : null);
+
+          if (rawBal !== null && !isNaN(rawBal)) {
+            const drCr = lData.summary.closingBalanceDrCr || (rawBal >= 0 ? 'Dr' : 'Cr');
+            setCustomers(prev => prev.map(c => c.id === partyId ? {
+              ...c,
+              balance: rawBal,
+              currentBalance: rawBal,
+              balanceDrCr: drCr,
+              balanceFormatted: lData.summary.closingBalanceFormatted || `₹${Math.abs(rawBal).toLocaleString('en-IN', { minimumFractionDigits: 2 })} ${drCr}`,
+            } : c));
+          }
         }
       } catch (err) {
         console.error(err);
@@ -349,8 +389,87 @@ export const CustomerReceiptsPage: React.FC = () => {
     }));
   };
 
-  // Submit New Receipt
-  const handleCreateReceipt = async (e: React.FormEvent) => {
+  // Open Edit Modal for an existing voucher
+  const handleOpenEdit = async (voucher: PaymentVoucher) => {
+    if (!currentBusiness) return;
+    try {
+      setLoading(true);
+      const res = await fetch(`/api/payments/${voucher.id}`, {
+        headers: {
+          Authorization: `Bearer ${getStoredToken()}`,
+          'X-Business-Id': currentBusiness.id,
+        },
+      });
+      if (!res.ok) throw new Error('Failed to load receipt details for editing');
+      const full = await res.json();
+
+      skipNextPartyEffect.current = true;
+      setEditingVoucherId(full.id);
+      setEditingVoucherNumber(full.paymentNumber || voucher.paymentNumber);
+      setPartyId(full.partyId);
+      setPaymentDate(full.paymentDate ? full.paymentDate.split('T')[0] : new Date().toISOString().split('T')[0]);
+      setPaymentMode(full.paymentMode || 'CASH');
+      setAmount(String(full.amount || ''));
+      setReferenceNumber(full.referenceNumber || '');
+      setBankName(full.bankName || '');
+      setChequeNumber(full.chequeNumber || '');
+      setChequeDate(full.chequeDate ? full.chequeDate.split('T')[0] : '');
+      setNotes(full.notes || '');
+      setFormError(null);
+
+      // Fetch unpaid invoices for the customer
+      const invRes = await fetch(`/api/payments/unpaid-invoices/${full.partyId}?paymentType=RECEIPT`, {
+        headers: {
+          Authorization: `Bearer ${getStoredToken()}`,
+          'X-Business-Id': currentBusiness.id,
+        },
+      });
+
+      let currentUnpaid: UnpaidInvoice[] = [];
+      if (invRes.ok) {
+        const invData = await invRes.json();
+        currentUnpaid = invData.unpaidInvoices || [];
+      }
+
+      // Merge existing allocations into unpaid invoices list
+      const allocMap: Record<string, number> = {};
+      const existingAllocations: PaymentAllocation[] = full.allocations || [];
+      const combinedInvoices: UnpaidInvoice[] = [...currentUnpaid];
+
+      for (const alloc of existingAllocations) {
+        const allocNum = Number(alloc.allocatedAmount) || 0;
+        allocMap[alloc.documentId] = allocNum;
+        const existingIdx = combinedInvoices.findIndex(inv => inv.id === alloc.documentId);
+        if (existingIdx >= 0) {
+          combinedInvoices[existingIdx] = {
+            ...combinedInvoices[existingIdx],
+            outstandingAmount: parseFloat((combinedInvoices[existingIdx].outstandingAmount + allocNum).toFixed(2)),
+          };
+        } else {
+          combinedInvoices.push({
+            id: alloc.documentId,
+            invoiceNumber: alloc.documentNumber || 'Invoice',
+            invoiceDate: alloc.invoiceDate || full.paymentDate,
+            grandTotal: alloc.grandTotal || allocNum,
+            paidAmount: Math.max(0, (alloc.grandTotal || allocNum) - allocNum),
+            outstandingAmount: allocNum,
+            paymentStatus: 'PAID',
+          });
+        }
+      }
+
+      setUnpaidInvoices(combinedInvoices);
+      setAllocationsMap(allocMap);
+      setShowCreateModal(true);
+    } catch (err: any) {
+      alert(err.message || 'Error opening voucher for editing');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  // Submit New or Updated Receipt
+  const handleSaveReceipt = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!currentBusiness) return;
 
@@ -395,8 +514,11 @@ export const CustomerReceiptsPage: React.FC = () => {
         allocations,
       };
 
-      const res = await fetch('/api/payments', {
-        method: 'POST',
+      const endpoint = editingVoucherId ? `/api/payments/${editingVoucherId}` : '/api/payments';
+      const method = editingVoucherId ? 'PUT' : 'POST';
+
+      const res = await fetch(endpoint, {
+        method,
         headers: {
           'Content-Type': 'application/json',
           Authorization: `Bearer ${getStoredToken()}`,
@@ -407,12 +529,13 @@ export const CustomerReceiptsPage: React.FC = () => {
 
       if (!res.ok) {
         const data = await res.json();
-        throw new Error(data.message || 'Failed to create customer receipt');
+        throw new Error(data.message || `Failed to ${editingVoucherId ? 'update' : 'create'} customer receipt`);
       }
 
       setShowCreateModal(false);
       resetForm();
       fetchVouchers();
+      fetchCustomers();
     } catch (err: any) {
       setFormError(err.message);
     } finally {
@@ -420,7 +543,41 @@ export const CustomerReceiptsPage: React.FC = () => {
     }
   };
 
+  // Delete Voucher
+  const handleConfirmDelete = async () => {
+    if (!currentBusiness || !deleteModalVoucher) return;
+    try {
+      setDeleting(true);
+      const res = await fetch(`/api/payments/${deleteModalVoucher.id}`, {
+        method: 'DELETE',
+        headers: {
+          Authorization: `Bearer ${getStoredToken()}`,
+          'X-Business-Id': currentBusiness.id,
+        },
+      });
+
+      if (!res.ok) {
+        const data = await res.json();
+        throw new Error(data.message || 'Failed to delete receipt voucher');
+      }
+
+      const deletedId = deleteModalVoucher.id;
+      setDeleteModalVoucher(null);
+      if (viewVoucher?.id === deletedId) {
+        setViewVoucher(null);
+      }
+      fetchVouchers();
+      fetchCustomers();
+    } catch (err: any) {
+      alert(err.message);
+    } finally {
+      setDeleting(false);
+    }
+  };
+
   const resetForm = () => {
+    setEditingVoucherId(null);
+    setEditingVoucherNumber('');
     setPartyId('');
     setPaymentDate(new Date().toISOString().split('T')[0]);
     setPaymentMode('CASH');
@@ -475,6 +632,7 @@ export const CustomerReceiptsPage: React.FC = () => {
         return;
       }
       fetchVouchers();
+      fetchCustomers();
       if (viewVoucher && viewVoucher.id === voucherId) {
         handleOpenDetails({ ...viewVoucher, status: 'POSTED' });
       }
@@ -506,6 +664,7 @@ export const CustomerReceiptsPage: React.FC = () => {
       setCancelModalVoucher(null);
       setCancelReason('');
       fetchVouchers();
+      fetchCustomers();
       if (viewVoucher && viewVoucher.id === cancelModalVoucher.id) {
         handleOpenDetails({ ...viewVoucher, status: 'CANCELLED' });
       }
@@ -548,6 +707,7 @@ export const CustomerReceiptsPage: React.FC = () => {
             id="create-customer-receipt-btn"
             onClick={() => {
               resetForm();
+              fetchCustomers();
               setShowCreateModal(true);
             }}
             className="flex items-center gap-2 px-4 py-2.5 rounded-xl bg-emerald-600 text-white hover:bg-emerald-700 font-medium text-sm transition-colors shadow-xs"
@@ -781,6 +941,16 @@ export const CustomerReceiptsPage: React.FC = () => {
                             <Eye className="w-4 h-4" />
                           </button>
 
+                          {v.status !== 'CANCELLED' && (
+                            <button
+                              onClick={() => handleOpenEdit(v)}
+                              title="Edit Receipt Voucher"
+                              className="p-1.5 rounded-lg text-slate-400 hover:text-blue-600 hover:bg-blue-50 transition-colors"
+                            >
+                              <Edit2 className="w-4 h-4" />
+                            </button>
+                          )}
+
                           {v.status === 'DRAFT' && (
                             <button
                               onClick={() => handlePostVoucher(v.id)}
@@ -798,11 +968,19 @@ export const CustomerReceiptsPage: React.FC = () => {
                                 setCancelReason('');
                               }}
                               title="Cancel & Reverse Ledger"
-                              className="p-1.5 rounded-lg text-slate-400 hover:text-rose-600 hover:bg-rose-50 transition-colors"
+                              className="p-1.5 rounded-lg text-slate-400 hover:text-amber-600 hover:bg-amber-50 transition-colors"
                             >
                               <RotateCcw className="w-4 h-4" />
                             </button>
                           )}
+
+                          <button
+                            onClick={() => setDeleteModalVoucher(v)}
+                            title="Delete Receipt Voucher"
+                            className="p-1.5 rounded-lg text-slate-400 hover:text-rose-600 hover:bg-rose-50 transition-colors"
+                          >
+                            <Trash2 className="w-4 h-4" />
+                          </button>
                         </div>
                       </td>
                     </tr>
@@ -824,12 +1002,19 @@ export const CustomerReceiptsPage: React.FC = () => {
                   <ArrowDownLeft className="w-5 h-5" />
                 </div>
                 <div>
-                  <h3 className="text-base font-bold text-slate-900">New Customer Receipt</h3>
-                  <p className="text-xs text-slate-500">Record inbound payment & settle customer invoices</p>
+                  <h3 className="text-base font-bold text-slate-900">
+                    {editingVoucherId ? `Edit Customer Receipt (${editingVoucherNumber})` : 'New Customer Receipt'}
+                  </h3>
+                  <p className="text-xs text-slate-500">
+                    {editingVoucherId ? 'Update payment amount, payment mode, allocations, and customer ledger entries' : 'Record inbound payment & settle customer invoices'}
+                  </p>
                 </div>
               </div>
               <button
-                onClick={() => setShowCreateModal(false)}
+                onClick={() => {
+                  setShowCreateModal(false);
+                  resetForm();
+                }}
                 className="text-slate-400 hover:text-slate-600 p-1.5 rounded-lg hover:bg-slate-100"
               >
                 <XCircle className="w-5 h-5" />
@@ -837,7 +1022,7 @@ export const CustomerReceiptsPage: React.FC = () => {
             </div>
 
             <div className="flex-1 min-h-0 flex flex-col lg:flex-row overflow-hidden">
-              <form onSubmit={handleCreateReceipt} className="flex-1 min-w-0 p-6 space-y-6 overflow-y-auto">
+              <form onSubmit={handleSaveReceipt} className="flex-1 min-w-0 p-6 space-y-6 overflow-y-auto">
                 {formError && (
                   <div className="p-3.5 rounded-xl bg-rose-50 border border-rose-200 text-rose-700 text-sm flex items-center gap-2">
                     <AlertCircle className="w-4 h-4 shrink-0" />
@@ -867,10 +1052,18 @@ export const CustomerReceiptsPage: React.FC = () => {
                           </div>
                         </div>
                         <div className="flex items-center gap-1.5 shrink-0">
-                          {Number(selectedCustomer.balance ?? selectedCustomer.currentBalance ?? 0) !== 0 && (
-                            <span className="px-1.5 py-0.5 rounded text-[10px] font-mono font-bold bg-white text-emerald-800 border border-emerald-200">
-                              ₹{Math.abs(Number(selectedCustomer.balance ?? selectedCustomer.currentBalance ?? 0)).toLocaleString('en-IN', { minimumFractionDigits: 2 })}{' '}
+                          {Number(selectedCustomer.balance ?? selectedCustomer.currentBalance ?? 0) !== 0 ? (
+                            <span className={`px-2 py-0.5 rounded text-[11px] font-mono font-bold border ${
+                              Number(selectedCustomer.balance ?? selectedCustomer.currentBalance ?? 0) > 0
+                                ? 'bg-white text-emerald-800 border-emerald-300'
+                                : 'bg-blue-50 text-blue-800 border-blue-200'
+                            }`}>
+                              Bal: ₹{Math.abs(Number(selectedCustomer.balance ?? selectedCustomer.currentBalance ?? 0)).toLocaleString('en-IN', { minimumFractionDigits: 2 })}{' '}
                               {Number(selectedCustomer.balance ?? selectedCustomer.currentBalance ?? 0) < 0 ? 'Cr' : 'Dr'}
+                            </span>
+                          ) : (
+                            <span className="px-2 py-0.5 rounded text-[11px] font-mono font-semibold bg-white text-slate-600 border border-slate-200">
+                              Bal: ₹0.00
                             </span>
                           )}
                           <button
@@ -1141,7 +1334,10 @@ export const CustomerReceiptsPage: React.FC = () => {
               <div className="flex items-center justify-end gap-3 pt-4 border-t border-slate-100">
                 <button
                   type="button"
-                  onClick={() => setShowCreateModal(false)}
+                  onClick={() => {
+                    setShowCreateModal(false);
+                    resetForm();
+                  }}
                   className="px-4 py-2 text-sm font-medium text-slate-600 hover:text-slate-800 hover:bg-slate-100 rounded-xl transition-colors"
                 >
                   Cancel
@@ -1151,7 +1347,7 @@ export const CustomerReceiptsPage: React.FC = () => {
                   disabled={submitting}
                   className="px-5 py-2 text-sm font-semibold text-white bg-emerald-600 hover:bg-emerald-700 rounded-xl transition-colors disabled:opacity-50 shadow-xs"
                 >
-                  {submitting ? 'Saving...' : 'Save & Post Receipt'}
+                  {submitting ? 'Saving...' : (editingVoucherId ? 'Update Receipt' : 'Save & Post Receipt')}
                 </button>
               </div>
             </form>
@@ -1307,6 +1503,20 @@ export const CustomerReceiptsPage: React.FC = () => {
                 </button>
 
                 <div className="flex items-center gap-2">
+                  {viewVoucher.status !== 'CANCELLED' && (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        const targetVoucher = viewVoucher;
+                        setViewVoucher(null);
+                        handleOpenEdit(targetVoucher);
+                      }}
+                      className="flex items-center gap-1 px-3 py-2 text-xs font-semibold text-blue-600 hover:bg-blue-50 rounded-xl transition-colors border border-blue-200"
+                    >
+                      <Edit2 className="w-3.5 h-3.5" />
+                      Edit Voucher
+                    </button>
+                  )}
                   {viewVoucher.status === 'DRAFT' && (
                     <button
                       type="button"
@@ -1323,12 +1533,23 @@ export const CustomerReceiptsPage: React.FC = () => {
                         setCancelModalVoucher(viewVoucher);
                         setCancelReason('');
                       }}
-                      className="flex items-center gap-1 px-3 py-2 text-xs font-semibold text-rose-600 hover:bg-rose-50 rounded-xl transition-colors border border-rose-200"
+                      className="flex items-center gap-1 px-3 py-2 text-xs font-semibold text-amber-600 hover:bg-amber-50 rounded-xl transition-colors border border-amber-200"
                     >
                       <RotateCcw className="w-3.5 h-3.5" />
                       Cancel Voucher
                     </button>
                   )}
+                  <button
+                    type="button"
+                    onClick={() => {
+                      const targetVoucher = viewVoucher;
+                      setDeleteModalVoucher(targetVoucher);
+                    }}
+                    className="flex items-center gap-1 px-3 py-2 text-xs font-semibold text-rose-600 hover:bg-rose-50 rounded-xl transition-colors border border-rose-200"
+                  >
+                    <Trash2 className="w-3.5 h-3.5" />
+                    Delete
+                  </button>
                   <button
                     type="button"
                     onClick={() => setViewVoucher(null)}
@@ -1387,6 +1608,72 @@ export const CustomerReceiptsPage: React.FC = () => {
                 className="px-4 py-2 text-xs font-semibold text-white bg-rose-600 hover:bg-rose-700 rounded-xl transition-colors disabled:opacity-50"
               >
                 {cancelling ? 'Cancelling...' : 'Confirm Reversal'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* DELETE CONFIRMATION MODAL */}
+      {deleteModalVoucher && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-xs">
+          <div className="bg-white rounded-2xl max-w-md w-full border border-slate-200 shadow-2xl p-6 space-y-4">
+            <div className="flex items-center gap-3">
+              <div className="p-2.5 rounded-xl bg-rose-50 text-rose-600 border border-rose-100">
+                <Trash2 className="w-5 h-5" />
+              </div>
+              <div>
+                <h3 className="text-base font-bold text-slate-900">Delete Receipt Voucher</h3>
+                <p className="text-xs text-slate-500">
+                  Permanently remove voucher #{deleteModalVoucher.paymentNumber}
+                </p>
+              </div>
+            </div>
+
+            <div className="p-3.5 rounded-xl bg-slate-50 border border-slate-200 text-xs space-y-1.5">
+              <div className="flex justify-between">
+                <span className="text-slate-500">Customer:</span>
+                <span className="font-semibold text-slate-900">{deleteModalVoucher.partyName || 'Customer'}</span>
+              </div>
+              <div className="flex justify-between">
+                <span className="text-slate-500">Receipt Amount:</span>
+                <span className="font-bold text-emerald-600">
+                  ₹{parseFloat(String(deleteModalVoucher.amount)).toLocaleString('en-IN', { minimumFractionDigits: 2 })}
+                </span>
+              </div>
+              <div className="flex justify-between">
+                <span className="text-slate-500">Current Status:</span>
+                <span className="font-semibold text-slate-700">{deleteModalVoucher.status}</span>
+              </div>
+            </div>
+
+            <div className="p-3 rounded-xl bg-rose-50 border border-rose-100 text-xs text-rose-700 leading-relaxed">
+              {deleteModalVoucher.status === 'POSTED' ? (
+                <>
+                  <span className="font-bold">Warning:</span> Deleting this posted voucher will permanently purge it, reverse the credit from the customer ledger balance, and restore outstanding balances on any allocated sales invoices.
+                </>
+              ) : (
+                <>
+                  <span className="font-bold">Notice:</span> Are you sure you want to delete this voucher? This action is permanent and cannot be undone.
+                </>
+              )}
+            </div>
+
+            <div className="flex items-center justify-end gap-2.5 pt-2">
+              <button
+                type="button"
+                onClick={() => setDeleteModalVoucher(null)}
+                className="px-4 py-2 text-xs font-medium text-slate-600 hover:bg-slate-100 rounded-xl"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                disabled={deleting}
+                onClick={handleConfirmDelete}
+                className="px-4 py-2 text-xs font-semibold text-white bg-rose-600 hover:bg-rose-700 rounded-xl transition-colors disabled:opacity-50"
+              >
+                {deleting ? 'Deleting...' : 'Confirm Delete'}
               </button>
             </div>
           </div>

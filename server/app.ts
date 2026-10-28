@@ -65,6 +65,7 @@ export function createExpressApp() {
   app.use('/api/payments', paymentRoutes);
   app.use('/api/imports', importExportRoutes);
   app.use('/api/exports', importExportRoutes);
+  app.use('/api/export', importExportRoutes);
   app.use('/api/search', searchRoutes);
   app.use('/api/reports', reportRoutes);
   app.use('/api/stock-items', stockItemLedgerRoutes);

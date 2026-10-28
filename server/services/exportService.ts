@@ -1,6 +1,7 @@
 import * as XLSX from 'xlsx';
 import { pool } from '../db/index.js';
 import { BusinessSettingsService } from './businessSettingsService.js';
+import { formatOpticalBatchName } from '../utils/searchNormalization.js';
 
 export type ExportDatasetType =
   | 'PARTIES'
@@ -224,34 +225,103 @@ export class ExportService {
     return res.rows;
   }
 
-  private static async queryBatches(businessId: string, _filters: ExportFilterOptions): Promise<any[]> {
-    const sql = `
+  private static async queryBatches(businessId: string, filters: ExportFilterOptions = {}): Promise<any[]> {
+    let sql = `
       SELECT
-        b.barcode AS "Barcode",
-        u.name AS "Item Name",
-        u.code AS "SKU",
-        c.name AS "Category",
-        p.name AS "Primary Item / Brand",
-        b.sph AS "SPH",
-        b.cyl AS "CYL",
-        b.axis AS "AXIS",
-        b.add AS "ADD",
-        b.side AS "SIDE",
-        COALESCE(s.physical_stock, 0) AS "Physical Stock",
-        COALESCE(s.reserved_stock, 0) AS "Reserved Stock",
-        COALESCE(s.available_stock, 0) AS "Available Stock",
-        u.mrp AS "MRP",
-        b.status AS "Status"
+        b.id AS batch_id,
+        b.barcode,
+        u.name AS item_name,
+        u.code AS sku,
+        c.name AS category_name,
+        c.code AS category_code,
+        p.name AS brand_name,
+        b.sph,
+        b.cyl,
+        b.axis,
+        b.add,
+        b.side,
+        COALESCE(
+          s.physical_stock,
+          (
+            SELECT SUM(sl.quantity_in - sl.quantity_out)
+            FROM stock_ledger sl
+            WHERE sl.batch_id = b.id AND sl.business_id = b.business_id
+          ),
+          0
+        )::numeric AS physical_stock,
+        COALESCE(s.reserved_stock, 0)::numeric AS reserved_stock,
+        COALESCE(s.available_stock, 0)::numeric AS available_stock,
+        u.mrp,
+        b.status
       FROM optical_batches b
       JOIN categories c ON b.category_id = c.id
       JOIN unique_items u ON b.unique_item_id = u.id
       JOIN primary_items p ON u.primary_item_id = p.id
       LEFT JOIN optical_stocks s ON (s.batch_id = b.id AND s.business_id = b.business_id)
       WHERE b.business_id = $1
-      ORDER BY b.barcode ASC
     `;
-    const res = await pool.query(sql, [businessId]);
-    return res.rows;
+    const params: any[] = [businessId];
+    let idx = 2;
+
+    if (filters.categoryId) {
+      sql += ` AND b.category_id = $${idx++}`;
+      params.push(filters.categoryId);
+    }
+    if (filters.uniqueItemId) {
+      sql += ` AND b.unique_item_id = $${idx++}`;
+      params.push(filters.uniqueItemId);
+    }
+    if (filters.status && filters.status !== 'ALL') {
+      sql += ` AND b.status = $${idx++}`;
+      params.push(filters.status);
+    }
+
+    sql += ` ORDER BY u.name ASC, b.sph ASC, b.cyl ASC, b.barcode ASC`;
+    const res = await pool.query(sql, params);
+
+    return res.rows.map(r => {
+      const formattedName = formatOpticalBatchName({
+        sph: r.sph,
+        cyl: r.cyl,
+        axis: r.axis,
+        add: r.add,
+        side: r.side,
+        categoryCode: r.category_code,
+      });
+
+      const currentStock = Number(r.physical_stock != null ? r.physical_stock : 0);
+      const reservedStock = Number(r.reserved_stock != null ? r.reserved_stock : 0);
+      const availableStock = Number(r.available_stock != null ? r.available_stock : 0);
+      const sph = Number(r.sph != null ? r.sph : 0);
+      const cyl = Number(r.cyl != null ? r.cyl : 0);
+      const axis = Number(r.axis != null ? r.axis : 0);
+      const add = Number(r.add != null ? r.add : 0);
+      const mrp = Number(r.mrp != null ? r.mrp : 0);
+      const side = r.side && r.side !== 'NONE' ? r.side : '';
+
+      return {
+        'Item Name': r.item_name,
+        'Batch Name': formattedName,
+        'SPH': sph,
+        'CYL': cyl,
+        'AXIS': axis,
+        'Addition': add > 0 ? add : '',
+        'Side': side,
+        'Current Stock': currentStock,
+        'Quantity': currentStock,
+        'Barcode': r.barcode,
+        'SKU': r.sku,
+        'Category': r.category_name,
+        'Primary Item / Brand': r.brand_name,
+        'ADD': add,
+        'SIDE': r.side || 'NONE',
+        'Physical Stock': currentStock,
+        'Reserved Stock': reservedStock,
+        'Available Stock': availableStock,
+        'MRP': mrp,
+        'Status': r.status,
+      };
+    });
   }
 
   private static async queryInventory(businessId: string, filters: ExportFilterOptions): Promise<any[]> {
@@ -270,9 +340,10 @@ export class ExportService {
         b.axis AS "AXIS",
         b.add AS "ADD",
         b.side AS "SIDE",
-        COALESCE(s.physical_stock, 0) AS "Physical Stock",
-        COALESCE(s.reserved_stock, 0) AS "Reserved Stock",
-        COALESCE(s.available_stock, 0) AS "Available Stock",
+        COALESCE(s.physical_stock, 0)::numeric AS "Quantity",
+        COALESCE(s.physical_stock, 0)::numeric AS "Physical Stock",
+        COALESCE(s.reserved_stock, 0)::numeric AS "Reserved Stock",
+        COALESCE(s.available_stock, 0)::numeric AS "Available Stock",
         u.mrp AS "MRP",
         CASE
           WHEN COALESCE(s.physical_stock, 0) < 0 THEN 'NEGATIVE_STOCK'

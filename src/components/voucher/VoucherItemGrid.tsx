@@ -125,8 +125,9 @@ export const VoucherItemGrid: React.FC<VoucherItemGridProps> = ({
       .filter(l => l.maintainBatches !== false && l.batches && l.batches.length > 0)
       .every(l => expandedRows[l.id]);
 
-  // Programmatic keyboard navigation
+  // Programmatic keyboard navigation & scroll container ref
   const inputRefs = useRef<{ [key: string]: HTMLElement | null }>({});
+  const tableContainerRef = useRef<HTMLDivElement>(null);
 
   const setRef = (row: number, col: string, el: HTMLElement | null) => {
     inputRefs.current[`${row}-${col}`] = el;
@@ -141,9 +142,30 @@ export const VoucherItemGrid: React.FC<VoucherItemGridProps> = ({
         if ('select' in el && typeof (el as any).select === 'function') {
           (el as any).select();
         }
+        try {
+          el.scrollIntoView({ block: 'nearest', inline: 'nearest', behavior: 'smooth' });
+        } catch {
+          el.scrollIntoView();
+        }
       }
     }, 40);
   };
+
+  // Auto-scroll to bottom of grid when a new line is added
+  const prevLinesCount = useRef(lines.length);
+  useEffect(() => {
+    if (lines.length > prevLinesCount.current) {
+      setTimeout(() => {
+        if (tableContainerRef.current) {
+          tableContainerRef.current.scrollTo({
+            top: tableContainerRef.current.scrollHeight,
+            behavior: 'smooth',
+          });
+        }
+      }, 50);
+    }
+    prevLinesCount.current = lines.length;
+  }, [lines.length]);
 
   useEffect(() => {
     if (focusRequest) {
@@ -184,10 +206,15 @@ export const VoucherItemGrid: React.FC<VoucherItemGridProps> = ({
   return (
     <div
       id="tally-item-grid-container"
-      className="flex-1 flex flex-col min-h-0 bg-white border border-slate-300 rounded-xs overflow-hidden shadow-2xs select-none"
+      className="flex-1 flex flex-col min-h-0 max-h-full bg-white border border-slate-300 rounded-xs overflow-hidden shadow-2xs select-none"
     >
-      {/* Table header & scrollable rows */}
-      <div className="overflow-x-auto overflow-y-auto flex-1 custom-scrollbar">
+      {/* Table header & scrollable rows (Bounded Scroll Window) */}
+      <div
+        ref={tableContainerRef}
+        tabIndex={0}
+        aria-label="Voucher line items scrollable table"
+        className="overflow-x-auto overflow-y-auto flex-1 min-h-0 max-h-full custom-scrollbar overscroll-contain focus:outline-none"
+      >
         <table className="w-full border-collapse text-xs select-none">
           <thead className="bg-[#1e3a5f] text-white font-extrabold border-b border-slate-400 sticky top-0 z-20 font-sans tracking-wide uppercase text-[11px] shadow-xs">
             <tr className="divide-x divide-blue-900/60">
@@ -643,6 +670,35 @@ export const VoucherItemGrid: React.FC<VoucherItemGridProps> = ({
         </div>
 
         <div className="text-[11px] text-slate-700 font-sans flex items-center gap-3">
+          {lines.length > 3 && (
+            <div className="flex items-center gap-1 font-mono">
+              <button
+                type="button"
+                onClick={() => {
+                  tableContainerRef.current?.scrollTo({ top: 0, behavior: 'smooth' });
+                }}
+                className="px-1.5 py-0.5 rounded bg-white hover:bg-slate-200 text-slate-700 border border-slate-300 text-[10px] font-bold cursor-pointer transition-colors"
+                title="Scroll to first row"
+              >
+                Top ↑
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  if (tableContainerRef.current) {
+                    tableContainerRef.current.scrollTo({
+                      top: tableContainerRef.current.scrollHeight,
+                      behavior: 'smooth',
+                    });
+                  }
+                }}
+                className="px-1.5 py-0.5 rounded bg-white hover:bg-slate-200 text-slate-700 border border-slate-300 text-[10px] font-bold cursor-pointer transition-colors"
+                title="Scroll to last row"
+              >
+                Bottom ↓
+              </button>
+            </div>
+          )}
           <span>
             Total Voucher Lines: <strong className="text-slate-950 font-black font-mono text-xs">{lines.length}</strong>
           </span>

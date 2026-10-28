@@ -129,13 +129,14 @@ export const SupplierPaymentsPage: React.FC = () => {
 
     return filtered.map(s => {
       const bal = Number(s.balance ?? s.currentBalance ?? 0);
+      const formattedBal = s.balanceFormatted || (bal !== 0 ? `₹${Math.abs(bal).toLocaleString('en-IN', { minimumFractionDigits: 2 })} ${bal < 0 ? 'Dr' : 'Cr'}` : '₹0.00');
       return {
         id: s.id,
         title: s.name,
         subtitle: `${s.city || ''} ${s.state ? `• ${s.state}` : ''} ${s.phone ? `• ${s.phone}` : ''}`.trim() || undefined,
         badge: s.partyType === 'SUPPLIER' ? 'Sundry Creditors' : s.partyType || 'Supplier',
         badgeColor: 'blue' as const,
-        rightText: bal !== 0 ? `₹${Math.abs(bal).toLocaleString('en-IN', { minimumFractionDigits: 2 })} ${bal < 0 ? 'Cr' : 'Dr'}` : '₹0.00',
+        rightText: formattedBal,
         rightSubText: s.gstin ? `GST: ${s.gstin}` : undefined,
         meta: s,
       };
@@ -237,7 +238,7 @@ export const SupplierPaymentsPage: React.FC = () => {
   const fetchSuppliers = async () => {
     if (!currentBusiness) return;
     try {
-      const res = await fetch('/api/parties', {
+      const res = await fetch('/api/parties?partyType=SUPPLIER&limit=500', {
         headers: {
           Authorization: `Bearer ${getStoredToken()}`,
           'X-Business-Id': currentBusiness.id,
@@ -263,7 +264,7 @@ export const SupplierPaymentsPage: React.FC = () => {
     fetchSuppliers();
   }, [currentBusiness]);
 
-  // When supplier changes in create modal, load their unpaid purchase invoices
+  // When supplier changes in create modal, load their unpaid purchase invoices and refresh live balance
   useEffect(() => {
     if (!partyId || !currentBusiness) {
       setUnpaidInvoices([]);
@@ -274,16 +275,43 @@ export const SupplierPaymentsPage: React.FC = () => {
     const loadUnpaid = async () => {
       try {
         setLoadingInvoices(true);
-        const res = await fetch(`/api/payments/unpaid-invoices/${partyId}?paymentType=PAYMENT`, {
-          headers: {
-            Authorization: `Bearer ${getStoredToken()}`,
-            'X-Business-Id': currentBusiness.id,
-          },
-        });
-        if (res.ok) {
-          const data = await res.json();
+        const [invRes, ledgerRes] = await Promise.all([
+          fetch(`/api/payments/unpaid-invoices/${partyId}?paymentType=PAYMENT`, {
+            headers: {
+              Authorization: `Bearer ${getStoredToken()}`,
+              'X-Business-Id': currentBusiness.id,
+            },
+          }),
+          fetch(`/api/parties/${partyId}/ledger?ledgerType=SUPPLIER`, {
+            headers: {
+              Authorization: `Bearer ${getStoredToken()}`,
+              'X-Business-Id': currentBusiness.id,
+            },
+          }).catch(() => null),
+        ]);
+
+        if (invRes.ok) {
+          const data = await invRes.json();
           setUnpaidInvoices(data.unpaidInvoices || []);
           setAllocationsMap({});
+        }
+
+        if (ledgerRes && ledgerRes.ok) {
+          const lData = await ledgerRes.json();
+          const rawBal = lData?.summary?.closingBalanceRaw !== undefined
+            ? Number(lData.summary.closingBalanceRaw)
+            : (lData?.summary?.closingBalance !== undefined ? Number(lData.summary.closingBalance) : null);
+
+          if (rawBal !== null && !isNaN(rawBal)) {
+            const drCr = lData.summary.closingBalanceDrCr || (rawBal >= 0 ? 'Cr' : 'Dr');
+            setSuppliers(prev => prev.map(s => s.id === partyId ? {
+              ...s,
+              balance: rawBal,
+              currentBalance: rawBal,
+              balanceDrCr: drCr,
+              balanceFormatted: lData.summary.closingBalanceFormatted || `₹${Math.abs(rawBal).toLocaleString('en-IN', { minimumFractionDigits: 2 })} ${drCr}`,
+            } : s));
+          }
         }
       } catch (err) {
         console.error(err);

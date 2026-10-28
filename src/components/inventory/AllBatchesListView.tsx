@@ -1,9 +1,11 @@
 import React, { useState, useEffect, useMemo, useCallback } from 'react';
 import { 
   Barcode, Search, RefreshCw, Trash2, AlertTriangle, Filter, 
-  Eye, Check, Copy, BookOpen, Layers, Edit3, CheckCircle2, ChevronLeft, ChevronRight, Download, ShieldAlert
+  Eye, Check, Copy, BookOpen, Layers, Edit3, CheckCircle2, ChevronLeft, ChevronRight, Download, ShieldAlert,
+  FileSpreadsheet
 } from 'lucide-react';
-import { apiRequest } from '../../api/client.js';
+import * as XLSX from 'xlsx';
+import { apiRequest, getStoredToken, getStoredBusinessId } from '../../api/client.js';
 import { OpticalBatch, Category } from '../../types/index.js';
 import { useAuth } from '../../context/AuthContext.js';
 import { formatQuantity } from '../../utils/numberFormatting.js';
@@ -305,32 +307,123 @@ export const AllBatchesListView: React.FC<AllBatchesListViewProps> = ({
     return batches.filter(b => selectedBatchIds.has(b.id));
   }, [batches, selectedBatchIds]);
 
+  const [exportingExcel, setExportingExcel] = useState<boolean>(false);
+
   const handleExportCSV = () => {
-    const headers = ['Barcode', 'Power', 'Stock Item', 'Category', 'SPH', 'CYL', 'AXIS', 'ADD', 'SIDE', 'Physical Stock', 'Reserved', 'Available', 'Status'];
-    const rows = filteredBatches.map(b => [
-      b.barcode,
-      b.formattedName || '',
-      b.uniqueItemName || '',
-      b.categoryName || '',
-      b.sph,
-      b.cyl,
-      b.axis || 0,
-      b.add || 0,
-      b.side || 'NONE',
-      b.physicalStock || 0,
-      b.reservedStock || 0,
-      b.availableStock || 0,
-      b.status,
-    ]);
+    const headers = ['item name', 'batch name', 'sph', 'cyl', 'axis', 'addition', 'side', 'current stock'];
+    const rows = filteredBatches.map(b => {
+      const sphNum = Number(b.sph || 0);
+      const cylNum = Number(b.cyl || 0);
+      const axisNum = Number(b.axis || 0);
+      const addNum = Number(b.add || 0);
+      const sideVal = b.side && b.side !== 'NONE' ? b.side : '';
+      const currentStock = b.physicalStock !== null && b.physicalStock !== undefined ? Number(b.physicalStock) : 0;
+
+      const sphStr = sphNum > 0 ? `+${sphNum.toFixed(2)}` : sphNum.toFixed(2);
+      const cylStr = cylNum > 0 ? `+${cylNum.toFixed(2)}` : cylNum.toFixed(2);
+      const axisStr = cylNum !== 0 && axisNum > 0 ? String(Math.round(axisNum)) : '0';
+      const addStr = addNum > 0 ? `+${addNum.toFixed(2)}` : '';
+
+      return [
+        b.uniqueItemName || '',
+        b.formattedName || '',
+        sphStr,
+        cylStr,
+        axisStr,
+        addStr,
+        sideVal,
+        currentStock,
+      ];
+    });
 
     const csvContent = 'data:text/csv;charset=utf-8,' + [headers.join(','), ...rows.map(r => r.map(c => `"${c}"`).join(','))].join('\n');
     const encodedUri = encodeURI(csvContent);
     const link = document.createElement('a');
     link.setAttribute('href', encodedUri);
-    link.setAttribute('download', `Optical_Batches_Register_${new Date().toISOString().slice(0, 10)}.csv`);
+    link.setAttribute('download', `Optical_Batches_Stock_${new Date().toISOString().slice(0, 10)}.csv`);
     document.body.appendChild(link);
     link.click();
     document.body.removeChild(link);
+  };
+
+  const handleExportExcel = async () => {
+    try {
+      setExportingExcel(true);
+      const token = getStoredToken();
+      const bizId = getStoredBusinessId();
+
+      let exportedBlob: Blob | null = null;
+      try {
+        const res = await fetch('/api/exports/OPTICAL_BATCHES', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            ...(token ? { Authorization: `Bearer ${token}` } : {}),
+            ...(bizId ? { 'x-business-id': bizId } : {}),
+          },
+          body: JSON.stringify({
+            categoryId: selectedCategory || undefined,
+            status: statusFilter !== 'ALL' ? statusFilter : undefined,
+          }),
+        });
+
+        if (res.ok) {
+          exportedBlob = await res.blob();
+        }
+      } catch (netErr) {
+        console.warn('Backend excel export failed, falling back to client-side XLSX generation:', netErr);
+      }
+
+      if (!exportedBlob) {
+        // Direct Client-Side XLSX Generation Fallback using SheetJS
+        const wb = XLSX.utils.book_new();
+        const sheetRows = filteredBatches.map(b => {
+          const sphNum = Number(b.sph || 0);
+          const cylNum = Number(b.cyl || 0);
+          const axisNum = Number(b.axis || 0);
+          const addNum = Number(b.add || 0);
+          const sideVal = b.side && b.side !== 'NONE' ? b.side : '';
+          const currentStock = b.physicalStock !== null && b.physicalStock !== undefined ? Number(b.physicalStock) : 0;
+
+          return {
+            'item name': b.uniqueItemName || '',
+            'batch name': b.formattedName || '',
+            'sph': sphNum,
+            'cyl': cylNum,
+            'axis': axisNum,
+            'addition': addNum > 0 ? addNum : '',
+            'side': sideVal,
+            'current stock': currentStock,
+            'Quantity': currentStock,
+            'Barcode': b.barcode || '',
+          };
+        });
+
+        const ws = XLSX.utils.json_to_sheet(sheetRows.length > 0 ? sheetRows : [{ 'item name': 'No batches' }]);
+        ws['!cols'] = [
+          { wch: 25 }, { wch: 22 }, { wch: 10 }, { wch: 10 }, { wch: 10 },
+          { wch: 12 }, { wch: 10 }, { wch: 16 }, { wch: 14 }, { wch: 20 }
+        ];
+        XLSX.utils.book_append_sheet(wb, ws, 'Batches');
+        const excelBuffer = XLSX.write(wb, { bookType: 'xlsx', type: 'array' });
+        exportedBlob = new Blob([excelBuffer], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' });
+      }
+
+      const url = window.URL.createObjectURL(exportedBlob);
+      const link = document.createElement('a');
+      link.href = url;
+      link.setAttribute('download', `Optical_Batches_${new Date().toISOString().slice(0, 10)}.xlsx`);
+      document.body.appendChild(link);
+      link.click();
+      window.URL.revokeObjectURL(url);
+      document.body.removeChild(link);
+      setFeedback({ type: 'success', text: `Successfully exported ${filteredBatches.length} batch records to Excel.` });
+    } catch (err: any) {
+      console.error('Excel export failed:', err);
+      setFeedback({ type: 'error', text: err.message || 'Failed to export Excel workbook.' });
+    } finally {
+      setExportingExcel(false);
+    }
   };
 
   return (
@@ -454,8 +547,19 @@ export const AllBatchesListView: React.FC<AllBatchesListViewProps> = ({
           </button>
 
           <button
+            onClick={handleExportExcel}
+            disabled={exportingExcel}
+            className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold text-emerald-700 bg-emerald-50 hover:bg-emerald-100 rounded-lg transition-colors cursor-pointer border border-emerald-200 disabled:opacity-50"
+            title="Export Optical Batches as Excel workbook (.xlsx)"
+          >
+            <FileSpreadsheet className={`h-3.5 w-3.5 text-emerald-600 ${exportingExcel ? 'animate-spin' : ''}`} />
+            <span>{exportingExcel ? 'Exporting...' : 'Export Excel'}</span>
+          </button>
+
+          <button
             onClick={handleExportCSV}
             className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold text-slate-700 bg-slate-100 hover:bg-slate-200 rounded-lg transition-colors cursor-pointer border border-slate-200"
+            title="Export batchwise current stock details to CSV (item name, batch name, sph, cyl, axis, addition, side, current stock)"
           >
             <Download className="h-3.5 w-3.5" />
             <span>Export CSV</span>

@@ -488,11 +488,19 @@ router.get(
  * POST /api/exports/:type
  */
 router.post(
-  '/export/:type',
+  ['/:type', '/export/:type'],
   authenticateToken,
   async (req: Request, res: Response) => {
     try {
-      const businessId = req.user?.currentBusinessId || (req.headers['x-business-id'] as string);
+      let businessId = req.user?.currentBusinessId || (req.headers['x-business-id'] as string);
+      if (!businessId && req.user?.id) {
+        const uRes = await pool.query(`SELECT default_business_id FROM users WHERE id = $1`, [req.user.id]);
+        businessId = uRes.rows[0]?.default_business_id;
+      }
+      if (!businessId) {
+        const bizRes = await pool.query(`SELECT id FROM businesses WHERE status = 'ACTIVE' LIMIT 1`);
+        businessId = bizRes.rows[0]?.id;
+      }
       if (!businessId) return res.status(400).json({ error: 'Business context required.' });
 
       const datasetType = (req.params.type || '').toUpperCase() as ExportDatasetType;
@@ -502,6 +510,42 @@ router.post(
         businessId,
         datasetType,
         filters
+      );
+
+      res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+      res.setHeader('Content-Disposition', `attachment; filename="${fileName}"`);
+      res.setHeader('X-Total-Rows', String(rowCount));
+      return res.send(buffer);
+    } catch (err: any) {
+      console.error('[Export Error]', err);
+      return res.status(500).json({ error: err.message || 'Export failed' });
+    }
+  }
+);
+
+router.get(
+  ['/:type', '/export/:type'],
+  authenticateToken,
+  async (req: Request, res: Response) => {
+    try {
+      let businessId = req.user?.currentBusinessId || (req.headers['x-business-id'] as string);
+      if (!businessId && req.user?.id) {
+        const uRes = await pool.query(`SELECT default_business_id FROM users WHERE id = $1`, [req.user.id]);
+        businessId = uRes.rows[0]?.default_business_id;
+      }
+      if (!businessId) {
+        const bizRes = await pool.query(`SELECT id FROM businesses WHERE status = 'ACTIVE' LIMIT 1`);
+        businessId = bizRes.rows[0]?.id;
+      }
+      if (!businessId) return res.status(400).json({ error: 'Business context required.' });
+
+      const datasetType = (req.params.type || '').toUpperCase() as ExportDatasetType;
+      const filters = req.query || {};
+
+      const { fileName, buffer, rowCount } = await ExportService.exportDataset(
+        businessId,
+        datasetType,
+        filters as any
       );
 
       res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');

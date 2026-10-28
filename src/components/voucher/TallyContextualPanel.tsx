@@ -1,5 +1,18 @@
-import React, { useEffect, useRef } from 'react';
-import { Search, X, Plus, Layers, Users, Package, Eye, AlertCircle } from 'lucide-react';
+import React, { useEffect, useRef, useState, useCallback } from 'react';
+import {
+  Search,
+  X,
+  Plus,
+  Layers,
+  Users,
+  Package,
+  Eye,
+  AlertCircle,
+  ChevronUp,
+  ChevronDown,
+  ChevronsUp,
+  ChevronsDown,
+} from 'lucide-react';
 
 export interface ContextualPanelItem {
   id: string;
@@ -49,6 +62,21 @@ export const TallyContextualPanel: React.FC<TallyContextualPanelProps> = ({
   const searchInputRef = useRef<HTMLInputElement>(null);
   const listRef = useRef<HTMLDivElement>(null);
   const itemRefs = useRef<(HTMLButtonElement | null)[]>([]);
+  const [canScrollUp, setCanScrollUp] = useState(false);
+  const [canScrollDown, setCanScrollDown] = useState(false);
+
+  // Check scroll position to update indicators
+  const handleScroll = useCallback(() => {
+    if (listRef.current) {
+      const { scrollTop, scrollHeight, clientHeight } = listRef.current;
+      setCanScrollUp(scrollTop > 10);
+      setCanScrollDown(scrollTop + clientHeight < scrollHeight - 10);
+    }
+  }, []);
+
+  useEffect(() => {
+    handleScroll();
+  }, [items, handleScroll]);
 
   // Keep highlighted item visible inside scrolling container
   useEffect(() => {
@@ -58,7 +86,54 @@ export const TallyContextualPanel: React.FC<TallyContextualPanelProps> = ({
         behavior: 'smooth',
       });
     }
-  }, [selectedIndex]);
+    handleScroll();
+  }, [selectedIndex, handleScroll]);
+
+  const handleScrollUp = () => {
+    if (listRef.current) {
+      listRef.current.scrollBy({ top: -160, behavior: 'smooth' });
+    }
+  };
+
+  const handleScrollDown = () => {
+    if (listRef.current) {
+      listRef.current.scrollBy({ top: 160, behavior: 'smooth' });
+    }
+  };
+
+  const handleScrollToTop = () => {
+    if (listRef.current) {
+      listRef.current.scrollTo({ top: 0, behavior: 'smooth' });
+      onSelectIndex(0);
+    }
+  };
+
+  const handleScrollToBottom = () => {
+    if (listRef.current) {
+      listRef.current.scrollTo({ top: listRef.current.scrollHeight, behavior: 'smooth' });
+      if (items.length > 0) {
+        onSelectIndex(items.length - 1);
+      }
+    }
+  };
+
+  const handleKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
+    if (e.key === 'PageDown') {
+      e.preventDefault();
+      handleScrollDown();
+      onSelectIndex(Math.min(items.length - 1, selectedIndex + 5));
+    } else if (e.key === 'PageUp') {
+      e.preventDefault();
+      handleScrollUp();
+      onSelectIndex(Math.max(0, selectedIndex - 5));
+    } else if (e.key === 'Home' && (e.ctrlKey || e.metaKey)) {
+      e.preventDefault();
+      handleScrollToTop();
+    } else if (e.key === 'End' && (e.ctrlKey || e.metaKey)) {
+      e.preventDefault();
+      handleScrollToBottom();
+    }
+  };
 
   if (!isOpen || !type) return null;
 
@@ -76,7 +151,7 @@ export const TallyContextualPanel: React.FC<TallyContextualPanelProps> = ({
     <aside
       id="tally-contextual-panel"
       aria-label={title}
-      className="fixed inset-y-0 right-0 z-40 w-80 sm:w-88 md:w-96 lg:static lg:w-84 xl:w-96 shrink-0 bg-white border-l border-slate-300 shadow-xl lg:shadow-none flex flex-col h-full overflow-hidden select-none animate-in slide-in-from-right-3 duration-150"
+      className="fixed inset-y-0 right-0 z-40 w-80 sm:w-88 md:w-96 lg:static lg:w-84 xl:w-96 shrink-0 bg-white border-l border-slate-300 shadow-xl lg:shadow-none flex flex-col h-full min-h-0 overflow-hidden select-none animate-in slide-in-from-right-3 duration-150"
     >
       {/* 1. Panel Header Bar (Tally-Style Navy Header) */}
       <div className="bg-[#0f2e54] text-white px-3 py-2 flex items-center justify-between border-b border-blue-950 shrink-0">
@@ -123,7 +198,7 @@ export const TallyContextualPanel: React.FC<TallyContextualPanelProps> = ({
         </div>
       </div>
 
-      {/* 2. Fast Instant Search Input */}
+      {/* 2. Fast Instant Search Input & Scroll Controls */}
       <div className="p-2 bg-slate-100 border-b border-slate-300 shrink-0">
         <div className="relative">
           <Search className="w-3.5 h-3.5 text-slate-400 absolute left-2 top-2 pointer-events-none" />
@@ -132,6 +207,7 @@ export const TallyContextualPanel: React.FC<TallyContextualPanelProps> = ({
             type="text"
             value={searchQuery}
             onChange={e => onSearchChange(e.target.value)}
+            onKeyDown={handleKeyDown}
             placeholder={
               type === 'PARTY'
                 ? 'Search party name / phone...'
@@ -151,16 +227,39 @@ export const TallyContextualPanel: React.FC<TallyContextualPanelProps> = ({
             </button>
           )}
         </div>
-        <div className="flex items-center justify-between mt-1 text-[10px] text-slate-500 font-mono">
-          <span>{items.length} records found</span>
-          <span>[↑/↓] Navigate • [Enter] Select</span>
+        <div className="flex items-center justify-between mt-1 text-[10px] text-slate-600 font-mono">
+          <span className="font-bold">{items.length} records</span>
+          <div className="flex items-center gap-1 text-[10px]">
+            <span className="text-slate-400 mr-1 hidden sm:inline">[PgUp/Dn]</span>
+            <button
+              type="button"
+              onClick={handleScrollUp}
+              disabled={!canScrollUp}
+              className="p-0.5 rounded hover:bg-slate-200 text-slate-600 disabled:opacity-30 disabled:pointer-events-none cursor-pointer transition-colors"
+              title="Scroll Up (PageUp)"
+            >
+              <ChevronUp className="w-3.5 h-3.5" />
+            </button>
+            <button
+              type="button"
+              onClick={handleScrollDown}
+              disabled={!canScrollDown}
+              className="p-0.5 rounded hover:bg-slate-200 text-slate-600 disabled:opacity-30 disabled:pointer-events-none cursor-pointer transition-colors"
+              title="Scroll Down (PageDown)"
+            >
+              <ChevronDown className="w-3.5 h-3.5" />
+            </button>
+          </div>
         </div>
       </div>
 
-      {/* 3. Items List Container */}
+      {/* 3. Items List Container (Enhanced Scrollable Window) */}
       <div
         ref={listRef}
-        className="flex-1 overflow-y-auto divide-y divide-slate-100 custom-scrollbar bg-slate-50/50"
+        onScroll={handleScroll}
+        tabIndex={0}
+        aria-label="List of selectable accounts or items"
+        className="flex-1 min-h-0 overflow-y-auto divide-y divide-slate-100 custom-scrollbar overscroll-contain bg-slate-50/50 focus:outline-none"
       >
         {items.length > 0 ? (
           items.map((item, idx) => {
@@ -285,10 +384,27 @@ export const TallyContextualPanel: React.FC<TallyContextualPanelProps> = ({
         )}
       </div>
 
-      {/* 4. Panel Footer Status Bar */}
-      <div className="bg-slate-200 text-slate-700 px-3 py-1.5 border-t border-slate-300 text-[10px] font-mono flex items-center justify-between shrink-0">
-        <span className="font-bold text-slate-800">Tally Selection View</span>
-        <span className="text-slate-500">Esc to dismiss</span>
+      {/* 4. Panel Footer Status Bar with Quick Jump Controls */}
+      <div className="bg-slate-200 text-slate-700 px-2.5 py-1.5 border-t border-slate-300 text-[10px] font-mono flex items-center justify-between shrink-0">
+        <div className="flex items-center gap-1.5">
+          <button
+            type="button"
+            onClick={handleScrollToTop}
+            className="px-1.5 py-0.5 rounded bg-white/70 hover:bg-white text-slate-800 border border-slate-300 font-bold hover:text-blue-700 transition-colors cursor-pointer"
+            title="Scroll to Top (Ctrl+Home)"
+          >
+            Top ↑
+          </button>
+          <button
+            type="button"
+            onClick={handleScrollToBottom}
+            className="px-1.5 py-0.5 rounded bg-white/70 hover:bg-white text-slate-800 border border-slate-300 font-bold hover:text-blue-700 transition-colors cursor-pointer"
+            title="Scroll to Bottom (Ctrl+End)"
+          >
+            Bottom ↓
+          </button>
+        </div>
+        <span className="text-slate-600 font-bold">Esc to close</span>
       </div>
     </aside>
   );

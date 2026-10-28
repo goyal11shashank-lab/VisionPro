@@ -9,6 +9,7 @@ import { UniqueItem, OpticalBatch } from '../../types/index.js';
 import { apiRequest } from '../../api/client.js';
 import { formatQuantity } from '../../utils/numberFormatting.js';
 import { useAuth } from '../../context/AuthContext.js';
+import { downloadBatchwiseStockCSV } from '../../utils/opticalBatchCsvExport.js';
 
 interface StockItemBatchesViewProps {
   stockItem: UniqueItem;
@@ -412,31 +413,38 @@ export const StockItemBatchesView: React.FC<StockItemBatchesViewProps> = ({
   };
 
   const handleExportCSV = () => {
-    const headers = ['Batch Name', 'Barcode', 'SPH', 'CYL'];
-    if (showAxis) headers.push('AXIS');
-    if (showAdd) headers.push('ADD');
-    if (showSide) headers.push('SIDE');
-    headers.push('Stock', 'Reserved', 'Available', 'Status');
+    const headers = ['item name', 'batch name', 'sph', 'cyl', 'axis', 'addition', 'side', 'current stock'];
 
     const rows = batches.map(b => {
-      const row = [
+      const sphNum = Number(b.sph || 0);
+      const cylNum = Number(b.cyl || 0);
+      const axisNum = Number(b.axis || 0);
+      const addNum = Number(b.add || 0);
+      const sideVal = b.side && b.side !== 'NONE' ? b.side : '';
+      const currentStock = b.stock !== null && b.stock !== undefined ? Number(b.stock) : (b.physicalStock !== null && b.physicalStock !== undefined ? Number(b.physicalStock) : 0);
+
+      const sphStr = sphNum > 0 ? `+${sphNum.toFixed(2)}` : sphNum.toFixed(2);
+      const cylStr = cylNum > 0 ? `+${cylNum.toFixed(2)}` : cylNum.toFixed(2);
+      const axisStr = cylNum !== 0 && axisNum > 0 ? String(Math.round(axisNum)) : '0';
+      const addStr = addNum > 0 ? `+${addNum.toFixed(2)}` : '';
+
+      return [
+        stockItem.name || '',
         b.formattedName || '',
-        b.barcode || '',
-        formatPowerVal(b.sph),
-        formatPowerVal(b.cyl),
+        sphStr,
+        cylStr,
+        axisStr,
+        addStr,
+        sideVal,
+        currentStock,
       ];
-      if (showAxis) row.push(b.axis !== null && b.axis !== undefined ? String(b.axis) : '—');
-      if (showAdd) row.push(formatPowerVal(b.add));
-      if (showSide) row.push(b.side || '—');
-      row.push(String(b.stock || 0), String(b.reserved || 0), String(b.available || 0), b.status);
-      return row;
     });
 
     const csvContent = 'data:text/csv;charset=utf-8,' + [headers.join(','), ...rows.map(r => r.map(c => `"${c}"`).join(','))].join('\n');
     const encodedUri = encodeURI(csvContent);
     const link = document.createElement('a');
     link.setAttribute('href', encodedUri);
-    link.setAttribute('download', `Batches_${stockItem.code}_${new Date().toISOString().slice(0, 10)}.csv`);
+    link.setAttribute('download', `Optical_Batches_${stockItem.code}_Stock_${new Date().toISOString().slice(0, 10)}.csv`);
     document.body.appendChild(link);
     link.click();
     document.body.removeChild(link);

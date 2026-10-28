@@ -232,12 +232,168 @@ export class PartyService {
       .from(parties)
       .where(and(...conditions));
 
+    const enrichedParties = await this.enrichPartiesWithLedgerBalances(businessId, rows, filters.partyType);
+
     return {
-      parties: rows,
+      parties: enrichedParties,
       total: totalCount.count,
       limit,
       offset,
     };
+  }
+
+  /**
+   * Helper to enrich party rows with live ledger balances (customer & supplier ledgers)
+   */
+  public static async enrichPartiesWithLedgerBalances(
+    businessId: string,
+    partyRows: any[],
+    requestedPartyType?: string
+  ) {
+    if (!partyRows || partyRows.length === 0) return [];
+
+    const partyIds = partyRows.map(p => p.id);
+
+    // 1. Fetch latest customer ledger balances
+    const custLedgerRes = await pool.query(
+      `SELECT DISTINCT ON (party_id) party_id, balance, transaction_date
+       FROM customer_ledgers
+       WHERE business_id = $1 AND party_id = ANY($2::uuid[])
+       ORDER BY party_id, transaction_date DESC, created_at DESC, id DESC`,
+      [businessId, partyIds]
+    );
+    const custLedgerMap = new Map<string, number>();
+    for (const r of custLedgerRes.rows) {
+      custLedgerMap.set(r.party_id, parseFloat(r.balance) || 0);
+    }
+
+    // 2. Fetch latest supplier ledger balances
+    const suppLedgerRes = await pool.query(
+      `SELECT DISTINCT ON (party_id) party_id, balance, transaction_date
+       FROM supplier_ledgers
+       WHERE business_id = $1 AND party_id = ANY($2::uuid[])
+       ORDER BY party_id, transaction_date DESC, created_at DESC, id DESC`,
+      [businessId, partyIds]
+    );
+    const suppLedgerMap = new Map<string, number>();
+    for (const r of suppLedgerRes.rows) {
+      suppLedgerMap.set(r.party_id, parseFloat(r.balance) || 0);
+    }
+
+    // 3. Fallback for parties without customer_ledgers row
+    const missingCustIds = partyIds.filter(id => !custLedgerMap.has(id));
+    if (missingCustIds.length > 0) {
+      const fallbackCustRes = await pool.query(
+        `SELECT 
+           si.party_id,
+           COALESCE(SUM(si.grand_total), 0) - COALESCE(SUM(pa.allocated), 0) - COALESCE(SUM(sr.returned), 0) as net_outstanding
+         FROM sales_invoices si
+         LEFT JOIN (
+           SELECT document_id, SUM(allocated_amount) as allocated
+           FROM payment_allocations
+           WHERE business_id = $1 AND status = 'ACTIVE'
+           GROUP BY document_id
+         ) pa ON pa.document_id = si.id
+         LEFT JOIN (
+           SELECT sales_invoice_id, SUM(grand_total) as returned
+           FROM sales_returns
+           WHERE business_id = $1 AND status = 'POSTED'
+           GROUP BY sales_invoice_id
+         ) sr ON sr.sales_invoice_id = si.id
+         WHERE si.business_id = $1 AND si.party_id = ANY($2::uuid[]) AND si.status = 'POSTED'
+         GROUP BY si.party_id`,
+        [businessId, missingCustIds]
+      );
+      for (const r of fallbackCustRes.rows) {
+        const net = parseFloat(r.net_outstanding) || 0;
+        if (net !== 0) {
+          custLedgerMap.set(r.party_id, net);
+        }
+      }
+
+      // Check unallocated advance receipts
+      const unallocRes = await pool.query(
+        `SELECT party_id, COALESCE(SUM(unallocated_amount), 0) as unalloc
+         FROM payments
+         WHERE business_id = $1 AND party_id = ANY($2::uuid[]) AND status = 'POSTED' AND payment_type = 'RECEIPT'
+         GROUP BY party_id`,
+        [businessId, missingCustIds]
+      );
+      for (const r of unallocRes.rows) {
+        const unalloc = parseFloat(r.unalloc) || 0;
+        if (unalloc > 0) {
+          const cur = custLedgerMap.get(r.party_id) || 0;
+          custLedgerMap.set(r.party_id, cur - unalloc);
+        }
+      }
+    }
+
+    // 4. Fallback for suppliers without supplier_ledgers row
+    const missingSuppIds = partyIds.filter(id => !suppLedgerMap.has(id));
+    if (missingSuppIds.length > 0) {
+      const fallbackSuppRes = await pool.query(
+        `SELECT 
+           pi.supplier_party_id as party_id,
+           COALESCE(SUM(pi.grand_total), 0) - COALESCE(SUM(pa.allocated), 0) - COALESCE(SUM(pr.returned), 0) as net_outstanding
+         FROM purchase_invoices pi
+         LEFT JOIN (
+           SELECT document_id, SUM(allocated_amount) as allocated
+           FROM payment_allocations
+           WHERE business_id = $1 AND status = 'ACTIVE'
+           GROUP BY document_id
+         ) pa ON pa.document_id = pi.id
+         LEFT JOIN (
+           SELECT purchase_invoice_id, SUM(grand_total) as returned
+           FROM purchase_returns
+           WHERE business_id = $1 AND status = 'POSTED'
+           GROUP BY purchase_invoice_id
+         ) pr ON pr.purchase_invoice_id = pi.id
+         WHERE pi.business_id = $1 AND pi.supplier_party_id = ANY($2::uuid[]) AND pi.status = 'POSTED'
+         GROUP BY pi.supplier_party_id`,
+        [businessId, missingSuppIds]
+      );
+      for (const r of fallbackSuppRes.rows) {
+        const net = parseFloat(r.net_outstanding) || 0;
+        if (net !== 0) {
+          suppLedgerMap.set(r.party_id, net);
+        }
+      }
+    }
+
+    // 5. Enrich rows
+    return partyRows.map(p => {
+      const custBal = custLedgerMap.get(p.id) || 0;
+      const suppBal = suppLedgerMap.get(p.id) || 0;
+
+      let effectiveBalance = 0;
+      let effectiveDrCr = 'Dr';
+
+      if (requestedPartyType === 'CUSTOMER') {
+        effectiveBalance = custBal;
+        effectiveDrCr = custBal >= 0 ? 'Dr' : 'Cr';
+      } else if (requestedPartyType === 'SUPPLIER') {
+        effectiveBalance = suppBal;
+        effectiveDrCr = suppBal >= 0 ? 'Cr' : 'Dr';
+      } else if (p.partyType === 'SUPPLIER') {
+        effectiveBalance = suppBal;
+        effectiveDrCr = suppBal >= 0 ? 'Cr' : 'Dr';
+      } else {
+        effectiveBalance = custBal !== 0 ? custBal : suppBal;
+        effectiveDrCr = custBal !== 0 ? (custBal >= 0 ? 'Dr' : 'Cr') : (suppBal >= 0 ? 'Cr' : 'Dr');
+      }
+
+      return {
+        ...p,
+        balance: effectiveBalance,
+        currentBalance: effectiveBalance,
+        customerBalance: custBal,
+        supplierBalance: suppBal,
+        balanceDrCr: effectiveDrCr,
+        balanceFormatted: effectiveBalance !== 0
+          ? `₹${Math.abs(effectiveBalance).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} ${effectiveDrCr}`
+          : '₹0.00',
+      };
+    });
   }
 
   /**
@@ -254,7 +410,8 @@ export class PartyService {
       throw new Error(`Party not found with ID ${partyId}`);
     }
 
-    return party;
+    const [enriched] = await this.enrichPartiesWithLedgerBalances(businessId, [party]);
+    return enriched || party;
   }
 
   /**

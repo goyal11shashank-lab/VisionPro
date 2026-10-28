@@ -2069,7 +2069,10 @@ export const CreatePurchaseInvoicePage: React.FC<Props> = ({
       }
 
       // Hotkeys for voucher actions
-      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'a') {
+      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 's') {
+        e.preventDefault();
+        handleSaveInvoice(true, false);
+      } else if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'a') {
         e.preventDefault();
         saveAndNewRef.current();
       } else if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'p') {
@@ -2112,7 +2115,7 @@ export const CreatePurchaseInvoicePage: React.FC<Props> = ({
   return (
     <div
       id="normal-purchase-voucher-page"
-      className="flex flex-col h-full w-full bg-[#f1f5f9] select-none font-sans overflow-hidden"
+      className="flex flex-col h-full w-full bg-[#f1f5f9] select-none font-sans overflow-hidden min-h-0"
     >
       {/* PO Conversion Banner */}
       {convertingOrderId && (
@@ -2140,7 +2143,7 @@ export const CreatePurchaseInvoicePage: React.FC<Props> = ({
       {/* Main Horizontal Workspace: Voucher on Left, Contextual Panel on Right */}
       <div className="flex-1 min-h-0 flex flex-row overflow-hidden relative">
         {/* Left: Complete Voucher Workspace */}
-        <div className="flex-1 min-w-0 flex flex-col h-full overflow-hidden bg-white border border-slate-300 rounded-xs shadow-2xs">
+        <div className="flex-1 min-w-0 flex flex-col h-full min-h-0 overflow-hidden bg-white border border-slate-300 rounded-xs shadow-2xs">
           {/* Unsaved Draft Recovery Banner */}
           {availableDraft && (
             <VoucherDraftRecoveryBanner
@@ -2199,7 +2202,7 @@ export const CreatePurchaseInvoicePage: React.FC<Props> = ({
           />
 
           {/* 2. Dominant Item Grid */}
-          <div className="flex-1 min-h-0 p-1 flex flex-col overflow-hidden">
+          <div className="flex-1 min-h-0 p-1 flex flex-col overflow-hidden max-h-full">
             <VoucherItemGrid
               voucherType="PURCHASE"
               lines={lines}

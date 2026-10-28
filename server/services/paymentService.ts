@@ -1050,6 +1050,352 @@ export class PaymentService {
   }
 
   /**
+   * Updates an existing Payment voucher (Receipt or Supplier Payment)
+   * Safely synchronizes allocations, invoice payment statuses, and party running ledgers.
+   */
+  static async updatePayment(
+    businessId: string,
+    paymentId: string,
+    data: Partial<CreatePaymentDto>,
+    userId?: string
+  ) {
+    const client = await pool.connect();
+    try {
+      await client.query('BEGIN');
+
+      // 1. Lock payment voucher
+      const payRes = await client.query(
+        `SELECT * FROM payments 
+         WHERE business_id = $1 AND id = $2 
+         FOR UPDATE`,
+        [businessId, paymentId]
+      );
+      if (payRes.rows.length === 0) {
+        throw new Error('Payment voucher not found');
+      }
+      const existing = payRes.rows[0];
+
+      if (existing.status === 'CANCELLED') {
+        throw new Error('Cannot edit a cancelled payment voucher');
+      }
+
+      const wasPosted = existing.status === 'POSTED';
+      const paymentType = existing.payment_type;
+      const partyId = data.partyId || existing.party_id;
+      const paymentMode = data.paymentMode || existing.payment_mode;
+      const paymentDate = data.paymentDate ? new Date(data.paymentDate) : existing.payment_date;
+      const amount = data.amount !== undefined ? round2(Number(data.amount)) : parseFloat(existing.amount);
+
+      if (isNaN(amount) || amount <= 0) {
+        throw new Error('Payment amount must be greater than zero');
+      }
+
+      // 2. Validate party compatibility if changed
+      if (data.partyId && data.partyId !== existing.party_id) {
+        const partyRes = await client.query(
+          `SELECT id, name, party_type, status FROM parties WHERE business_id = $1 AND id = $2 FOR UPDATE`,
+          [businessId, data.partyId]
+        );
+        if (partyRes.rows.length === 0) {
+          throw new Error('Party not found or does not belong to this business');
+        }
+        this.validatePartyCompatibility(partyRes.rows[0], paymentType);
+      }
+
+      // 3. Fetch old allocations to sync affected invoices
+      const oldAllocsRes = await client.query(
+        `SELECT document_id, document_type, allocated_amount 
+         FROM payment_allocations 
+         WHERE business_id = $1 AND payment_id = $2 AND status = 'ACTIVE'`,
+        [businessId, paymentId]
+      );
+      const oldAllocatedDocIds = oldAllocsRes.rows.map(r => r.document_id);
+
+      // 4. Validate new allocations
+      const rawAllocations = data.allocations !== undefined ? data.allocations : [];
+      let totalAllocated = 0;
+
+      for (const alloc of rawAllocations) {
+        const allocAmt = round2(Number(alloc.allocatedAmount));
+        if (isNaN(allocAmt) || allocAmt <= 0) {
+          throw new Error('Allocated amount must be greater than zero');
+        }
+        totalAllocated = round2(totalAllocated + allocAmt);
+
+        if (paymentType === 'RECEIPT') {
+          if (alloc.documentType !== 'SALES_INVOICE') {
+            throw new Error('Customer receipts can only be allocated against SALES_INVOICE');
+          }
+          const invRes = await client.query(
+            `SELECT id, invoice_number, party_id, grand_total, status, payment_status 
+             FROM sales_invoices 
+             WHERE business_id = $1 AND id = $2 
+             FOR UPDATE`,
+            [businessId, alloc.documentId]
+          );
+          if (invRes.rows.length === 0) {
+            throw new Error(`Sales invoice ${alloc.documentId} not found`);
+          }
+          const inv = invRes.rows[0];
+          if (inv.party_id !== partyId) {
+            throw new Error(`Sales invoice ${inv.invoice_number} does not belong to the selected customer`);
+          }
+          if (inv.status !== 'POSTED') {
+            throw new Error(`Cannot allocate to invoice ${inv.invoice_number} with status ${inv.status}. Must be POSTED.`);
+          }
+
+          // Check invoice outstanding (excluding this payment's allocations so far)
+          const paidRes = await client.query(
+            `SELECT COALESCE(SUM(allocated_amount), 0) as paid 
+             FROM payment_allocations 
+             WHERE business_id = $1 AND document_id = $2 AND status = 'ACTIVE' AND payment_id != $3`,
+            [businessId, inv.id, paymentId]
+          );
+          const currentPaid = parseFloat(paidRes.rows[0]?.paid || '0');
+          const retRes = await client.query(
+            `SELECT COALESCE(SUM(grand_total), 0) as returned 
+             FROM sales_returns 
+             WHERE business_id = $1 AND sales_invoice_id = $2 AND status = 'POSTED'`,
+            [businessId, inv.id]
+          );
+          const returnedAmt = parseFloat(retRes.rows[0]?.returned || '0');
+          const outstanding = round2(Math.max(0, parseFloat(inv.grand_total) - currentPaid - returnedAmt));
+
+          if (allocAmt > round2(outstanding + 0.001)) {
+            throw new Error(`Allocated amount (${allocAmt.toFixed(2)}) exceeds sales invoice ${inv.invoice_number} outstanding balance of ${outstanding.toFixed(2)}`);
+          }
+        } else {
+          // PURCHASE_INVOICE
+          if (alloc.documentType !== 'PURCHASE_INVOICE') {
+            throw new Error('Supplier payments can only be allocated against PURCHASE_INVOICE');
+          }
+          const invRes = await client.query(
+            `SELECT id, invoice_number, supplier_party_id, grand_total, status, payment_status 
+             FROM purchase_invoices 
+             WHERE business_id = $1 AND id = $2 
+             FOR UPDATE`,
+            [businessId, alloc.documentId]
+          );
+          if (invRes.rows.length === 0) {
+            throw new Error(`Purchase invoice ${alloc.documentId} not found`);
+          }
+          const inv = invRes.rows[0];
+          if (inv.supplier_party_id !== partyId) {
+            throw new Error(`Purchase invoice ${inv.invoice_number} does not belong to the selected supplier`);
+          }
+          if (inv.status !== 'POSTED') {
+            throw new Error(`Cannot allocate to purchase invoice ${inv.invoice_number} with status ${inv.status}. Must be POSTED.`);
+          }
+
+          const paidRes = await client.query(
+            `SELECT COALESCE(SUM(allocated_amount), 0) as paid 
+             FROM payment_allocations 
+             WHERE business_id = $1 AND document_id = $2 AND status = 'ACTIVE' AND payment_id != $3`,
+            [businessId, inv.id, paymentId]
+          );
+          const currentPaid = parseFloat(paidRes.rows[0]?.paid || '0');
+          const retRes = await client.query(
+            `SELECT COALESCE(SUM(grand_total), 0) as returned 
+             FROM purchase_returns 
+             WHERE business_id = $1 AND purchase_invoice_id = $2 AND status = 'POSTED'`,
+            [businessId, inv.id]
+          );
+          const returnedAmt = parseFloat(retRes.rows[0]?.returned || '0');
+          const outstanding = round2(Math.max(0, parseFloat(inv.grand_total) - currentPaid - returnedAmt));
+
+          if (allocAmt > round2(outstanding + 0.001)) {
+            throw new Error(`Allocated amount (${allocAmt.toFixed(2)}) exceeds purchase bill ${inv.invoice_number} outstanding of ${outstanding.toFixed(2)}`);
+          }
+        }
+      }
+
+      if (totalAllocated > round2(amount + 0.001)) {
+        throw new Error(`Total allocated amount (${totalAllocated.toFixed(2)}) cannot exceed payment amount (${amount.toFixed(2)})`);
+      }
+
+      const unallocatedAmount = round2(amount - totalAllocated);
+
+      // 5. Remove old allocations
+      await client.query(
+        `DELETE FROM payment_allocations WHERE business_id = $1 AND payment_id = $2`,
+        [businessId, paymentId]
+      );
+
+      // 6. If was posted, remove old ledger entry first
+      if (wasPosted) {
+        if (paymentType === 'RECEIPT') {
+          await client.query(
+            `DELETE FROM customer_ledgers 
+             WHERE business_id = $1 AND reference_type IN ('PAYMENT', 'RECEIPT', 'PAYMENT_CANCEL') AND reference_id = $2`,
+            [businessId, paymentId]
+          );
+        } else {
+          await client.query(
+            `DELETE FROM supplier_ledgers 
+             WHERE business_id = $1 AND reference_type IN ('PAYMENT', 'PAYMENT_CANCEL') AND reference_id = $2`,
+            [businessId, paymentId]
+          );
+        }
+      }
+
+      // 7. Update payment voucher record
+      await client.query(
+        `UPDATE payments 
+         SET party_id = $1, payment_date = $2, payment_mode = $3,
+             amount = $4, unallocated_amount = $5, reference_number = $6,
+             reference_date = $7, bank_name = $8, notes = $9,
+             updated_by = $10, updated_at = NOW()
+         WHERE business_id = $11 AND id = $12`,
+        [
+          partyId,
+          paymentDate,
+          paymentMode,
+          amount.toFixed(2),
+          unallocatedAmount.toFixed(2),
+          data.referenceNumber !== undefined ? (data.referenceNumber || null) : existing.reference_number,
+          data.referenceDate !== undefined ? (data.referenceDate ? new Date(data.referenceDate) : null) : existing.reference_date,
+          data.bankName !== undefined ? (data.bankName || null) : existing.bank_name,
+          data.notes !== undefined ? (data.notes || null) : existing.notes,
+          userId || null,
+          businessId,
+          paymentId,
+        ]
+      );
+
+      // 8. Insert new allocations
+      for (const alloc of rawAllocations) {
+        const allocAmt = round2(Number(alloc.allocatedAmount));
+        await client.query(
+          `INSERT INTO payment_allocations (
+            business_id, payment_id, party_id, document_type,
+            document_id, allocated_amount, status, notes,
+            created_by, created_at, updated_at
+          ) VALUES (
+            $1, $2, $3, $4,
+            $5, $6, 'ACTIVE', $7,
+            $8, NOW(), NOW()
+          )`,
+          [
+            businessId,
+            paymentId,
+            partyId,
+            alloc.documentType,
+            alloc.documentId,
+            allocAmt.toFixed(2),
+            alloc.notes || null,
+            userId || null,
+          ]
+        );
+      }
+
+      // 9. If was posted, insert updated ledger entry
+      if (wasPosted) {
+        if (paymentType === 'RECEIPT') {
+          const lastLedgerRes = await client.query(
+            `SELECT balance FROM customer_ledgers 
+             WHERE business_id = $1 AND party_id = $2 
+             ORDER BY transaction_date DESC, created_at DESC 
+             LIMIT 1 FOR UPDATE`,
+            [businessId, partyId]
+          );
+          const prevBalance = lastLedgerRes.rows.length > 0 ? parseFloat(lastLedgerRes.rows[0].balance) : 0;
+          const newBalance = round2(prevBalance - amount);
+
+          await client.query(
+            `INSERT INTO customer_ledgers (
+              business_id, party_id, transaction_type, reference_type, reference_id,
+              debit, credit, balance, transaction_date, notes, created_by, created_at
+            ) VALUES (
+              $1, $2, 'RECEIPT', 'PAYMENT', $3,
+              '0.00', $4, $5, $6, $7, $8, NOW()
+            )`,
+            [
+              businessId,
+              partyId,
+              paymentId,
+              amount.toFixed(2),
+              newBalance.toFixed(2),
+              paymentDate,
+              `Customer Receipt: ${existing.payment_number}`,
+              userId || null,
+            ]
+          );
+        } else {
+          const lastLedgerRes = await client.query(
+            `SELECT balance FROM supplier_ledgers 
+             WHERE business_id = $1 AND party_id = $2 
+             ORDER BY transaction_date DESC, created_at DESC 
+             LIMIT 1 FOR UPDATE`,
+            [businessId, partyId]
+          );
+          const prevBalance = lastLedgerRes.rows.length > 0 ? parseFloat(lastLedgerRes.rows[0].balance) : 0;
+          const newBalance = round2(prevBalance - amount);
+
+          await client.query(
+            `INSERT INTO supplier_ledgers (
+              business_id, party_id, transaction_type, reference_type, reference_id,
+              debit, credit, balance, transaction_date, notes, created_by, created_at
+            ) VALUES (
+              $1, $2, 'PAYMENT', 'PAYMENT', $3,
+              $4, '0.00', $5, $6, $7, $8, NOW()
+            )`,
+            [
+              businessId,
+              partyId,
+              paymentId,
+              amount.toFixed(2),
+              newBalance.toFixed(2),
+              paymentDate,
+              `Supplier Payment: ${existing.payment_number}`,
+              userId || null,
+            ]
+          );
+        }
+      }
+
+      // 10. Sync payment statuses of both old and new affected documents
+      const allAffectedDocIds = Array.from(new Set([...oldAllocatedDocIds, ...rawAllocations.map(a => a.documentId)]));
+      for (const docId of allAffectedDocIds) {
+        if (paymentType === 'RECEIPT') {
+          await this.syncSalesInvoicePaymentStatus(client, businessId, docId);
+        } else {
+          await this.syncPurchaseInvoicePaymentStatus(client, businessId, docId);
+        }
+      }
+
+      await client.query('COMMIT');
+
+      await AuditService.log({
+        businessId,
+        userId,
+        module: 'payment',
+        action: 'UPDATE_PAYMENT',
+        entityType: 'PAYMENT',
+        entityId: paymentId,
+        previousValue: {
+          paymentNumber: existing.payment_number,
+          amount: existing.amount,
+          partyId: existing.party_id,
+          paymentMode: existing.payment_mode,
+        },
+        newValue: {
+          paymentNumber: existing.payment_number,
+          amount,
+          partyId,
+          paymentMode,
+        },
+      });
+
+      return await this.getPaymentById(businessId, paymentId);
+    } catch (err) {
+      await client.query('ROLLBACK');
+      throw err;
+    } finally {
+      client.release();
+    }
+  }
+
+  /**
    * Permanently deletes a Payment/Receipt voucher, restoring ledgers and invoice statuses
    */
   static async deletePayment(

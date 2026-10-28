@@ -401,6 +401,38 @@ router.post(
 );
 
 /**
+ * PUT /api/payments/:id
+ * Update an existing payment voucher
+ */
+router.put(
+  '/:id',
+  requireAnyPermission([
+    'payment.receipt.edit',
+    'payment:receipt:edit',
+    'payment.supplier.edit',
+    'payment:supplier:edit',
+    'accounts:edit',
+    'accounts.edit',
+    'payment:create',
+    'accounts:create',
+  ]),
+  async (req: Request, res: Response) => {
+    try {
+      const businessId = req.user!.currentBusinessId;
+      const userId = req.user!.id;
+      const { id } = req.params;
+      const data = req.body;
+
+      const result = await PaymentService.updatePayment(businessId, id, data, userId);
+      res.json(result);
+    } catch (err: any) {
+      console.error('[PUT /api/payments/:id Error]', err);
+      res.status(400).json({ error: 'UPDATE_PAYMENT_FAILED', message: err.message });
+    }
+  }
+);
+
+/**
  * POST /api/payments/:id/post
  * Post and finalize a DRAFT payment voucher
  */
