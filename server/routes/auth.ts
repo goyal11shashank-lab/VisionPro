@@ -1,6 +1,6 @@
 import { Router, Request, Response } from 'express';
 import { db, pool, checkDatabaseConnection, resolveDatabaseConfig } from '../db/index.js';
-import { users, userBusinessAccess, businesses, userRoles, roles, rolePermissions, permissions, auditLogs } from '../db/schema.js';
+import { users, userBusinessAccess, businesses, userRoles, roles, rolePermissions, permissions, auditLogs, godowns } from '../db/schema.js';
 import { verifyPassword, hashPassword } from '../auth/password.js';
 import { generateAuthToken } from '../auth/jwt.js';
 import { authenticateToken } from '../middleware/auth.js';
@@ -372,6 +372,8 @@ router.post('/login', async (req: Request, res: Response): Promise<void> => {
             status: row.status ?? 'ACTIVE',
             isSuperAdmin: row.is_super_admin ?? row.isSuperAdmin ?? row.issuperadmin ?? false,
             lastLoginAt: row.last_login_at ?? row.lastLoginAt ?? null,
+            assignedGodownId: row.assigned_godown_id ?? row.assignedGodownId ?? null,
+            userPermissionsOverride: row.user_permissions_override ?? row.userPermissionsOverride ?? null,
             createdAt: row.created_at ?? row.createdAt ?? new Date(),
             updatedAt: row.updated_at ?? row.updatedAt ?? new Date(),
             createdBy: row.created_by ?? row.createdBy ?? null,
@@ -482,33 +484,72 @@ router.post('/login', async (req: Request, res: Response): Promise<void> => {
     let selectedBusiness: any = null;
     let rolesList: any[] = [];
     let permsList: string[] = [];
+    let assignedGodownData: any = null;
 
     try {
-      accessibleBiz = await db
-        .select({
-          businessId: userBusinessAccess.businessId,
-          isDefault: userBusinessAccess.isDefault,
-          business: businesses,
-        })
-        .from(userBusinessAccess)
-        .innerJoin(businesses, eq(userBusinessAccess.businessId, businesses.id))
-        .where(eq(userBusinessAccess.userId, userRecord.id));
+      if (userRecord.assignedGodownId) {
+        // Restricted Godown Staff Login
+        const [gdn] = await db
+          .select()
+          .from(godowns)
+          .where(eq(godowns.id, userRecord.assignedGodownId))
+          .limit(1);
 
-      selectedBusiness = accessibleBiz.find(b => b.businessId === businessId)?.business;
+        if (!gdn || gdn.status !== 'ACTIVE') {
+          res.status(403).json({
+            success: false,
+            error: 'GODOWN_INACTIVE_OR_SUSPENDED',
+            message: 'Your assigned godown is inactive, suspended, or no longer exists. Access denied.',
+          });
+          return;
+        }
 
-      if (!selectedBusiness) {
-        if (userRecord.isSuperAdmin) {
-          if (businessId) {
-            const [found] = await db.select().from(businesses).where(eq(businesses.id, businessId)).limit(1);
-            selectedBusiness = found;
+        assignedGodownData = gdn;
+
+        const [parentBiz] = await db
+          .select()
+          .from(businesses)
+          .where(eq(businesses.id, gdn.businessId))
+          .limit(1);
+
+        if (!parentBiz || parentBiz.status !== 'ACTIVE') {
+          res.status(403).json({
+            success: false,
+            error: 'PARENT_BUSINESS_INACTIVE',
+            message: 'The parent business for this godown is inactive or unavailable.',
+          });
+          return;
+        }
+
+        selectedBusiness = parentBiz;
+        accessibleBiz = [{ businessId: parentBiz.id, isDefault: true, business: parentBiz }];
+      } else {
+        accessibleBiz = await db
+          .select({
+            businessId: userBusinessAccess.businessId,
+            isDefault: userBusinessAccess.isDefault,
+            business: businesses,
+          })
+          .from(userBusinessAccess)
+          .innerJoin(businesses, eq(userBusinessAccess.businessId, businesses.id))
+          .where(eq(userBusinessAccess.userId, userRecord.id));
+
+        selectedBusiness = accessibleBiz.find(b => b.businessId === businessId)?.business;
+
+        if (!selectedBusiness) {
+          if (userRecord.isSuperAdmin) {
+            if (businessId) {
+              const [found] = await db.select().from(businesses).where(eq(businesses.id, businessId)).limit(1);
+              selectedBusiness = found;
+            }
+            if (!selectedBusiness) {
+              const [first] = await db.select().from(businesses).where(eq(businesses.status, 'ACTIVE')).limit(1);
+              selectedBusiness = first;
+            }
+          } else {
+            const defaultAccess = accessibleBiz.find(b => b.isDefault) || accessibleBiz[0];
+            selectedBusiness = defaultAccess?.business;
           }
-          if (!selectedBusiness) {
-            const [first] = await db.select().from(businesses).where(eq(businesses.status, 'ACTIVE')).limit(1);
-            selectedBusiness = first;
-          }
-        } else {
-          const defaultAccess = accessibleBiz.find(b => b.isDefault) || accessibleBiz[0];
-          selectedBusiness = defaultAccess?.business;
         }
       }
 
@@ -610,6 +651,14 @@ router.post('/login', async (req: Request, res: Response): Promise<void> => {
         fullName: userRecord.fullName,
         isSuperAdmin: userRecord.isSuperAdmin,
         status: userRecord.status,
+        assignedGodownId: assignedGodownData ? assignedGodownData.id : null,
+        assignedGodown: assignedGodownData ? {
+          id: assignedGodownData.id,
+          code: assignedGodownData.code,
+          name: assignedGodownData.name,
+          godownType: assignedGodownData.godownType,
+          status: assignedGodownData.status,
+        } : null,
       },
       currentBusiness: selectedBusiness ? {
         id: selectedBusiness.id,
@@ -665,7 +714,16 @@ router.get('/me', authenticateToken, async (req: Request, res: Response): Promis
 
   // Fetch all accessible businesses (all active for super admin, explicit for normal users)
   let accessibleBiz: any[] = [];
-  if (req.user.isSuperAdmin) {
+  if (req.user.assignedGodownId) {
+    // Restricted godown user only sees their parent business
+    if (req.user.currentBusiness) {
+      accessibleBiz = [{
+        businessId: req.user.currentBusinessId,
+        isDefault: true,
+        business: req.user.currentBusiness as any,
+      }];
+    }
+  } else if (req.user.isSuperAdmin) {
     const allActive = await db
       .select()
       .from(businesses)
@@ -696,6 +754,8 @@ router.get('/me', authenticateToken, async (req: Request, res: Response): Promis
       mobile: req.user.mobile,
       fullName: req.user.fullName,
       isSuperAdmin: req.user.isSuperAdmin,
+      assignedGodownId: req.user.assignedGodownId || null,
+      assignedGodown: req.user.assignedGodown || null,
     },
     currentBusiness: req.user.currentBusiness,
     accessibleBusinesses: accessibleBiz.map(b => ({
@@ -716,6 +776,14 @@ router.get('/me', authenticateToken, async (req: Request, res: Response): Promis
  */
 router.post('/switch-business', authenticateToken, async (req: Request, res: Response): Promise<void> => {
   try {
+    if (req.user?.assignedGodownId) {
+      res.status(403).json({
+        error: 'RESTRICTED_GODOWN_USER',
+        message: 'Restricted godown staff are not permitted to switch business or godown.',
+      });
+      return;
+    }
+
     const { targetBusinessId } = req.body;
     if (!targetBusinessId) {
       res.status(400).json({ error: 'targetBusinessId is required' });

@@ -1,7 +1,7 @@
 import { Request, Response, NextFunction } from 'express';
 import { verifyAuthToken, AuthJwtPayload } from '../auth/jwt.js';
 import { db, pool } from '../db/index.js';
-import { users, userBusinessAccess, businesses, userRoles, roles, rolePermissions, permissions } from '../db/schema.js';
+import { users, userBusinessAccess, businesses, userRoles, roles, rolePermissions, permissions, godowns } from '../db/schema.js';
 import { eq, and, inArray } from 'drizzle-orm';
 
 export interface AuthenticatedUser {
@@ -12,6 +12,14 @@ export interface AuthenticatedUser {
   fullName: string;
   isSuperAdmin: boolean;
   currentBusinessId: string;
+  assignedGodownId?: string | null;
+  assignedGodown?: {
+    id: string;
+    code: string;
+    name: string;
+    godownType: string;
+    status: string;
+  } | null;
   currentBusiness?: {
     id: string;
     name: string;
@@ -76,6 +84,8 @@ export async function authenticateToken(req: Request, res: Response, next: NextF
             status: row.status ?? 'ACTIVE',
             isSuperAdmin: row.is_super_admin ?? row.isSuperAdmin ?? row.issuperadmin ?? false,
             lastLoginAt: row.last_login_at ?? row.lastLoginAt ?? null,
+            assignedGodownId: row.assigned_godown_id ?? row.assignedGodownId ?? null,
+            userPermissionsOverride: row.user_permissions_override ?? row.userPermissionsOverride ?? null,
             createdAt: row.created_at ?? row.createdAt ?? new Date(),
             updatedAt: row.updated_at ?? row.updatedAt ?? new Date(),
             createdBy: row.created_by ?? row.createdBy ?? null,
@@ -94,74 +104,112 @@ export async function authenticateToken(req: Request, res: Response, next: NextF
       return;
     }
 
-    // 2. Resolve target business ID
-    const headerBizId = req.headers['x-business-id'] as string | undefined;
-    const cleanHeaderBizId = headerBizId && headerBizId !== 'undefined' && headerBizId !== 'null' && headerBizId.trim()
-      ? headerBizId.trim()
-      : undefined;
+    // 1B. Godown Staff Isolation Enforcement
+    let assignedGodownRecord: typeof godowns.$inferSelect | undefined;
+    if (userRecord.assignedGodownId) {
+      const [gdn] = await db
+        .select()
+        .from(godowns)
+        .where(eq(godowns.id, userRecord.assignedGodownId))
+        .limit(1);
 
-    const tokenBizId = payload.businessId && payload.businessId !== 'undefined' && payload.businessId !== 'null' && payload.businessId.trim()
-      ? payload.businessId.trim()
-      : undefined;
-
-    // Explicitly requested business (header takes precedence if supplied, else token)
-    const explicitlyRequestedId = cleanHeaderBizId || tokenBizId;
-
-    // Check user's authorized businesses
-    const accessibleBusinesses = await db
-      .select({
-        businessId: userBusinessAccess.businessId,
-        isDefault: userBusinessAccess.isDefault,
-        business: businesses,
-      })
-      .from(userBusinessAccess)
-      .innerJoin(businesses, eq(userBusinessAccess.businessId, businesses.id))
-      .where(eq(userBusinessAccess.userId, userRecord.id));
-
-    if (accessibleBusinesses.length === 0 && !userRecord.isSuperAdmin) {
-      res.status(403).json({
-        error: 'NO_BUSINESS_ACCESS',
-        message: 'No business assigned to your user account.',
-      });
-      return;
+      if (!gdn || gdn.status !== 'ACTIVE') {
+        res.status(403).json({
+          error: 'GODOWN_INACTIVE_OR_SUSPENDED',
+          message: 'Your assigned godown is inactive, suspended, or no longer exists. Access denied.',
+        });
+        return;
+      }
+      assignedGodownRecord = gdn;
     }
 
+    // 2. Resolve target business ID
     let currentBusiness: typeof businesses.$inferSelect | undefined;
 
-    if (userRecord.isSuperAdmin) {
-      // Super Admin can access any business
-      if (explicitlyRequestedId) {
-        try {
-          const [foundBiz] = await db.select().from(businesses).where(eq(businesses.id, explicitlyRequestedId)).limit(1);
-          currentBusiness = foundBiz;
-        } catch (bizErr) {
-          console.warn('[AUTH_TARGET_BIZ_LOOKUP_FAILED]', bizErr);
-        }
+    if (assignedGodownRecord) {
+      // ZERO-TRUST DERIVATION: Godown user's parent business is strictly derived from godown entity.
+      // Any client-supplied x-business-id or token override is completely forbidden and ignored!
+      const [parentBiz] = await db
+        .select()
+        .from(businesses)
+        .where(eq(businesses.id, assignedGodownRecord.businessId))
+        .limit(1);
+
+      if (!parentBiz || parentBiz.status !== 'ACTIVE') {
+        res.status(403).json({
+          error: 'PARENT_BUSINESS_INACTIVE',
+          message: 'The parent business for this godown is inactive or unavailable.',
+        });
+        return;
       }
-      if (!currentBusiness) {
-        currentBusiness = accessibleBusinesses.find(b => b.isDefault)?.business || accessibleBusinesses[0]?.business;
-      }
-      if (!currentBusiness) {
-        const [firstBiz] = await db.select().from(businesses).where(eq(businesses.status, 'ACTIVE')).limit(1);
-        currentBusiness = firstBiz;
-      }
+      currentBusiness = parentBiz;
     } else {
-      // Normal users: strictly enforce authorized membership!
-      if (explicitlyRequestedId) {
-        const matchingAccess = accessibleBusinesses.find(b => b.businessId === explicitlyRequestedId);
-        if (!matchingAccess) {
-          // Explicitly requested an unauthorized business! Deny immediately.
-          res.status(403).json({
-            error: 'UNAUTHORIZED_BUSINESS_ACCESS',
-            message: 'You do not have authorization to access this business.',
-          });
-          return;
+      const headerBizId = req.headers['x-business-id'] as string | undefined;
+      const cleanHeaderBizId = headerBizId && headerBizId !== 'undefined' && headerBizId !== 'null' && headerBizId.trim()
+        ? headerBizId.trim()
+        : undefined;
+
+      const tokenBizId = payload.businessId && payload.businessId !== 'undefined' && payload.businessId !== 'null' && payload.businessId.trim()
+        ? payload.businessId.trim()
+        : undefined;
+
+      // Explicitly requested business (header takes precedence if supplied, else token)
+      const explicitlyRequestedId = cleanHeaderBizId || tokenBizId;
+
+      // Check user's authorized businesses
+      const accessibleBusinesses = await db
+        .select({
+          businessId: userBusinessAccess.businessId,
+          isDefault: userBusinessAccess.isDefault,
+          business: businesses,
+        })
+        .from(userBusinessAccess)
+        .innerJoin(businesses, eq(userBusinessAccess.businessId, businesses.id))
+        .where(eq(userBusinessAccess.userId, userRecord.id));
+
+      if (accessibleBusinesses.length === 0 && !userRecord.isSuperAdmin) {
+        res.status(403).json({
+          error: 'NO_BUSINESS_ACCESS',
+          message: 'No business assigned to your user account.',
+        });
+        return;
+      }
+
+      if (userRecord.isSuperAdmin) {
+        // Super Admin can access any business
+        if (explicitlyRequestedId) {
+          try {
+            const [foundBiz] = await db.select().from(businesses).where(eq(businesses.id, explicitlyRequestedId)).limit(1);
+            currentBusiness = foundBiz;
+          } catch (bizErr) {
+            console.warn('[AUTH_TARGET_BIZ_LOOKUP_FAILED]', bizErr);
+          }
         }
-        currentBusiness = matchingAccess.business;
+        if (!currentBusiness) {
+          currentBusiness = accessibleBusinesses.find(b => b.isDefault)?.business || accessibleBusinesses[0]?.business;
+        }
+        if (!currentBusiness) {
+          const [firstBiz] = await db.select().from(businesses).where(eq(businesses.status, 'ACTIVE')).limit(1);
+          currentBusiness = firstBiz;
+        }
       } else {
-        // No explicit business requested: fall back to default or first accessible
-        const defaultBiz = accessibleBusinesses.find(b => b.isDefault) || accessibleBusinesses[0];
-        currentBusiness = defaultBiz?.business;
+        // Normal users: strictly enforce authorized membership!
+        if (explicitlyRequestedId) {
+          const matchingAccess = accessibleBusinesses.find(b => b.businessId === explicitlyRequestedId);
+          if (!matchingAccess) {
+            // Explicitly requested an unauthorized business! Deny immediately.
+            res.status(403).json({
+              error: 'UNAUTHORIZED_BUSINESS_ACCESS',
+              message: 'You do not have authorization to access this business.',
+            });
+            return;
+          }
+          currentBusiness = matchingAccess.business;
+        } else {
+          // No explicit business requested: fall back to default or first accessible
+          const defaultBiz = accessibleBusinesses.find(b => b.isDefault) || accessibleBusinesses[0];
+          currentBusiness = defaultBiz?.business;
+        }
       }
     }
 
@@ -216,6 +264,18 @@ export async function authenticateToken(req: Request, res: Response, next: NextF
       userPermissionsList = Array.from(new Set(perms.map(p => p.code)));
     }
 
+    // If user has userPermissionsOverride, merge/override allowed permissions
+    if ((userRecord as any).userPermissionsOverride && typeof (userRecord as any).userPermissionsOverride === 'object') {
+      const overrides = (userRecord as any).userPermissionsOverride;
+      for (const [permCode, enabled] of Object.entries(overrides)) {
+        if (enabled === false) {
+          userPermissionsList = userPermissionsList.filter(p => p !== permCode);
+        } else if (enabled === true && !userPermissionsList.includes(permCode)) {
+          userPermissionsList.push(permCode);
+        }
+      }
+    }
+
     // Attach complete user context to request
     req.user = {
       id: userRecord.id,
@@ -225,6 +285,14 @@ export async function authenticateToken(req: Request, res: Response, next: NextF
       fullName: userRecord.fullName,
       isSuperAdmin: userRecord.isSuperAdmin,
       currentBusinessId: targetBusinessId,
+      assignedGodownId: assignedGodownRecord ? assignedGodownRecord.id : null,
+      assignedGodown: assignedGodownRecord ? {
+        id: assignedGodownRecord.id,
+        code: assignedGodownRecord.code,
+        name: assignedGodownRecord.name,
+        godownType: assignedGodownRecord.godownType,
+        status: assignedGodownRecord.status,
+      } : null,
       currentBusiness: {
         id: currentBusiness.id,
         name: currentBusiness.name,

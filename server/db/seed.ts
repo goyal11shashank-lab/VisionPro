@@ -104,6 +104,14 @@ export const SYSTEM_PERMISSIONS = [
   { module: 'import', action: 'sales_invoice', code: 'import.sales_invoice', description: 'Bulk import customer sales invoices (dot notation)' },
   { module: 'import', action: 'opening_stock', code: 'import:opening_stock', description: 'Bulk import initial optical batch opening stock balances' },
   { module: 'import', action: 'opening_stock', code: 'import.opening_stock', description: 'Bulk import initial optical batch opening stock balances (dot notation)' },
+
+  // Godowns & Secondary Warehouses Module
+  { module: 'godown', action: 'view', code: 'godown:view', description: 'View assigned extra godown operational details' },
+  { module: 'godown', action: 'create', code: 'godown:create', description: 'Create new extra godowns & secondary warehouses' },
+  { module: 'godown', action: 'edit', code: 'godown:edit', description: 'Edit extra godown details and status' },
+  { module: 'godown', action: 'delete', code: 'godown:delete', description: 'Deactivate extra godowns' },
+  { module: 'godown', action: 'manage_users', code: 'godown:manage_users', description: 'Create and manage extra godown salesman logins' },
+  { module: 'godown', action: 'main_warehouse_search', code: 'godown:main_warehouse_search', description: 'Search parent main warehouse stock in read-only mode' },
 ];
 
 export const SYSTEM_ROLES = [
@@ -123,6 +131,12 @@ export const SYSTEM_ROLES = [
     name: 'Sales Executive',
     code: 'SALES_USER',
     description: 'Optical counter sales, customer prescription entry, invoice creation, and payment collection.',
+    isSystem: true,
+  },
+  {
+    name: 'Godown Salesman',
+    code: 'SALESMAN',
+    description: 'Assigned Extra Godown staff login for sales, purchase inward, customer receipts, and main warehouse stock lookup.',
     isSystem: true,
   },
   {
@@ -195,6 +209,14 @@ export async function seedInitialDatabase() {
       allowedCodes = SYSTEM_PERMISSIONS.filter(p => p.code !== 'admin:manage_roles').map(p => p.code);
     } else if (role.code === 'SALES_USER') {
       allowedCodes = ['sales:view', 'sales:create', 'sales:edit', 'sales:export', 'parties:view', 'parties:create', 'parties:edit', 'inventory:view', 'accounts:view', 'accounts:create'];
+    } else if (role.code === 'SALESMAN') {
+      allowedCodes = [
+        'sales:view', 'sales:create', 'sales:edit', 'sales:return_view', 'sales:return_create',
+        'purchase:view', 'purchase:create', 'purchase:edit', 'purchase:return_view', 'purchase:return_create',
+        'accounts:view', 'accounts:create', 'accounts:edit', 'payment.receipt.view', 'payment.supplier.view',
+        'inventory:view', 'master:view', 'parties:view', 'parties:create',
+        'godown:view', 'godown:main_warehouse_search'
+      ];
     } else if (role.code === 'PURCHASE_USER') {
       allowedCodes = ['purchase:view', 'purchase:create', 'purchase:edit', 'purchase:view_purchase_price', 'purchase:export', 'parties:view', 'parties:create', 'inventory:view'];
     } else if (role.code === 'INVENTORY_USER') {

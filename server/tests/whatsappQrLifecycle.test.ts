@@ -37,6 +37,14 @@ class MockWhatsAppSocket implements IWhatsAppSocketTransport {
     }
   }
 
+  async sendMessage(jid: string, content: any): Promise<any> {
+    return { key: { id: `mock-msg-${Date.now()}` }, jid, content };
+  }
+
+  async requestPairingCode(phone: string): Promise<string> {
+    return '1234-5678';
+  }
+
   async logout(): Promise<void> {
     this.isLoggedOut = true;
     this.isClosed = true;

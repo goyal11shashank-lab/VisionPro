@@ -34,6 +34,10 @@ async function runWhatsAppTests() {
       emit: (event: string, ...args: any[]) => {
         (listeners[event] || []).forEach((h) => h(...args));
       },
+      sendMessage: async (jid: string, content: any) => {
+        return { key: { id: `mock-test-${Date.now()}` }, jid, content };
+      },
+      requestPairingCode: async () => '1234-5678',
       logout: async () => {},
       end: () => {},
     };

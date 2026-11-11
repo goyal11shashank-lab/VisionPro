@@ -17,6 +17,7 @@ import {
   Eye,
   Pencil,
   FileCheck,
+  ArrowRightLeft,
 } from 'lucide-react';
 import { PurchaseOrder, PurchaseOrderLine } from '../../types/index.js';
 import { apiRequest } from '../../api/client.js';
@@ -42,6 +43,8 @@ export const PurchaseOrderDetailModal: React.FC<PurchaseOrderDetailModalProps> =
   const [actionError, setActionError] = useState<string | null>(null);
   const [cancelModalOpen, setCancelModalOpen] = useState<boolean>(false);
   const [cancelReason, setCancelReason] = useState<string>('');
+  const [rejectModalOpen, setRejectModalOpen] = useState<boolean>(false);
+  const [rejectReason, setRejectReason] = useState<string>('');
   const [isPrintPreviewOpen, setIsPrintPreviewOpen] = useState<boolean>(false);
 
   const isDealerOrder = order.source === 'DEALER_ORDER' || !!(order as any).dealerOrderId;
@@ -65,6 +68,44 @@ export const PurchaseOrderDetailModal: React.FC<PurchaseOrderDetailModalProps> =
       onClose();
     } catch (err: any) {
       setActionError(err.message || 'Failed to cancel purchase order');
+    } finally {
+      setActionLoading(false);
+    }
+  };
+
+  const handleAcceptOrder = async () => {
+    setActionLoading(true);
+    setActionError(null);
+    try {
+      await apiRequest(`/api/purchases/orders/${order.id}/accept`, {
+        method: 'POST',
+      });
+      onRefresh();
+      onClose();
+    } catch (err: any) {
+      setActionError(err.message || 'Failed to accept purchase order');
+    } finally {
+      setActionLoading(false);
+    }
+  };
+
+  const handleRejectOrder = async () => {
+    if (!rejectReason.trim()) {
+      setActionError('Please provide a reason for rejection.');
+      return;
+    }
+    setActionLoading(true);
+    setActionError(null);
+    try {
+      await apiRequest(`/api/purchases/orders/${order.id}/reject`, {
+        method: 'POST',
+        body: JSON.stringify({ reason: rejectReason.trim() }),
+      });
+      setRejectModalOpen(false);
+      onRefresh();
+      onClose();
+    } catch (err: any) {
+      setActionError(err.message || 'Failed to reject purchase order');
     } finally {
       setActionLoading(false);
     }
@@ -165,6 +206,51 @@ export const PurchaseOrderDetailModal: React.FC<PurchaseOrderDetailModalProps> =
 
         {/* Content Body */}
         <div className="flex-1 overflow-y-auto p-6 space-y-6">
+          {/* B2B Auto-Synced Banner */}
+          {order.isB2bSynchronized && (
+            <div className="p-4 bg-indigo-50/70 border border-indigo-200 rounded-xl space-y-2">
+              <div className="flex items-center justify-between">
+                <div className="flex items-center gap-2">
+                  <span className="p-1.5 rounded-lg bg-indigo-100 text-indigo-700">
+                    <ArrowRightLeft className="w-4 h-4" />
+                  </span>
+                  <div>
+                    <h4 className="text-xs font-bold text-indigo-950 flex items-center gap-2">
+                      <span>Auto-Synced from Main Business</span>
+                      <span className={`text-[10px] font-mono font-bold px-2 py-0.5 rounded-full uppercase ${
+                        order.b2bSyncStatus === 'ACCEPTED'
+                          ? 'bg-emerald-100 text-emerald-800'
+                          : order.b2bSyncStatus === 'REJECTED'
+                          ? 'bg-rose-100 text-rose-800'
+                          : 'bg-amber-100 text-amber-800'
+                      }`}>
+                        {order.b2bSyncStatus || 'PENDING_ACCEPTANCE'}
+                      </span>
+                    </h4>
+                    <p className="text-[11px] text-indigo-700 mt-0.5">
+                      Originating Entity: <strong>{order.sourceBusinessName || 'Main Business'}</strong>
+                      {order.sourceSalesOrderNumber && ` • Sales Order #${order.sourceSalesOrderNumber}`}
+                      {order.sourceSalesInvoiceNumber && ` • Sales Invoice #${order.sourceSalesInvoiceNumber}`}
+                    </p>
+                  </div>
+                </div>
+              </div>
+              {order.rejectionReason && (
+                <div className="text-xs text-rose-700 bg-rose-50 p-2.5 rounded-lg border border-rose-200 mt-2">
+                  <strong>Rejection Reason:</strong> {order.rejectionReason}
+                </div>
+              )}
+              {order.syncNotes && (
+                <p className="text-[11px] text-slate-600 mt-1">
+                  {order.syncNotes}
+                </p>
+              )}
+              <div className="text-[11px] text-indigo-900 bg-white/80 p-2.5 rounded-lg border border-indigo-100 font-medium">
+                <strong>Documentary Booking Only:</strong> This synchronized order reserves no stock and creates no financial liability in this godown until you inspect physical goods and click <em>Convert to Purchase Invoice</em>.
+              </div>
+            </div>
+          )}
+
           {/* Supplier Info & Order Metadata */}
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
             <div className="p-4 rounded-xl border border-slate-200 bg-slate-50/50 space-y-2">
@@ -434,12 +520,38 @@ export const PurchaseOrderDetailModal: React.FC<PurchaseOrderDetailModalProps> =
         {/* Footer Actions */}
         <div className="px-6 py-4 border-t border-slate-200 bg-slate-50/70 flex items-center justify-between">
           <div className="flex items-center gap-2">
-            {canCancel && (
+            {order.isB2bSynchronized && (order.b2bSyncStatus === 'PENDING' || order.b2bSyncStatus === 'PENDING_ACCEPTANCE') && order.status === 'OPEN' ? (
+              <>
+                <button
+                  type="button"
+                  onClick={handleAcceptOrder}
+                  disabled={actionLoading}
+                  className="inline-flex items-center gap-1.5 px-3.5 py-2 text-xs font-semibold text-white bg-emerald-600 hover:bg-emerald-700 rounded-xl shadow-xs transition-colors disabled:opacity-50 cursor-pointer"
+                >
+                  <CheckCircle2 className="w-4 h-4" />
+                  <span>{actionLoading ? 'Accepting...' : 'Accept Order'}</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setRejectReason('');
+                    setRejectModalOpen(true);
+                  }}
+                  disabled={actionLoading}
+                  className="inline-flex items-center gap-1.5 px-3 py-2 text-xs font-semibold text-rose-700 bg-rose-50 border border-rose-200 rounded-xl hover:bg-rose-100 transition-colors disabled:opacity-50 cursor-pointer"
+                >
+                  <XCircle className="w-4 h-4" />
+                  <span>Reject Order</span>
+                </button>
+              </>
+            ) : null}
+
+            {canCancel && !order.isB2bSynchronized && (
               <button
                 type="button"
                 onClick={() => setCancelModalOpen(true)}
                 disabled={actionLoading}
-                className="inline-flex items-center gap-1.5 px-3 py-2 text-xs font-semibold text-rose-700 bg-rose-50 border border-rose-200 rounded-xl hover:bg-rose-100 transition-colors disabled:opacity-50"
+                className="inline-flex items-center gap-1.5 px-3 py-2 text-xs font-semibold text-rose-700 bg-rose-50 border border-rose-200 rounded-xl hover:bg-rose-100 transition-colors disabled:opacity-50 cursor-pointer"
               >
                 <XCircle className="w-4 h-4" />
                 <span>Cancel Order</span>
@@ -453,12 +565,12 @@ export const PurchaseOrderDetailModal: React.FC<PurchaseOrderDetailModalProps> =
           </div>
 
           <div className="flex items-center gap-3">
-            {canConvert && onConvert && (
+            {canConvert && onConvert && (!order.isB2bSynchronized || (order.b2bSyncStatus !== 'PENDING' && order.b2bSyncStatus !== 'PENDING_ACCEPTANCE')) && (
               <button
                 type="button"
                 onClick={() => onConvert(order.id)}
                 disabled={actionLoading}
-                className="inline-flex items-center gap-2 px-4 py-2 text-xs font-semibold text-white bg-blue-600 hover:bg-blue-700 rounded-xl shadow-xs transition-colors disabled:opacity-50"
+                className="inline-flex items-center gap-2 px-4 py-2 text-xs font-semibold text-white bg-blue-600 hover:bg-blue-700 rounded-xl shadow-xs transition-colors disabled:opacity-50 cursor-pointer"
               >
                 <FileCheck className="w-4 h-4" />
                 <span>Convert to Purchase Invoice</span>
@@ -468,7 +580,7 @@ export const PurchaseOrderDetailModal: React.FC<PurchaseOrderDetailModalProps> =
             <button
               type="button"
               onClick={onClose}
-              className="px-4 py-2 text-xs font-semibold text-slate-700 bg-white border border-slate-300 hover:bg-slate-50 rounded-xl shadow-2xs transition-colors"
+              className="px-4 py-2 text-xs font-semibold text-slate-700 bg-white border border-slate-300 hover:bg-slate-50 rounded-xl shadow-2xs transition-colors cursor-pointer"
             >
               Close
             </button>
@@ -509,7 +621,7 @@ export const PurchaseOrderDetailModal: React.FC<PurchaseOrderDetailModalProps> =
                   type="button"
                   onClick={() => setCancelModalOpen(false)}
                   disabled={actionLoading}
-                  className="px-3 py-1.5 text-xs font-medium text-slate-700 bg-white border border-slate-300 rounded-xl hover:bg-slate-50 transition-colors"
+                  className="px-3 py-1.5 text-xs font-medium text-slate-700 bg-white border border-slate-300 rounded-xl hover:bg-slate-50 transition-colors cursor-pointer"
                 >
                   Go Back
                 </button>
@@ -517,9 +629,60 @@ export const PurchaseOrderDetailModal: React.FC<PurchaseOrderDetailModalProps> =
                   type="button"
                   onClick={handleCancelOrder}
                   disabled={actionLoading || !cancelReason.trim()}
-                  className="px-4 py-1.5 text-xs font-semibold text-white bg-rose-600 hover:bg-rose-700 rounded-xl shadow-xs transition-colors disabled:opacity-50"
+                  className="px-4 py-1.5 text-xs font-semibold text-white bg-rose-600 hover:bg-rose-700 rounded-xl shadow-xs transition-colors disabled:opacity-50 cursor-pointer"
                 >
                   {actionLoading ? 'Cancelling...' : 'Confirm Cancellation'}
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* Rejection Reason Dialog */}
+        {rejectModalOpen && (
+          <div className="fixed inset-0 z-60 bg-slate-900/40 backdrop-blur-2xs flex items-center justify-center p-4">
+            <div className="bg-white rounded-2xl p-6 max-w-md w-full shadow-2xl border border-slate-200 space-y-4">
+              <div className="flex items-center gap-3 text-rose-600">
+                <div className="p-2 rounded-xl bg-rose-50 border border-rose-100">
+                  <AlertTriangle className="w-5 h-5" />
+                </div>
+                <h3 className="text-base font-bold text-slate-900">
+                  Reject Synced Order #{order.orderNumber}
+                </h3>
+              </div>
+
+              <p className="text-xs text-slate-600">
+                Are you sure you want to reject this auto-synced purchase order? Main business will be notified.
+              </p>
+
+              <div>
+                <label className="block text-xs font-medium text-slate-700 mb-1">
+                  Reason for Rejection <span className="text-rose-500">*</span>
+                </label>
+                <textarea
+                  value={rejectReason}
+                  onChange={e => setRejectReason(e.target.value)}
+                  placeholder="e.g. Price dispute, wrong batch/powers allocated, requested modification..."
+                  className="w-full h-20 px-3 py-2 text-xs border border-slate-300 rounded-xl focus:ring-2 focus:ring-rose-500/20 focus:border-rose-500 outline-hidden resize-none"
+                />
+              </div>
+
+              <div className="flex justify-end gap-2 pt-2">
+                <button
+                  type="button"
+                  onClick={() => setRejectModalOpen(false)}
+                  disabled={actionLoading}
+                  className="px-3 py-1.5 text-xs font-medium text-slate-700 bg-white border border-slate-300 rounded-xl hover:bg-slate-50 transition-colors cursor-pointer"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="button"
+                  onClick={handleRejectOrder}
+                  disabled={actionLoading || !rejectReason.trim()}
+                  className="px-4 py-1.5 text-xs font-semibold text-white bg-rose-600 hover:bg-rose-700 rounded-xl shadow-xs transition-colors disabled:opacity-50 cursor-pointer"
+                >
+                  {actionLoading ? 'Rejecting...' : 'Confirm Rejection'}
                 </button>
               </div>
             </div>

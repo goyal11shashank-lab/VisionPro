@@ -18,6 +18,7 @@ export type ReservationStatus = 'ACTIVE' | 'RELEASED' | 'CONVERTED' | 'CANCELLED
 export interface OpeningStockInput {
   batchId: string;
   quantity: number; // pairs
+  godownId?: string | null;
   date?: string | Date;
   reason?: string;
 }
@@ -25,6 +26,7 @@ export interface OpeningStockInput {
 export interface CreateReservationInput {
   batchId: string;
   quantity: number; // pairs
+  godownId?: string | null;
   referenceType?: string;
   referenceId?: string;
   notes?: string;
@@ -59,7 +61,8 @@ export class StockService {
   static async lockAndGetStock(
     client: any,
     businessId: string,
-    batchId: string
+    batchId: string,
+    godownId?: string | null
   ): Promise<{
     stockId: string;
     physicalStock: number;
@@ -76,21 +79,23 @@ export class StockService {
       throw new Error(`Optical batch ${batchId} not found in this business.`);
     }
 
+    const targetGodown = godownId || null;
+
     // 2. Ensure optical_stocks row exists
     await client.query(
-      `INSERT INTO optical_stocks (business_id, batch_id, physical_stock, reserved_stock, available_stock)
-       VALUES ($1, $2, '0.00', '0.00', '0.00')
-       ON CONFLICT (business_id, batch_id) DO NOTHING`,
-      [businessId, batchId]
+      `INSERT INTO optical_stocks (business_id, batch_id, godown_id, physical_stock, reserved_stock, available_stock)
+       VALUES ($1, $2, $3, '0.00', '0.00', '0.00')
+       ON CONFLICT (business_id, batch_id, COALESCE(godown_id, '00000000-0000-0000-0000-000000000000'::uuid)) DO NOTHING`,
+      [businessId, batchId, targetGodown]
     );
 
     // 3. Lock row FOR UPDATE
     const stockRes = await client.query(
       `SELECT id, physical_stock, reserved_stock, available_stock 
        FROM optical_stocks 
-       WHERE business_id = $1 AND batch_id = $2 
+       WHERE business_id = $1 AND batch_id = $2 AND ((godown_id IS NULL AND $3::uuid IS NULL) OR godown_id = $3::uuid)
        FOR UPDATE`,
-      [businessId, batchId]
+      [businessId, batchId, targetGodown]
     );
 
     const row = stockRes.rows[0];
@@ -109,19 +114,17 @@ export class StockService {
   /**
    * Reads current stock balance for a batch
    */
-  static async getStock(businessId: string, batchId: string) {
-    const [row] = await db
-      .select({
-        batchId: opticalStocks.batchId,
-        physicalStock: opticalStocks.physicalStock,
-        reservedStock: opticalStocks.reservedStock,
-        availableStock: opticalStocks.availableStock,
-        updatedAt: opticalStocks.updatedAt,
-      })
-      .from(opticalStocks)
-      .where(and(eq(opticalStocks.businessId, businessId), eq(opticalStocks.batchId, batchId)))
-      .limit(1);
+  static async getStock(businessId: string, batchId: string, godownId?: string | null) {
+    const targetGodown = godownId || null;
+    const res = await pool.query(
+      `SELECT batch_id, physical_stock, reserved_stock, available_stock, updated_at
+       FROM optical_stocks
+       WHERE business_id = $1 AND batch_id = $2 AND ((godown_id IS NULL AND $3::uuid IS NULL) OR godown_id = $3::uuid)
+       LIMIT 1`,
+      [businessId, batchId, targetGodown]
+    );
 
+    const row = res.rows[0];
     if (!row) {
       return {
         batchId,
@@ -132,19 +135,19 @@ export class StockService {
     }
 
     return {
-      batchId: row.batchId,
-      physicalStock: round2(parseFloat(row.physicalStock)),
-      reservedStock: round2(parseFloat(row.reservedStock)),
-      availableStock: round2(parseFloat(row.availableStock)),
-      updatedAt: row.updatedAt,
+      batchId: row.batch_id,
+      physicalStock: round2(parseFloat(row.physical_stock)),
+      reservedStock: round2(parseFloat(row.reserved_stock)),
+      availableStock: round2(parseFloat(row.available_stock)),
+      updatedAt: row.updated_at,
     };
   }
 
   /**
    * Reads available stock specifically
    */
-  static async getAvailableStock(businessId: string, batchId: string): Promise<number> {
-    const stock = await this.getStock(businessId, batchId);
+  static async getAvailableStock(businessId: string, batchId: string, godownId?: string | null): Promise<number> {
+    const stock = await this.getStock(businessId, batchId, godownId);
     return stock.availableStock;
   }
 
@@ -154,7 +157,8 @@ export class StockService {
    * Rejects if opening stock was already posted for this batch.
    */
   static async recordOpeningStock(businessId: string, input: OpeningStockInput, userId?: string) {
-    const { batchId, reason } = input;
+    const { batchId, reason, godownId } = input;
+    const targetGodown = godownId || null;
     const quantity = round2(input.quantity);
 
     if (!isValidOpticalQuantity(quantity)) {
@@ -165,22 +169,23 @@ export class StockService {
     try {
       await client.query('BEGIN');
 
-      // Check if opening stock already recorded for this batch
+      // Check if opening stock already recorded for this batch in this location
       const existingOpening = await client.query(
         `SELECT id FROM stock_ledger 
          WHERE business_id = $1 AND batch_id = $2 AND transaction_type = 'OPENING_STOCK'
+         AND ((godown_id IS NULL AND $3::uuid IS NULL) OR godown_id = $3::uuid)
          LIMIT 1`,
-        [businessId, batchId]
+        [businessId, batchId, targetGodown]
       );
 
       if (existingOpening.rows.length > 0) {
         throw new Error(
-          'Opening stock has already been initialized for this Optical Batch.'
+          'Opening stock has already been initialized for this Optical Batch in this location.'
         );
       }
 
       // Lock current stock
-      const stock = await this.lockAndGetStock(client, businessId, batchId);
+      const stock = await this.lockAndGetStock(client, businessId, batchId, targetGodown);
 
       const newPhysical = round2(stock.physicalStock + quantity);
       const newAvailable = round2(newPhysical - stock.reservedStock);
@@ -198,14 +203,15 @@ export class StockService {
       // Write Stock Ledger
       const ledgerRes = await client.query(
         `INSERT INTO stock_ledger (
-          business_id, batch_id, transaction_type, reference_type, reference_id,
+          business_id, batch_id, godown_id, transaction_type, reference_type, reference_id,
           quantity_in, quantity_out, reserved_in, reserved_out, balance,
           reason, created_by, created_at
-        ) VALUES ($1, $2, 'OPENING_STOCK', 'MANUAL_ENTRY', NULL, $3, '0.00', '0.00', '0.00', $4, $5, $6, $7)
+        ) VALUES ($1, $2, $3, 'OPENING_STOCK', 'MANUAL_ENTRY', NULL, $4, '0.00', '0.00', '0.00', $5, $6, $7, $8)
         RETURNING *`,
         [
           businessId,
           batchId,
+          targetGodown,
           quantity.toFixed(2),
           newPhysical.toFixed(2),
           reason || 'Opening Stock Initial Entry',
@@ -226,6 +232,7 @@ export class StockService {
         entityId: ledgerRes.rows[0].id,
         newValue: {
           batchId,
+          godownId: targetGodown,
           quantityIn: quantity,
           newPhysical,
           newAvailable,
@@ -256,7 +263,8 @@ export class StockService {
    * Rejects if requested quantity exceeds current available stock.
    */
   static async createReservation(businessId: string, input: CreateReservationInput, userId?: string) {
-    const { batchId, referenceType, referenceId, notes } = input;
+    const { batchId, referenceType, referenceId, notes, godownId } = input;
+    const targetGodown = godownId || null;
     const quantity = round2(input.quantity);
 
     if (!isValidOpticalQuantity(quantity)) {
@@ -267,7 +275,7 @@ export class StockService {
     try {
       await client.query('BEGIN');
 
-      const stock = await this.lockAndGetStock(client, businessId, batchId);
+      const stock = await this.lockAndGetStock(client, businessId, batchId, targetGodown);
 
       // Manual holds / non-sales reservations require available stock unless allowNegative is explicitly permitted
       if (!input.allowNegative && referenceType !== 'SALES_ORDER' && quantity > stock.availableStock) {
@@ -291,12 +299,13 @@ export class StockService {
       // Create stock_reservations record
       const resIns = await client.query(
         `INSERT INTO stock_reservations (
-          business_id, batch_id, quantity, status, reference_type, reference_id, notes, created_by, created_at
-        ) VALUES ($1, $2, $3, 'ACTIVE', $4, $5, $6, $7, NOW())
+          business_id, batch_id, godown_id, quantity, status, reference_type, reference_id, notes, created_by, created_at
+        ) VALUES ($1, $2, $3, $4, 'ACTIVE', $5, $6, $7, $8, NOW())
         RETURNING *`,
         [
           businessId,
           batchId,
+          targetGodown,
           quantity.toFixed(2),
           referenceType || 'MANUAL_HOLD',
           referenceId || null,
@@ -310,13 +319,14 @@ export class StockService {
       // Write Stock Ledger (Reservation only, physical balance remains unchanged)
       await client.query(
         `INSERT INTO stock_ledger (
-          business_id, batch_id, transaction_type, reference_type, reference_id,
+          business_id, batch_id, godown_id, transaction_type, reference_type, reference_id,
           quantity_in, quantity_out, reserved_in, reserved_out, balance,
           reason, created_by, created_at
-        ) VALUES ($1, $2, 'RESERVATION', $3, $4, '0.00', '0.00', $5, '0.00', $6, $7, $8, NOW())`,
+        ) VALUES ($1, $2, $3, 'RESERVATION', $4, $5, '0.00', '0.00', $6, '0.00', $7, $8, $9, NOW())`,
         [
           businessId,
           batchId,
+          targetGodown,
           referenceType || 'MANUAL_HOLD',
           reservation.id,
           quantity.toFixed(2),
@@ -391,9 +401,10 @@ export class StockService {
 
       const quantity = round2(parseFloat(reservation.quantity));
       const batchId = reservation.batch_id;
+      const targetGodown = reservation.godown_id || null;
 
       // Lock stock row
-      const stock = await this.lockAndGetStock(client, businessId, batchId);
+      const stock = await this.lockAndGetStock(client, businessId, batchId, targetGodown);
 
       const newReserved = Math.max(0, round2(stock.reservedStock - quantity));
       const newAvailable = round2(stock.physicalStock - newReserved);
@@ -417,13 +428,14 @@ export class StockService {
       // Write Stock Ledger entry
       await client.query(
         `INSERT INTO stock_ledger (
-          business_id, batch_id, transaction_type, reference_type, reference_id,
+          business_id, batch_id, godown_id, transaction_type, reference_type, reference_id,
           quantity_in, quantity_out, reserved_in, reserved_out, balance,
           reason, created_by, created_at
-        ) VALUES ($1, $2, 'RESERVATION_RELEASE', $3, $4, '0.00', '0.00', '0.00', $5, $6, $7, $8, NOW())`,
+        ) VALUES ($1, $2, $3, 'RESERVATION_RELEASE', $4, $5, '0.00', '0.00', '0.00', $6, $7, $8, $9, NOW())`,
         [
           businessId,
           batchId,
+          targetGodown,
           reservation.reference_type,
           reservation.id,
           quantity.toFixed(2),
@@ -496,9 +508,10 @@ export class StockService {
 
       const quantity = round2(parseFloat(reservation.quantity));
       const batchId = reservation.batch_id;
+      const targetGodown = reservation.godown_id || null;
 
       // Lock stock row
-      const stock = await this.lockAndGetStock(client, businessId, batchId);
+      const stock = await this.lockAndGetStock(client, businessId, batchId, targetGodown);
 
       const newReserved = Math.max(0, round2(stock.reservedStock - quantity));
       const newAvailable = round2(stock.physicalStock - newReserved);
@@ -522,13 +535,14 @@ export class StockService {
       // Write Stock Ledger entry
       await client.query(
         `INSERT INTO stock_ledger (
-          business_id, batch_id, transaction_type, reference_type, reference_id,
+          business_id, batch_id, godown_id, transaction_type, reference_type, reference_id,
           quantity_in, quantity_out, reserved_in, reserved_out, balance,
           reason, created_by, created_at
-        ) VALUES ($1, $2, 'RESERVATION_RELEASE', $3, $4, '0.00', '0.00', '0.00', $5, $6, $7, $8, NOW())`,
+        ) VALUES ($1, $2, $3, 'RESERVATION_RELEASE', $4, $5, '0.00', '0.00', '0.00', $6, $7, $8, $9, NOW())`,
         [
           businessId,
           batchId,
+          targetGodown,
           reservation.reference_type,
           reservation.id,
           quantity.toFixed(2),
@@ -607,9 +621,10 @@ export class StockService {
 
       const quantity = round2(parseFloat(reservation.quantity));
       const batchId = reservation.batch_id;
+      const targetGodown = reservation.godown_id || null;
 
       // Lock stock row
-      const stock = await this.lockAndGetStock(client, businessId, batchId);
+      const stock = await this.lockAndGetStock(client, businessId, batchId, targetGodown);
 
       // Conversion reduces physical stock AND reserved stock
       const newPhysical = round2(stock.physicalStock - quantity);
@@ -637,13 +652,14 @@ export class StockService {
       // Write Stock Ledger entry
       await client.query(
         `INSERT INTO stock_ledger (
-          business_id, batch_id, transaction_type, reference_type, reference_id,
+          business_id, batch_id, godown_id, transaction_type, reference_type, reference_id,
           quantity_in, quantity_out, reserved_in, reserved_out, balance,
           reason, created_by, created_at
-        ) VALUES ($1, $2, 'RESERVATION_CONVERSION', $3, $4, '0.00', $5, '0.00', $6, $7, $8, $9, NOW())`,
+        ) VALUES ($1, $2, $3, 'RESERVATION_CONVERSION', $4, $5, '0.00', $6, '0.00', $7, $8, $9, $10, NOW())`,
         [
           businessId,
           batchId,
+          targetGodown,
           input.referenceType || reservation.reference_type || 'SALES_INVOICE',
           input.referenceId || reservation.reference_id || reservation.id,
           quantity.toFixed(2),
@@ -905,7 +921,8 @@ export class StockService {
       // If reservation is ACTIVE, release hold
       if (reservation.status === 'ACTIVE') {
         const quantity = round2(parseFloat(reservation.quantity));
-        const stock = await this.lockAndGetStock(client, businessId, reservation.batch_id);
+        const targetGodown = reservation.godown_id || null;
+        const stock = await this.lockAndGetStock(client, businessId, reservation.batch_id, targetGodown);
 
         const newReserved = Math.max(0, round2(stock.reservedStock - quantity));
         const newAvailable = round2(stock.physicalStock - newReserved);
@@ -920,13 +937,14 @@ export class StockService {
         // Record release in ledger
         await client.query(
           `INSERT INTO stock_ledger (
-            business_id, batch_id, transaction_type, reference_type, reference_id,
+            business_id, batch_id, godown_id, transaction_type, reference_type, reference_id,
             quantity_in, quantity_out, reserved_in, reserved_out, balance,
             reason, created_by, created_at
-          ) VALUES ($1, $2, 'RESERVATION_RELEASE', $3, $4, '0.00', '0.00', '0.00', $5, $6, $7, $8, NOW())`,
+          ) VALUES ($1, $2, $3, 'RESERVATION_RELEASE', $4, $5, '0.00', '0.00', '0.00', $6, $7, $8, $9, NOW())`,
           [
             businessId,
             reservation.batch_id,
+            targetGodown,
             reservation.reference_type,
             reservation.id,
             quantity.toFixed(2),
@@ -1079,10 +1097,17 @@ export class StockService {
       search?: string;
       limit?: number;
       offset?: number;
+      godownId?: string | null;
     } = {}
   ) {
     const limit = Math.min(filters.limit || 50, 200);
     const offset = filters.offset || 0;
+
+    const stockJoinCondition = filters.godownId !== undefined
+      ? (filters.godownId === null
+          ? and(eq(opticalBatches.id, opticalStocks.batchId), eq(opticalBatches.businessId, opticalStocks.businessId), sql`${opticalStocks.godownId} IS NULL`)
+          : and(eq(opticalBatches.id, opticalStocks.batchId), eq(opticalBatches.businessId, opticalStocks.businessId), eq(opticalStocks.godownId, filters.godownId)))
+      : and(eq(opticalBatches.id, opticalStocks.batchId), eq(opticalBatches.businessId, opticalStocks.businessId));
 
     let query = db
       .select({
@@ -1098,7 +1123,7 @@ export class StockService {
       .innerJoin(categories, eq(opticalBatches.categoryId, categories.id))
       .leftJoin(
         opticalStocks,
-        and(eq(opticalBatches.id, opticalStocks.batchId), eq(opticalBatches.businessId, opticalStocks.businessId))
+        stockJoinCondition
       )
       .where(eq(opticalBatches.businessId, businessId));
 

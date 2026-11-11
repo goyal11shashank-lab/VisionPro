@@ -2,6 +2,8 @@ import { Router, Request, Response } from 'express';
 import { authenticateToken } from '../middleware/auth.js';
 import { requireAnyPermission } from '../middleware/permission.js';
 import { PurchaseService } from '../services/purchaseService.js';
+import { B2bOrderSyncService } from '../services/b2bOrderSyncService.js';
+import { PurchaseExcelImportService } from '../services/purchaseExcelImportService.js';
 
 const router = Router();
 
@@ -37,10 +39,12 @@ router.get(
   async (req: Request, res: Response) => {
     try {
       const businessId = req.user!.currentBusinessId;
+      const targetGodownId = req.user?.assignedGodownId || (req.query.godownId as string | undefined);
       const { supplierPartyId, status, search, limit, offset } = req.query;
       const result = await PurchaseService.getPurchaseOrders(businessId, {
         supplierPartyId: supplierPartyId as string,
         status: status as string,
+        godownId: targetGodownId,
         search: search as string,
         limit: limit ? parseInt(limit as string, 10) : 50,
         offset: offset ? parseInt(offset as string, 10) : 0,
@@ -58,7 +62,11 @@ router.post(
   async (req: Request, res: Response) => {
     try {
       const businessId = req.user!.currentBusinessId;
-      const order = await PurchaseService.createPurchaseOrder(businessId, req.body, req.user!.id);
+      const orderPayload = {
+        ...req.body,
+        godownId: req.user?.assignedGodownId || req.body.godownId || null,
+      };
+      const order = await PurchaseService.createPurchaseOrder(businessId, orderPayload, req.user!.id);
       res.status(201).json(order);
     } catch (err: any) {
       res.status(400).json({ error: 'CREATE_ORDER_FAILED', message: err.message });
@@ -73,6 +81,10 @@ router.get(
     try {
       const businessId = req.user!.currentBusinessId;
       const order = await PurchaseService.getPurchaseOrderById(businessId, req.params.id);
+      if (req.user?.assignedGodownId && order.godownId && order.godownId !== req.user.assignedGodownId) {
+        res.status(403).json({ error: 'PERMISSION_DENIED', message: 'Access denied: You cannot view purchase orders for another godown.' });
+        return;
+      }
       res.json(order);
     } catch (err: any) {
       res.status(404).json({ error: 'ORDER_NOT_FOUND', message: err.message });
@@ -86,6 +98,15 @@ router.put(
   async (req: Request, res: Response) => {
     try {
       const businessId = req.user!.currentBusinessId;
+      const existing = await PurchaseService.getPurchaseOrderById(businessId, req.params.id);
+      if (req.user?.assignedGodownId && existing.godownId && existing.godownId !== req.user.assignedGodownId) {
+        res.status(403).json({ error: 'PERMISSION_DENIED', message: 'Access denied: You cannot edit purchase orders for another godown.' });
+        return;
+      }
+      if (existing.isB2bSynchronized) {
+        res.status(400).json({ error: 'AUTO_SYNCED_ORDER_LOCKED', message: 'Auto-synchronized B2B purchase orders cannot be modified directly. Please accept or reject the order as billed by Main Business.' });
+        return;
+      }
       const order = await PurchaseService.updatePurchaseOrder(businessId, req.params.id, req.body, req.user!.id);
       res.json(order);
     } catch (err: any) {
@@ -100,6 +121,11 @@ router.post(
   async (req: Request, res: Response) => {
     try {
       const businessId = req.user!.currentBusinessId;
+      const existing = await PurchaseService.getPurchaseOrderById(businessId, req.params.id);
+      if (req.user?.assignedGodownId && existing.godownId && existing.godownId !== req.user.assignedGodownId) {
+        res.status(403).json({ error: 'PERMISSION_DENIED', message: 'Access denied: You cannot cancel purchase orders for another godown.' });
+        return;
+      }
       const { reason } = req.body;
       const order = await PurchaseService.cancelPurchaseOrder(businessId, req.params.id, reason, req.user!.id);
       res.json(order);
@@ -115,10 +141,71 @@ router.post(
   async (req: Request, res: Response) => {
     try {
       const businessId = req.user!.currentBusinessId;
+      const existing = await PurchaseService.getPurchaseOrderById(businessId, req.params.id);
+      if (req.user?.assignedGodownId && existing.godownId && existing.godownId !== req.user.assignedGodownId) {
+        res.status(403).json({ error: 'PERMISSION_DENIED', message: 'Access denied: You cannot convert purchase orders for another godown.' });
+        return;
+      }
+      if (existing.isB2bSynchronized && (existing.b2bSyncStatus === 'PENDING' || existing.b2bSyncStatus === 'PENDING_ACCEPTANCE')) {
+        res.status(400).json({ error: 'ACCEPTANCE_REQUIRED', message: 'This auto-synced order requires dealer acceptance before it can be converted to a purchase invoice.' });
+        return;
+      }
       const invoice = await PurchaseService.convertPurchaseOrderToInvoice(businessId, req.params.id, req.body, req.user!.id);
       res.status(201).json(invoice);
     } catch (err: any) {
       res.status(400).json({ error: 'CONVERT_ORDER_FAILED', message: err.message });
+    }
+  }
+);
+
+/**
+ * POST /api/purchases/orders/:id/accept
+ * Dealer accepts auto-synced Purchase Order
+ */
+router.post(
+  '/orders/:id/accept',
+  requireAnyPermission(['purchase:create', 'purchase.create', 'purchase:view']),
+  async (req: Request, res: Response) => {
+    try {
+      const businessId = req.user!.currentBusinessId;
+      const godownId = req.user?.assignedGodownId || null;
+      const result = await B2bOrderSyncService.acceptDealerPurchaseOrder(
+        businessId,
+        req.params.id,
+        godownId,
+        req.user!.id
+      );
+      res.json(result);
+    } catch (err: any) {
+      const isAuthError = err.message?.includes('Access denied') || err.message?.includes('permission') || err.message?.includes('another godown');
+      res.status(isAuthError ? 403 : 400).json({ error: isAuthError ? 'PERMISSION_DENIED' : 'ACCEPT_ORDER_FAILED', message: err.message });
+    }
+  }
+);
+
+/**
+ * POST /api/purchases/orders/:id/reject
+ * Dealer rejects auto-synced Purchase Order
+ */
+router.post(
+  '/orders/:id/reject',
+  requireAnyPermission(['purchase:create', 'purchase.create', 'purchase:view']),
+  async (req: Request, res: Response) => {
+    try {
+      const businessId = req.user!.currentBusinessId;
+      const godownId = req.user?.assignedGodownId || null;
+      const { reason } = req.body;
+      const result = await B2bOrderSyncService.rejectDealerPurchaseOrder(
+        businessId,
+        req.params.id,
+        godownId,
+        reason,
+        req.user!.id
+      );
+      res.json(result);
+    } catch (err: any) {
+      const isAuthError = err.message?.includes('Access denied') || err.message?.includes('permission') || err.message?.includes('another godown');
+      res.status(isAuthError ? 403 : 400).json({ error: isAuthError ? 'PERMISSION_DENIED' : 'REJECT_ORDER_FAILED', message: err.message });
     }
   }
 );
@@ -134,11 +221,13 @@ router.post(
 const listInvoicesHandler = async (req: Request, res: Response) => {
   try {
     const businessId = req.user!.currentBusinessId;
+    const targetGodownId = req.user?.assignedGodownId || (req.query.godownId as string | undefined);
     const { supplierPartyId, status, search, limit, offset, fromDate, toDate } = req.query;
 
     const result = await PurchaseService.getPurchaseInvoices(businessId, {
       supplierPartyId: supplierPartyId as string,
       status: status as string,
+      godownId: targetGodownId,
       search: search as string,
       limit: limit ? parseInt(limit as string, 10) : 100,
       offset: offset ? parseInt(offset as string, 10) : 0,
@@ -218,13 +307,40 @@ router.get(
 );
 
 /**
+ * POST /api/purchases/validate-excel-import
+ * Validates Excel rows for purchase invoice import:
+ * - Checks stock item existence
+ * - Checks batch existence in master (ZERO batch creation - rejects missing batches)
+ * - Groups batches under stock items, even if scattered across spreadsheet
+ */
+router.post(
+  '/validate-excel-import',
+  requireAnyPermission(['purchase:create', 'purchase.create', 'purchase:view', 'purchase.view']),
+  async (req: Request, res: Response) => {
+    try {
+      const businessId = req.user!.currentBusinessId;
+      const { rows } = req.body;
+      const result = await PurchaseExcelImportService.validateAndGroupImportRows(businessId, rows);
+      res.json(result);
+    } catch (err: any) {
+      console.error('[POST /api/purchases/validate-excel-import Error]', err);
+      res.status(400).json({ error: 'EXCEL_VALIDATION_FAILED', message: err.message });
+    }
+  }
+);
+
+/**
  * POST /api/purchases/invoices and POST /api/purchases
  * Create a new DRAFT purchase invoice
  */
 const createInvoiceHandler = async (req: Request, res: Response) => {
   try {
     const businessId = req.user!.currentBusinessId;
-    const invoice = await PurchaseService.createPurchaseInvoice(businessId, req.body, req.user!.id);
+    const invoicePayload = {
+      ...req.body,
+      godownId: req.user?.assignedGodownId || req.body.godownId || null,
+    };
+    const invoice = await PurchaseService.createPurchaseInvoice(businessId, invoicePayload, req.user!.id);
     res.status(201).json(invoice);
   } catch (err: any) {
     console.error('[POST /api/purchases Error]', err);

@@ -106,6 +106,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
         { id: 'master-stock-items', label: 'Stock Items', icon: QrCode, path: '/master/stock-items', permission: 'master:view' },
         { id: 'master-batches', label: 'Optical Batches & Powers', icon: Barcode, path: '/master/batches', permission: 'master:view' },
         { id: 'master-opening-stock', label: 'Opening Stock', icon: Boxes, path: '/master/opening-stock', permission: 'master:view' },
+        { id: 'master-extra-godowns', label: 'Extra Godowns', icon: Building2, path: '/inventory/locations/godowns', permission: 'master:view' },
       ],
     },
     {
@@ -244,7 +245,51 @@ export const Sidebar: React.FC<SidebarProps> = ({
     },
   ];
 
-  const sections = isDealer ? dealerSections : defaultSections;
+  const godownSections: NavSection[] = [
+    {
+      title: 'Inventory & Stock',
+      icon: Boxes,
+      items: [
+        { id: 'godown-my-stock', label: 'My Godown Stock', icon: QrCode, path: '/master/stock-items' },
+        { id: 'godown-main-stock-search', label: 'Main Warehouse Stock Search', icon: Store, path: '/inventory/main-warehouse-search' },
+        { id: 'godown-batches', label: 'Optical Batches & Powers', icon: Barcode, path: '/master/batches' },
+      ],
+    },
+    {
+      title: 'Sales & Receipts',
+      icon: ShoppingCart,
+      items: [
+        {
+          id: 'godown-sales-create',
+          label: 'Create Sales Invoice',
+          icon: Receipt,
+          path: '/sales/pos',
+          subItems: [
+            { id: 'godown-sales-pos', label: 'POS Billing', icon: Sparkles, path: '/sales/pos' },
+            { id: 'godown-sales-normal', label: 'Normal Sales Voucher', icon: FileSpreadsheet, path: '/sales/voucher/new' },
+          ],
+        },
+        { id: 'godown-sales-invoices', label: 'Sales Invoices Register', icon: Receipt, path: '/sales/invoices' },
+        { id: 'godown-sales-orders', label: 'Sales Orders', icon: ShoppingBag, path: '/sales/orders' },
+        { id: 'godown-customer-receipts', label: 'Customer Receipts', icon: ArrowDownLeft, path: '/accounts/receipts' },
+        { id: 'godown-customer-ledger', label: 'Customer Ledger', icon: BookOpen, path: '/sales/customer-ledger' },
+      ],
+    },
+    {
+      title: 'Purchases & Payments',
+      icon: Truck,
+      items: [
+        { id: 'godown-purchase-voucher', label: 'Normal Purchase Voucher', icon: FileSpreadsheet, path: '/purchase/voucher/new' },
+        { id: 'godown-purchase-invoices', label: 'Purchase Invoices Register', icon: Receipt, path: '/purchase/invoices' },
+        { id: 'godown-purchase-orders', label: 'Purchase Orders', icon: ShoppingCart, path: '/purchase/orders' },
+        { id: 'godown-supplier-payments', label: 'Supplier Payments', icon: ArrowUpRight, path: '/accounts/payments' },
+        { id: 'godown-supplier-ledger', label: 'Supplier Ledger', icon: BookOpen, path: '/parties/ledger' },
+      ],
+    },
+  ];
+
+  const isGodownUser = Boolean(user?.assignedGodown);
+  const sections = isGodownUser ? godownSections : isDealer ? dealerSections : defaultSections;
 
   const handleItemClick = (path: string) => {
     onNavigate(path);

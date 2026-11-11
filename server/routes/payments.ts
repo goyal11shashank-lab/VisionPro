@@ -307,6 +307,7 @@ router.get(
   async (req: Request, res: Response) => {
     try {
       const businessId = req.user!.currentBusinessId;
+      const targetGodownId = req.user?.assignedGodownId || (req.query.godownId as string | undefined);
       const {
         partyId,
         paymentType,
@@ -321,6 +322,7 @@ router.get(
 
       const result = await PaymentService.getPayments(businessId, {
         partyId: partyId as string,
+        godownId: targetGodownId,
         paymentType: paymentType as 'RECEIPT' | 'PAYMENT',
         paymentMode: paymentMode as string,
         status: status as string,
@@ -389,7 +391,10 @@ router.post(
     try {
       const businessId = req.user!.currentBusinessId;
       const userId = req.user!.id;
-      const data = req.body;
+      const data = {
+        ...req.body,
+        godownId: req.user?.assignedGodownId || req.body.godownId || null,
+      };
 
       const result = await PaymentService.createPayment(businessId, data, userId);
       res.status(201).json(result);

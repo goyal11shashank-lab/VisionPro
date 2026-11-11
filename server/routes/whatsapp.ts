@@ -75,6 +75,31 @@ router.get('/qr', async (req: Request, res: Response) => {
 });
 
 /**
+ * POST /api/whatsapp/pairing-code
+ * Request 8-character pairing code for linking via phone number without camera
+ */
+router.post('/pairing-code', async (req: Request, res: Response) => {
+  try {
+    const businessId = (req as any).businessId;
+    const { phone } = req.body;
+
+    if (!phone) {
+      return res.status(400).json({ success: false, error: 'Mobile phone number is required' });
+    }
+
+    const pairingCode = await WhatsAppService.requestPairingCode(businessId, phone);
+
+    res.json({
+      success: true,
+      pairingCode,
+      message: `Pairing code generated: ${pairingCode}. Enter this code on your phone in WhatsApp under Linked Devices → Link with phone number instead.`,
+    });
+  } catch (err: any) {
+    res.status(500).json({ success: false, error: err.message || 'Failed to generate pairing code' });
+  }
+});
+
+/**
  * POST /api/whatsapp/confirm-auth
  * Confirm authentication for the linking session
  */
@@ -211,7 +236,7 @@ router.post('/send-invoice', async (req: Request, res: Response) => {
       `SELECT si.*, p.name as party_name, p.mobile as party_mobile, p.alternate_mobile as party_alt_mobile,
               p.whatsapp_opt_in, b.name as biz_name, b.trade_name as biz_trade_name
        FROM sales_invoices si
-       JOIN parties p ON si.party_id = p.id
+       LEFT JOIN parties p ON si.party_id = p.id
        JOIN businesses b ON si.business_id = b.id
        WHERE si.business_id = $1 AND si.id = $2`,
       [businessId, invoiceId]
@@ -261,9 +286,19 @@ router.post('/send-invoice', async (req: Request, res: Response) => {
 
     const waMeUrl = WhatsAppService.generateWaMeLink(phoneVal.normalized, messageText);
 
+    const dispatchSuccess = (enqueueResult as any)?.success !== false;
+    if (!dispatchSuccess) {
+      return res.status(400).json({
+        success: false,
+        error: (enqueueResult as any)?.error || 'Failed to dispatch message via connected WhatsApp',
+        waMeUrl,
+        result: enqueueResult,
+      });
+    }
+
     res.json({
       success: true,
-      message: 'Invoice WhatsApp dispatch initiated',
+      message: (enqueueResult as any)?.message || 'Invoice successfully sent via connected WhatsApp',
       waMeUrl,
       result: enqueueResult,
     });

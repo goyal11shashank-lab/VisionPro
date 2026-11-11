@@ -25,6 +25,56 @@ export interface User {
   authorizedBusinesses?: UserBusinessAssignment[];
   defaultBusinessId?: string | null;
   defaultBusinessName?: string | null;
+  assignedGodownId?: string | null;
+  assignedGodown?: {
+    id: string;
+    name: string;
+    code: string;
+    godownType: string;
+    status: string;
+  } | null;
+}
+
+export interface Godown {
+  id: string;
+  businessId: string;
+  code: string;
+  name: string;
+  godownType: 'SECONDARY_WAREHOUSE' | 'DEALER_GODOWN';
+  address?: string | null;
+  contactPerson?: string | null;
+  mobile?: string | null;
+  dealerPartyId?: string | null;
+  dealerPartyName?: string | null;
+  status: 'ACTIVE' | 'INACTIVE';
+  enableB2bOrderSync?: boolean;
+  syncDirectInvoice?: boolean;
+  defaultProcessingPreference?: 'AUTO_ACCEPT' | 'REQUIRES_ACCEPTANCE';
+  syncStatus?: 'ACTIVE' | 'INACTIVE';
+  assignedUsersCount?: number;
+  createdAt: string;
+  updatedAt?: string;
+}
+
+export interface B2bOrderSyncLog {
+  id: string;
+  businessId: string;
+  sourceVoucherType: 'SALES_ORDER' | 'SALES_INVOICE';
+  sourceVoucherId: string;
+  sourceVoucherNumber: string;
+  destinationGodownId: string;
+  destinationGodownName?: string;
+  destinationGodownCode?: string;
+  dealerPartyName?: string;
+  destinationPurchaseOrderId?: string | null;
+  destinationPurchaseOrderNumber?: string | null;
+  eventType: 'ORDER_CREATED' | 'ORDER_UPDATED' | 'ORDER_CANCELLED' | 'INVOICE_FULFILLED' | 'INVOICE_CREATED';
+  status: 'SYNCED' | 'FAILED' | 'CONFLICT' | 'PENDING';
+  errorDetails?: string | null;
+  payload?: any;
+  retryCount: number;
+  createdAt: string;
+  updatedAt: string;
 }
 
 export interface Business {
@@ -579,6 +629,18 @@ export interface PurchaseOrder {
   supplierReference?: string | null;
   notes?: string | null;
   lines?: PurchaseOrderLine[];
+  // B2B Auto-Sync fields
+  godownId?: string | null;
+  source?: string | null;
+  dealerOrderId?: string | null;
+  isB2bSynchronized?: boolean;
+  b2bSyncStatus?: 'PENDING_ACCEPTANCE' | 'ACCEPTED' | 'REJECTED' | 'CONVERTED' | 'CANCELLED' | string | null;
+  sourceSalesOrderNumber?: string | null;
+  sourceSalesInvoiceNumber?: string | null;
+  sourceBusinessName?: string | null;
+  mainSalesOrderId?: string | null;
+  syncNotes?: string | null;
+  rejectionReason?: string | null;
   createdAt: string;
   updatedAt?: string;
 }

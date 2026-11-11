@@ -40,6 +40,8 @@ import { OutstandingAgingPage } from './pages/accounts/OutstandingAgingPage.js';
 import { ReportsCenterPage } from './pages/reports/ReportsCenterPage.js';
 import { StockReservationsPage } from './pages/sales/StockReservationsPage.js';
 import { OpeningStockPage } from './pages/inventory/OpeningStockPage.js';
+import { ExtraGodownsPage } from './pages/inventory/ExtraGodownsPage.js';
+import { MainWarehouseStockSearchPage } from './pages/inventory/MainWarehouseStockSearchPage.js';
 import { RefreshCw, ShieldCheck, Building2, LogOut } from 'lucide-react';
 import { UnsavedChangesProvider, useUnsavedChanges } from './context/UnsavedChangesContext.js';
 
@@ -249,6 +251,12 @@ const AppContent: React.FC = () => {
         return 'Dealer Operations Dashboard';
       case '/dealer/onboarding':
         return 'Dealer Setup Wizard';
+      case '/inventory/locations/godowns':
+      case '/inventory/godowns':
+      case '/admin/godowns':
+        return 'Extra Godowns & Secondary Warehouses';
+      case '/inventory/main-warehouse-search':
+        return 'Main Warehouse Stock Search';
       default:
         return 'Optical Billing & Management';
     }
@@ -341,6 +349,12 @@ const AppContent: React.FC = () => {
       case '/dealer/orders':
       case '/inventory/dealer-orders':
         return <DealerOrdersListPage onNavigate={navigate} />;
+      case '/inventory/locations/godowns':
+      case '/inventory/godowns':
+      case '/admin/godowns':
+        return <ExtraGodownsPage />;
+      case '/inventory/main-warehouse-search':
+        return <MainWarehouseStockSearchPage />;
       case '/dealer/payments':
       case '/dealer/payment-advices':
         return (

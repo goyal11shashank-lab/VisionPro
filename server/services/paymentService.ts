@@ -26,6 +26,7 @@ export interface AllocationItemInput {
 
 export interface CreatePaymentDto {
   partyId: string;
+  godownId?: string | null;
   paymentType: 'RECEIPT' | 'PAYMENT';
   paymentMode: 'CASH' | 'BANK' | 'UPI' | 'CHEQUE' | 'OTHER';
   amount: number;
@@ -241,19 +242,20 @@ export class PaymentService {
       // 4. Insert Payment Master
       const payInsertRes = await client.query(
         `INSERT INTO payments (
-          business_id, party_id, payment_number, payment_date,
+          business_id, party_id, godown_id, payment_number, payment_date,
           payment_type, payment_mode, amount, unallocated_amount,
           reference_number, reference_date, bank_name, notes,
           status, created_by, updated_by, created_at, updated_at
         ) VALUES (
-          $1, $2, $3, $4,
-          $5, $6, $7, $8,
-          $9, $10, $11, $12,
-          'DRAFT', $13, $13, NOW(), NOW()
+          $1, $2, $3, $4, $5,
+          $6, $7, $8, $9,
+          $10, $11, $12, $13,
+          'DRAFT', $14, $14, NOW(), NOW()
         ) RETURNING id`,
         [
           businessId,
           data.partyId,
+          data.godownId || null,
           paymentNumber,
           paymentDate,
           data.paymentType,
@@ -476,17 +478,20 @@ export class PaymentService {
         const prevBalance = lastLedgerRes.rows.length > 0 ? parseFloat(lastLedgerRes.rows[0].balance) : 0;
         const newBalance = round2(prevBalance - amountNum);
 
+        const godownId = payment.godown_id || null;
+
         await client.query(
           `INSERT INTO customer_ledgers (
-            business_id, party_id, transaction_type, reference_type, reference_id,
+            business_id, party_id, godown_id, transaction_type, reference_type, reference_id,
             debit, credit, balance, transaction_date, notes, created_by, created_at
           ) VALUES (
-            $1, $2, 'RECEIPT', 'PAYMENT', $3,
-            '0.00', $4, $5, $6, $7, $8, NOW()
+            $1, $2, $3, 'RECEIPT', 'PAYMENT', $4,
+            '0.00', $5, $6, $7, $8, $9, NOW()
           )`,
           [
             businessId,
             partyId,
+            godownId,
             paymentId,
             amountNum.toFixed(2),
             newBalance.toFixed(2),
@@ -511,18 +516,20 @@ export class PaymentService {
         );
         const prevBalance = lastLedgerRes.rows.length > 0 ? parseFloat(lastLedgerRes.rows[0].balance) : 0;
         const newBalance = round2(prevBalance - amountNum);
+        const godownId = payment.godown_id || null;
 
         await client.query(
           `INSERT INTO supplier_ledgers (
-            business_id, party_id, transaction_type, reference_type, reference_id,
+            business_id, party_id, godown_id, transaction_type, reference_type, reference_id,
             debit, credit, balance, transaction_date, notes, created_by, created_at
           ) VALUES (
-            $1, $2, 'PAYMENT', 'PAYMENT', $3,
-            $4, '0.00', $5, $6, $7, $8, NOW()
+            $1, $2, $3, 'PAYMENT', 'PAYMENT', $4,
+            $5, '0.00', $6, $7, $8, $9, NOW()
           )`,
           [
             businessId,
             partyId,
+            godownId,
             paymentId,
             amountNum.toFixed(2),
             newBalance.toFixed(2),
@@ -1791,6 +1798,7 @@ export class PaymentService {
     businessId: string,
     filters?: {
       partyId?: string;
+      godownId?: string | null;
       paymentType?: 'RECEIPT' | 'PAYMENT';
       paymentMode?: string;
       status?: string;
@@ -1808,6 +1816,15 @@ export class PaymentService {
     const conditions: string[] = [`p.business_id = $1`];
     const params: any[] = [businessId];
     let pIdx = 2;
+
+    if (filters?.godownId !== undefined) {
+      if (filters.godownId === null) {
+        conditions.push(`p.godown_id IS NULL`);
+      } else {
+        conditions.push(`p.godown_id = $${pIdx++}`);
+        params.push(filters.godownId);
+      }
+    }
 
     if (filters?.partyId) {
       conditions.push(`p.party_id = $${pIdx++}`);

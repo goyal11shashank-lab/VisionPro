@@ -38,6 +38,37 @@ export const businesses = pgTable('businesses', {
 ]);
 
 /**
+ * 1B. Godowns / Secondary Warehouses Table
+ * Individual extra godowns or dealer-operated warehouse locations linked to a parent business.
+ */
+export const godowns = pgTable('godowns', {
+  id: uuid('id').defaultRandom().primaryKey(),
+  businessId: uuid('business_id').references(() => businesses.id, { onDelete: 'cascade' }).notNull(),
+  code: varchar('code', { length: 50 }).notNull(), // e.g. GDN-001, unique within business
+  name: varchar('name', { length: 255 }).notNull(),
+  godownType: varchar('godown_type', { length: 50 }).default('SECONDARY_WAREHOUSE').notNull(), // SECONDARY_WAREHOUSE, DEALER_GODOWN
+  address: text('address'),
+  contactPerson: varchar('contact_person', { length: 255 }),
+  mobile: varchar('mobile', { length: 20 }),
+  dealerPartyId: uuid('dealer_party_id'), // optional linked dealer party
+  status: varchar('status', { length: 20 }).default('ACTIVE').notNull(), // ACTIVE, INACTIVE
+  enableB2bOrderSync: boolean('enable_b2b_order_sync').default(false).notNull(),
+  syncDirectInvoice: boolean('sync_direct_invoice').default(false).notNull(),
+  defaultProcessingPreference: varchar('default_processing_preference', { length: 50 }).default('AUTO_ACCEPT').notNull(), // AUTO_ACCEPT, REQUIRES_ACCEPTANCE
+  syncStatus: varchar('sync_status', { length: 50 }).default('ACTIVE').notNull(), // ACTIVE, INACTIVE
+  createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
+  updatedAt: timestamp('updated_at', { withTimezone: true }).defaultNow().notNull(),
+  createdBy: uuid('created_by'),
+}, (table) => [
+  uniqueIndex('godowns_biz_code_idx').on(table.businessId, table.code),
+  index('godowns_biz_idx').on(table.businessId),
+  index('godowns_status_idx').on(table.status),
+  index('godowns_type_idx').on(table.godownType),
+  index('godowns_dealer_party_idx').on(table.dealerPartyId),
+  index('godowns_b2b_sync_idx').on(table.enableB2bOrderSync),
+]);
+
+/**
  * 2. Users Table
  * Authentication and master user profiles.
  */
@@ -50,6 +81,8 @@ export const users = pgTable('users', {
   passwordHash: text('password_hash').notNull(),
   status: varchar('status', { length: 20 }).default('ACTIVE').notNull(), // ACTIVE, INACTIVE, LOCKED
   isSuperAdmin: boolean('is_super_admin').default(false).notNull(),
+  assignedGodownId: uuid('assigned_godown_id').references(() => godowns.id, { onDelete: 'set null' }),
+  userPermissionsOverride: jsonb('user_permissions_override').default({}),
   lastLoginAt: timestamp('last_login_at', { withTimezone: true }),
   createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
   updatedAt: timestamp('updated_at', { withTimezone: true }).defaultNow().notNull(),
@@ -59,6 +92,7 @@ export const users = pgTable('users', {
   index('users_email_idx').on(table.email),
   index('users_mobile_idx').on(table.mobile),
   index('users_status_idx').on(table.status),
+  index('users_godown_idx').on(table.assignedGodownId),
 ]);
 
 /**
@@ -439,12 +473,14 @@ export const opticalStocks = pgTable('optical_stocks', {
   id: uuid('id').defaultRandom().primaryKey(),
   businessId: uuid('business_id').references(() => businesses.id, { onDelete: 'cascade' }).notNull(),
   batchId: uuid('batch_id').references(() => opticalBatches.id, { onDelete: 'cascade' }).notNull(),
+  godownId: uuid('godown_id').references(() => godowns.id, { onDelete: 'cascade' }),
   physicalStock: numeric('physical_stock', { precision: 12, scale: 2 }).default('0.00').notNull(),
   reservedStock: numeric('reserved_stock', { precision: 12, scale: 2 }).default('0.00').notNull(),
   availableStock: numeric('available_stock', { precision: 12, scale: 2 }).default('0.00').notNull(),
   updatedAt: timestamp('updated_at', { withTimezone: true }).defaultNow().notNull(),
 }, (table) => [
-  uniqueIndex('optical_stocks_biz_batch_idx').on(table.businessId, table.batchId),
+  index('optical_stocks_biz_batch_idx').on(table.businessId, table.batchId),
+  index('optical_stocks_godown_idx').on(table.godownId),
   index('optical_stocks_biz_idx').on(table.businessId),
   index('optical_stocks_batch_idx').on(table.batchId),
 ]);
@@ -457,6 +493,7 @@ export const stockLedger = pgTable('stock_ledger', {
   id: uuid('id').defaultRandom().primaryKey(),
   businessId: uuid('business_id').references(() => businesses.id, { onDelete: 'cascade' }).notNull(),
   batchId: uuid('batch_id').references(() => opticalBatches.id, { onDelete: 'cascade' }).notNull(),
+  godownId: uuid('godown_id').references(() => godowns.id, { onDelete: 'restrict' }),
   transactionType: varchar('transaction_type', { length: 50 }).notNull(), // OPENING_STOCK, PURCHASE, PURCHASE_RETURN, SALE, SALES_RETURN, STOCK_TRANSFER, RESERVATION, RESERVATION_RELEASE, RESERVATION_CONVERSION, CANCELLATION_REVERSAL
   referenceType: varchar('reference_type', { length: 50 }), // INVOICE, BILL, MANUAL, TRANSFER
   referenceId: varchar('reference_id', { length: 100 }),
@@ -471,6 +508,7 @@ export const stockLedger = pgTable('stock_ledger', {
 }, (table) => [
   index('stock_ledger_biz_idx').on(table.businessId),
   index('stock_ledger_batch_idx').on(table.batchId),
+  index('stock_ledger_godown_idx').on(table.godownId),
   index('stock_ledger_type_idx').on(table.transactionType),
   index('stock_ledger_created_at_idx').on(table.createdAt),
   index('stock_ledger_biz_batch_date_idx').on(table.businessId, table.batchId, table.createdAt),
@@ -485,6 +523,7 @@ export const stockReservations = pgTable('stock_reservations', {
   id: uuid('id').defaultRandom().primaryKey(),
   businessId: uuid('business_id').references(() => businesses.id, { onDelete: 'cascade' }).notNull(),
   batchId: uuid('batch_id').references(() => opticalBatches.id, { onDelete: 'cascade' }).notNull(),
+  godownId: uuid('godown_id').references(() => godowns.id, { onDelete: 'cascade' }),
   quantity: numeric('quantity', { precision: 12, scale: 2 }).notNull(), // pairs
   status: varchar('status', { length: 20 }).default('ACTIVE').notNull(), // ACTIVE, RELEASED, CONVERTED, CANCELLED
   referenceType: varchar('reference_type', { length: 50 }).default('MANUAL_HOLD').notNull(), // MANUAL_HOLD, SALES_ORDER, CUSTOMER_HOLD, PATIENT_HOLD, RX_HOLD
@@ -498,6 +537,7 @@ export const stockReservations = pgTable('stock_reservations', {
 }, (table) => [
   index('stock_reservations_biz_idx').on(table.businessId),
   index('stock_reservations_batch_idx').on(table.batchId),
+  index('stock_reservations_godown_idx').on(table.godownId),
   index('stock_reservations_status_idx').on(table.status),
   index('stock_reservations_created_at_idx').on(table.createdAt),
   index('stock_reservations_biz_batch_status_idx').on(table.businessId, table.batchId, table.status),
@@ -650,6 +690,7 @@ export const parties = pgTable('parties', {
 export const purchaseOrders = pgTable('purchase_orders', {
   id: uuid('id').defaultRandom().primaryKey(),
   businessId: uuid('business_id').references(() => businesses.id, { onDelete: 'cascade' }).notNull(),
+  godownId: uuid('godown_id').references(() => godowns.id, { onDelete: 'restrict' }),
   supplierPartyId: uuid('supplier_party_id').references(() => parties.id, { onDelete: 'restrict' }).notNull(),
   orderNumber: varchar('order_number', { length: 100 }).notNull(), // PO-000001
   orderDate: timestamp('order_date', { withTimezone: true }).defaultNow().notNull(),
@@ -678,6 +719,13 @@ export const purchaseOrders = pgTable('purchase_orders', {
   mainSalesOrderId: uuid('main_sales_order_id'),
   mainSalesInvoiceId: uuid('main_sales_invoice_id'),
   convertedInvoiceId: uuid('converted_invoice_id'),
+  isB2bSynchronized: boolean('is_b2b_synchronized').default(false).notNull(),
+  b2bSyncStatus: varchar('b2b_sync_status', { length: 50 }).default('SYNCED').notNull(), // SYNCED, PENDING, ACCEPTED, REJECTED
+  sourceSalesOrderNumber: varchar('source_sales_order_number', { length: 100 }),
+  sourceSalesInvoiceNumber: varchar('source_sales_invoice_number', { length: 100 }),
+  sourceBusinessName: varchar('source_business_name', { length: 255 }),
+  syncNotes: text('sync_notes'),
+  rejectionReason: text('rejection_reason'),
   createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
   updatedAt: timestamp('updated_at', { withTimezone: true }).defaultNow().notNull(),
   createdBy: uuid('created_by').references(() => users.id, { onDelete: 'set null' }),
@@ -685,9 +733,12 @@ export const purchaseOrders = pgTable('purchase_orders', {
 }, (table) => [
   uniqueIndex('purchase_orders_biz_num_idx').on(table.businessId, table.orderNumber),
   index('purchase_orders_biz_idx').on(table.businessId),
+  index('purchase_orders_godown_idx').on(table.godownId),
   index('purchase_orders_supplier_idx').on(table.supplierPartyId),
   index('purchase_orders_status_idx').on(table.status),
   index('purchase_orders_date_idx').on(table.orderDate),
+  index('purchase_orders_b2b_sync_idx').on(table.isB2bSynchronized),
+  index('purchase_orders_main_so_idx').on(table.mainSalesOrderId),
 ]);
 
 export const purchaseOrderLines = pgTable('purchase_order_lines', {
@@ -731,6 +782,7 @@ export const purchaseOrderLineBatches = pgTable('purchase_order_line_batches', {
 export const purchaseInvoices = pgTable('purchase_invoices', {
   id: uuid('id').defaultRandom().primaryKey(),
   businessId: uuid('business_id').references(() => businesses.id, { onDelete: 'cascade' }).notNull(),
+  godownId: uuid('godown_id').references(() => godowns.id, { onDelete: 'restrict' }),
   supplierPartyId: uuid('supplier_party_id').references(() => parties.id, { onDelete: 'restrict' }).notNull(),
   purchaseOrderId: uuid('purchase_order_id').references(() => purchaseOrders.id, { onDelete: 'set null' }),
   invoiceNumber: varchar('invoice_number', { length: 50 }).notNull(), // Internal e.g. PUR-000001
@@ -766,6 +818,7 @@ export const purchaseInvoices = pgTable('purchase_invoices', {
 }, (table) => [
   uniqueIndex('purchase_invoices_biz_num_idx').on(table.businessId, table.invoiceNumber),
   index('purchase_invoices_biz_idx').on(table.businessId),
+  index('purchase_invoices_godown_idx').on(table.godownId),
   index('purchase_invoices_supplier_idx').on(table.supplierPartyId),
   index('purchase_invoices_order_idx').on(table.purchaseOrderId),
   index('purchase_invoices_date_idx').on(table.invoiceDate),
@@ -844,6 +897,7 @@ export const purchaseLots = pgTable('purchase_lots', {
 export const supplierLedgers = pgTable('supplier_ledgers', {
   id: uuid('id').defaultRandom().primaryKey(),
   businessId: uuid('business_id').references(() => businesses.id, { onDelete: 'cascade' }).notNull(),
+  godownId: uuid('godown_id').references(() => godowns.id, { onDelete: 'restrict' }),
   partyId: uuid('party_id').references(() => parties.id, { onDelete: 'restrict' }).notNull(),
   transactionType: varchar('transaction_type', { length: 50 }).notNull(), // OPENING_BALANCE, PURCHASE, PURCHASE_RETURN, PAYMENT, DEBIT_NOTE, CREDIT_NOTE, ADJUSTMENT, CANCELLATION_REVERSAL
   referenceType: varchar('reference_type', { length: 50 }), // PURCHASE_INVOICE, PAYMENT_VOUCHER, etc.
@@ -857,6 +911,7 @@ export const supplierLedgers = pgTable('supplier_ledgers', {
   createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
 }, (table) => [
   index('supplier_ledgers_biz_idx').on(table.businessId),
+  index('supplier_ledgers_godown_idx').on(table.godownId),
   index('supplier_ledgers_party_idx').on(table.partyId),
   index('supplier_ledgers_type_idx').on(table.transactionType),
   index('supplier_ledgers_date_idx').on(table.transactionDate),
@@ -992,6 +1047,7 @@ export const partyItemPrices = pgTable('party_item_prices', {
 export const salesOrders = pgTable('sales_orders', {
   id: uuid('id').defaultRandom().primaryKey(),
   businessId: uuid('business_id').references(() => businesses.id, { onDelete: 'cascade' }).notNull(),
+  godownId: uuid('godown_id').references(() => godowns.id, { onDelete: 'restrict' }),
   partyId: uuid('party_id').references(() => parties.id, { onDelete: 'restrict' }).notNull(),
   orderNumber: varchar('order_number', { length: 100 }).notNull(), // SO-000001
   orderDate: timestamp('order_date', { withTimezone: true }).defaultNow().notNull(),
@@ -1019,6 +1075,7 @@ export const salesOrders = pgTable('sales_orders', {
 }, (table) => [
   uniqueIndex('sales_orders_biz_num_idx').on(table.businessId, table.orderNumber),
   index('sales_orders_biz_idx').on(table.businessId),
+  index('sales_orders_godown_idx').on(table.godownId),
   index('sales_orders_party_idx').on(table.partyId),
   index('sales_orders_status_idx').on(table.status),
   index('sales_orders_date_idx').on(table.orderDate),
@@ -1071,6 +1128,7 @@ export const salesOrderLineBatches = pgTable('sales_order_line_batches', {
 export const salesInvoices = pgTable('sales_invoices', {
   id: uuid('id').defaultRandom().primaryKey(),
   businessId: uuid('business_id').references(() => businesses.id, { onDelete: 'cascade' }).notNull(),
+  godownId: uuid('godown_id').references(() => godowns.id, { onDelete: 'restrict' }),
   partyId: uuid('party_id').references(() => parties.id, { onDelete: 'restrict' }).notNull(),
   salesOrderId: uuid('sales_order_id').references(() => salesOrders.id, { onDelete: 'set null' }),
   invoiceNumber: varchar('invoice_number', { length: 100 }).notNull(), // INV-000001
@@ -1103,6 +1161,7 @@ export const salesInvoices = pgTable('sales_invoices', {
 }, (table) => [
   uniqueIndex('sales_invoices_biz_num_idx').on(table.businessId, table.invoiceNumber),
   index('sales_invoices_biz_idx').on(table.businessId),
+  index('sales_invoices_godown_idx').on(table.godownId),
   index('sales_invoices_party_idx').on(table.partyId),
   index('sales_invoices_order_idx').on(table.salesOrderId),
   index('sales_invoices_status_idx').on(table.status),
@@ -1156,6 +1215,7 @@ export const salesInvoiceLineBatches = pgTable('sales_invoice_line_batches', {
 export const customerLedgers = pgTable('customer_ledgers', {
   id: uuid('id').defaultRandom().primaryKey(),
   businessId: uuid('business_id').references(() => businesses.id, { onDelete: 'cascade' }).notNull(),
+  godownId: uuid('godown_id').references(() => godowns.id, { onDelete: 'restrict' }),
   partyId: uuid('party_id').references(() => parties.id, { onDelete: 'restrict' }).notNull(),
   transactionType: varchar('transaction_type', { length: 50 }).notNull(), // OPENING_BALANCE, SALE, SALES_RETURN, PAYMENT_RECEIVED, DEBIT_NOTE, CREDIT_NOTE, ADJUSTMENT, CANCELLATION_REVERSAL
   referenceType: varchar('reference_type', { length: 50 }), // SALES_INVOICE, PAYMENT_RECEIPT, etc.
@@ -1169,6 +1229,7 @@ export const customerLedgers = pgTable('customer_ledgers', {
   createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
 }, (table) => [
   index('customer_ledgers_biz_idx').on(table.businessId),
+  index('customer_ledgers_godown_idx').on(table.godownId),
   index('customer_ledgers_party_idx').on(table.partyId),
   index('customer_ledgers_type_idx').on(table.transactionType),
   index('customer_ledgers_date_idx').on(table.transactionDate),
@@ -1524,6 +1585,7 @@ export const purchaseReturnLineBatchesRelations = relations(purchaseReturnLineBa
 export const payments = pgTable('payments', {
   id: uuid('id').defaultRandom().primaryKey(),
   businessId: uuid('business_id').references(() => businesses.id, { onDelete: 'cascade' }).notNull(),
+  godownId: uuid('godown_id').references(() => godowns.id, { onDelete: 'restrict' }),
   partyId: uuid('party_id').references(() => parties.id, { onDelete: 'restrict' }).notNull(),
   paymentNumber: varchar('payment_number', { length: 100 }).notNull(), // REC-000001, PAY-000001
   paymentDate: timestamp('payment_date', { withTimezone: true }).defaultNow().notNull(),
@@ -1544,6 +1606,7 @@ export const payments = pgTable('payments', {
 }, (table) => [
   uniqueIndex('payments_biz_number_idx').on(table.businessId, table.paymentNumber),
   index('payments_biz_idx').on(table.businessId),
+  index('payments_godown_idx').on(table.godownId),
   index('payments_party_idx').on(table.partyId),
   index('payments_type_idx').on(table.paymentType),
   index('payments_status_idx').on(table.status),
@@ -2028,5 +2091,69 @@ export const whatsappMessagesQueue = pgTable('whatsapp_messages_queue', {
   index('whatsapp_queue_status_idx').on(table.status),
   index('whatsapp_queue_created_at_idx').on(table.createdAt),
 ]);
+
+export const godownsRelations = relations(godowns, ({ one, many }) => ({
+  business: one(businesses, {
+    fields: [godowns.businessId],
+    references: [businesses.id],
+  }),
+  dealerParty: one(parties, {
+    fields: [godowns.dealerPartyId],
+    references: [parties.id],
+  }),
+  users: many(users),
+  salesInvoices: many(salesInvoices),
+  purchaseInvoices: many(purchaseInvoices),
+  salesOrders: many(salesOrders),
+  purchaseOrders: many(purchaseOrders),
+  payments: many(payments),
+  stocks: many(opticalStocks),
+  ledgerEntries: many(stockLedger),
+}));
+
+/**
+ * 38. B2B Order Synchronization Logs
+ * Transactional event logging, idempotency tracking, and conflict auditing for B2B orders.
+ */
+export const b2bOrderSyncLogs = pgTable('b2b_order_sync_logs', {
+  id: uuid('id').defaultRandom().primaryKey(),
+  businessId: uuid('business_id').references(() => businesses.id, { onDelete: 'cascade' }).notNull(),
+  sourceVoucherType: varchar('source_voucher_type', { length: 50 }).notNull(), // 'SALES_ORDER', 'SALES_INVOICE'
+  sourceVoucherId: uuid('source_voucher_id').notNull(),
+  sourceVoucherNumber: varchar('source_voucher_number', { length: 100 }).notNull(),
+  destinationGodownId: uuid('destination_godown_id').references(() => godowns.id, { onDelete: 'cascade' }).notNull(),
+  destinationPurchaseOrderId: uuid('destination_purchase_order_id').references(() => purchaseOrders.id, { onDelete: 'set null' }),
+  destinationPurchaseOrderNumber: varchar('destination_purchase_order_number', { length: 100 }),
+  eventType: varchar('event_type', { length: 50 }).notNull(), // 'ORDER_CREATED', 'ORDER_UPDATED', 'ORDER_CANCELLED', 'INVOICE_FULFILLED'
+  status: varchar('status', { length: 50 }).default('SYNCED').notNull(), // 'SYNCED', 'FAILED', 'CONFLICT', 'PENDING'
+  errorDetails: text('error_details'),
+  payload: jsonb('payload'),
+  retryCount: integer('retry_count').default(0).notNull(),
+  createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
+  updatedAt: timestamp('updated_at', { withTimezone: true }).defaultNow().notNull(),
+}, (table) => [
+  uniqueIndex('b2b_sync_idempotency_idx').on(table.sourceVoucherId, table.destinationGodownId, table.eventType),
+  index('b2b_sync_biz_idx').on(table.businessId),
+  index('b2b_sync_dest_gdn_idx').on(table.destinationGodownId),
+  index('b2b_sync_src_voucher_idx').on(table.sourceVoucherId),
+  index('b2b_sync_status_idx').on(table.status),
+]);
+
+export const b2bOrderSyncLogsRelations = relations(b2bOrderSyncLogs, ({ one }) => ({
+  business: one(businesses, {
+    fields: [b2bOrderSyncLogs.businessId],
+    references: [businesses.id],
+  }),
+  godown: one(godowns, {
+    fields: [b2bOrderSyncLogs.destinationGodownId],
+    references: [godowns.id],
+  }),
+  purchaseOrder: one(purchaseOrders, {
+    fields: [b2bOrderSyncLogs.destinationPurchaseOrderId],
+    references: [purchaseOrders.id],
+  }),
+}));
+
+
 
 

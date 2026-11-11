@@ -4,6 +4,7 @@ import {
   Search,
   AlertTriangle,
   X,
+  FileSpreadsheet,
 } from 'lucide-react';
 import { SearchableMasterSelect, SearchableOption } from '../common/SearchableMasterSelect';
 import { InlinePartyModal } from '../common/InlinePartyModal';
@@ -56,6 +57,7 @@ interface VoucherHeaderProps {
   onSaveAndNew?: () => void;
   onPrint?: () => void;
   onBack: () => void;
+  onImportExcel?: () => void;
 }
 
 export const VoucherHeader: React.FC<VoucherHeaderProps> = ({
@@ -91,6 +93,7 @@ export const VoucherHeader: React.FC<VoucherHeaderProps> = ({
   onSaveAndNew,
   onPrint,
   onBack,
+  onImportExcel,
 }) => {
   const isSales = voucherType === 'SALES' || voucherType === 'SALES_ORDER';
   const isOrder = voucherType === 'SALES_ORDER' || voucherType === 'PURCHASE_ORDER';
@@ -271,6 +274,20 @@ export const VoucherHeader: React.FC<VoucherHeaderProps> = ({
               className="px-1.5 py-0.5 text-xs font-bold text-slate-900 border border-slate-400 rounded bg-white focus:bg-white focus:ring-1 focus:ring-blue-600 font-mono shadow-2xs"
             />
           </div>
+
+          {/* Import Excel button (for normal purchase vouchers) */}
+          {onImportExcel && (
+            <button
+              type="button"
+              id="btn-voucher-header-import-excel"
+              onClick={onImportExcel}
+              className="flex items-center gap-1 px-2.5 py-1 text-xs font-bold text-emerald-800 bg-emerald-50 hover:bg-emerald-100 border border-emerald-300 rounded shadow-2xs transition-colors cursor-pointer"
+              title="Import Purchase Items & Batches from Excel (.xlsx, .xls, .csv)"
+            >
+              <FileSpreadsheet className="w-3.5 h-3.5 text-emerald-700" />
+              <span>Purchase Import</span>
+            </button>
+          )}
         </div>
       </div>
 

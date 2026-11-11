@@ -785,9 +785,9 @@ export class DealerLogisticsService {
       // Initialize stock record
       await client.query(
         `INSERT INTO optical_stocks (
-          business_id, batch_id, physical_stock, available_stock, reserved_stock, updated_at
-        ) VALUES ($1, $2, 0.0, 0.0, 0.0, NOW())
-        ON CONFLICT (business_id, batch_id) DO NOTHING`,
+          business_id, batch_id, godown_id, physical_stock, available_stock, reserved_stock, updated_at
+        ) VALUES ($1, $2, NULL, '0.00', '0.00', '0.00', NOW())
+        ON CONFLICT (business_id, batch_id, COALESCE(godown_id, '00000000-0000-0000-0000-000000000000'::uuid)) DO NOTHING`,
         [dealerBusinessId, dealerBatchId]
       );
     }

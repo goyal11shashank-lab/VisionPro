@@ -193,13 +193,13 @@ export class WhatsAppService {
   static async initiateLinkSession(businessId: string) {
     const initial = await WhatsAppConnectionManager.connect(businessId, true);
 
-    // If socket is initializing, wait briefly (up to 1.5s) for initial Baileys QR event
+    // If socket is initializing, wait up to 4.5s for initial Baileys QR event
     let current = initial;
     if (current.status === 'INITIALIZING') {
-      for (let i = 0; i < 15; i++) {
+      for (let i = 0; i < 45; i++) {
         await new Promise((r) => setTimeout(r, 100));
         current = await WhatsAppConnectionManager.getStatus(businessId);
-        if (current.status !== 'INITIALIZING') break;
+        if (current.status !== 'INITIALIZING' && current.qrCodeData) break;
       }
     }
 
@@ -211,6 +211,13 @@ export class WhatsAppService {
         ? Math.max(0, Math.floor((current.qrExpiresAt.getTime() - Date.now()) / 1000))
         : 0,
     };
+  }
+
+  /**
+   * Requests 8-character pairing code for linking via mobile phone number
+   */
+  static async requestPairingCode(businessId: string, phone: string) {
+    return await WhatsAppConnectionManager.requestPairingCode(businessId, phone);
   }
 
   /**
@@ -350,6 +357,7 @@ export class WhatsAppService {
       return {
         job: existing,
         isDuplicate: true,
+        success: existing.status === 'SENT',
         message: `Message already queued or processed with idempotency key ${idempotencyKey}`,
       };
     }
@@ -385,6 +393,7 @@ export class WhatsAppService {
     return {
       job: newJob,
       isDuplicate: false,
+      success: true,
       message: 'Message queued successfully',
     };
   }
@@ -442,15 +451,31 @@ export class WhatsAppService {
       };
     }
 
-    // Connected session: simulate delivery dispatch
+    // Connected session: deliver via WhatsAppConnectionManager
     try {
-      // In production with connected session, message is handed over to the WhatsApp transport
+      const sendResult = await WhatsAppConnectionManager.sendMessage(
+        job.businessId,
+        job.recipientPhone,
+        {
+          text: job.messageText,
+          fileName: job.mediaFileName || undefined,
+        }
+      );
+
+      const messageId = sendResult?.key?.id || sendResult?.messageId || `msg-${Date.now()}`;
+      const updatedMetadata = {
+        ...((job.metadata as any) || {}),
+        messageId,
+        transmittedAt: new Date().toISOString(),
+      };
+
       const updatedJob = await db
         .update(whatsappMessagesQueue)
         .set({
           status: 'SENT',
           sentAt: new Date(),
           errorMessage: null,
+          metadata: updatedMetadata,
           updatedAt: new Date(),
         })
         .where(eq(whatsappMessagesQueue.id, jobId))
@@ -460,8 +485,10 @@ export class WhatsAppService {
         job: updatedJob[0],
         success: true,
         message: `Invoice successfully sent to ${job.recipientPhone} via connected WhatsApp`,
+        messageId,
       };
     } catch (err: any) {
+      console.error(`[WhatsApp] Failed to dispatch job ${jobId} to ${job.recipientPhone}:`, err);
       const isExhausted = newAttemptCount >= job.maxAttempts;
       const updatedJob = await db
         .update(whatsappMessagesQueue)
@@ -477,7 +504,7 @@ export class WhatsAppService {
       return {
         job: updatedJob[0],
         success: false,
-        error: err.message,
+        error: err.message || 'Failed to dispatch WhatsApp message',
         fallbackWaMeUrl: this.generateWaMeLink(job.recipientPhone, job.messageText),
       };
     }

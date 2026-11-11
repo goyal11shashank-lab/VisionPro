@@ -1859,6 +1859,115 @@ export async function runMigrations(): Promise<{ success: boolean; message: stri
       CREATE INDEX IF NOT EXISTS "whatsapp_queue_invoice_idx" ON "whatsapp_messages_queue" ("invoice_id");
       CREATE INDEX IF NOT EXISTS "whatsapp_queue_status_idx" ON "whatsapp_messages_queue" ("status");
       CREATE INDEX IF NOT EXISTS "whatsapp_queue_created_at_idx" ON "whatsapp_messages_queue" ("created_at");
+
+      -- Extra Godown / Secondary Warehouse operational system
+      CREATE TABLE IF NOT EXISTS "godowns" (
+        "id" UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+        "business_id" UUID REFERENCES "businesses"("id") ON DELETE CASCADE NOT NULL,
+        "code" VARCHAR(50) NOT NULL,
+        "name" VARCHAR(255) NOT NULL,
+        "godown_type" VARCHAR(50) NOT NULL DEFAULT 'SECONDARY_WAREHOUSE',
+        "address" TEXT,
+        "contact_person" VARCHAR(255),
+        "mobile" VARCHAR(20),
+        "dealer_party_id" UUID REFERENCES "parties"("id") ON DELETE SET NULL,
+        "status" VARCHAR(20) NOT NULL DEFAULT 'ACTIVE',
+        "created_at" TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW(),
+        "updated_at" TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW(),
+        "created_by" UUID
+      );
+      CREATE UNIQUE INDEX IF NOT EXISTS "godowns_biz_code_idx" ON "godowns" ("business_id", "code");
+      CREATE INDEX IF NOT EXISTS "godowns_biz_idx" ON "godowns" ("business_id");
+      CREATE INDEX IF NOT EXISTS "godowns_status_idx" ON "godowns" ("status");
+      CREATE INDEX IF NOT EXISTS "godowns_type_idx" ON "godowns" ("godown_type");
+
+      ALTER TABLE "users" ADD COLUMN IF NOT EXISTS "assigned_godown_id" UUID REFERENCES "godowns"("id") ON DELETE SET NULL;
+      ALTER TABLE "users" ADD COLUMN IF NOT EXISTS "user_permissions_override" JSONB DEFAULT '{}'::jsonb;
+      CREATE INDEX IF NOT EXISTS "users_godown_idx" ON "users" ("assigned_godown_id");
+
+      ALTER TABLE "sales_invoices" ADD COLUMN IF NOT EXISTS "godown_id" UUID REFERENCES "godowns"("id") ON DELETE RESTRICT;
+      CREATE INDEX IF NOT EXISTS "sales_invoices_godown_idx" ON "sales_invoices" ("godown_id");
+
+      ALTER TABLE "sales_orders" ADD COLUMN IF NOT EXISTS "godown_id" UUID REFERENCES "godowns"("id") ON DELETE RESTRICT;
+      CREATE INDEX IF NOT EXISTS "sales_orders_godown_idx" ON "sales_orders" ("godown_id");
+
+      ALTER TABLE "purchase_invoices" ADD COLUMN IF NOT EXISTS "godown_id" UUID REFERENCES "godowns"("id") ON DELETE RESTRICT;
+      CREATE INDEX IF NOT EXISTS "purchase_invoices_godown_idx" ON "purchase_invoices" ("godown_id");
+
+      ALTER TABLE "purchase_orders" ADD COLUMN IF NOT EXISTS "godown_id" UUID REFERENCES "godowns"("id") ON DELETE RESTRICT;
+      CREATE INDEX IF NOT EXISTS "purchase_orders_godown_idx" ON "purchase_orders" ("godown_id");
+
+      ALTER TABLE "payments" ADD COLUMN IF NOT EXISTS "godown_id" UUID REFERENCES "godowns"("id") ON DELETE RESTRICT;
+      CREATE INDEX IF NOT EXISTS "payments_godown_idx" ON "payments" ("godown_id");
+
+      ALTER TABLE "customer_ledgers" ADD COLUMN IF NOT EXISTS "godown_id" UUID REFERENCES "godowns"("id") ON DELETE RESTRICT;
+      CREATE INDEX IF NOT EXISTS "customer_ledgers_godown_idx" ON "customer_ledgers" ("godown_id");
+
+      ALTER TABLE "supplier_ledgers" ADD COLUMN IF NOT EXISTS "godown_id" UUID REFERENCES "godowns"("id") ON DELETE RESTRICT;
+      CREATE INDEX IF NOT EXISTS "supplier_ledgers_godown_idx" ON "supplier_ledgers" ("godown_id");
+
+      ALTER TABLE "stock_ledger" ADD COLUMN IF NOT EXISTS "godown_id" UUID REFERENCES "godowns"("id") ON DELETE RESTRICT;
+      CREATE INDEX IF NOT EXISTS "stock_ledger_godown_idx" ON "stock_ledger" ("godown_id");
+
+      ALTER TABLE "optical_stocks" ADD COLUMN IF NOT EXISTS "godown_id" UUID REFERENCES "godowns"("id") ON DELETE CASCADE;
+      CREATE INDEX IF NOT EXISTS "optical_stocks_godown_idx" ON "optical_stocks" ("godown_id");
+
+      ALTER TABLE "stock_reservations" ADD COLUMN IF NOT EXISTS "godown_id" UUID REFERENCES "godowns"("id") ON DELETE CASCADE;
+      CREATE INDEX IF NOT EXISTS "stock_reservations_godown_idx" ON "stock_reservations" ("godown_id");
+
+      -- Safely support multi-godown stock: drop old unique index if it exists and create coalesce index
+      DROP INDEX IF EXISTS "optical_stocks_biz_batch_idx";
+      CREATE UNIQUE INDEX IF NOT EXISTS "optical_stocks_biz_batch_gdn_coalesce_idx" 
+        ON "optical_stocks" ("business_id", "batch_id", COALESCE("godown_id", '00000000-0000-0000-0000-000000000000'::uuid));
+
+      -- Phase 2: B2B Order Synchronization
+      ALTER TABLE "godowns" ADD COLUMN IF NOT EXISTS "enable_b2b_order_sync" BOOLEAN NOT NULL DEFAULT FALSE;
+      ALTER TABLE "godowns" ADD COLUMN IF NOT EXISTS "sync_direct_invoice" BOOLEAN NOT NULL DEFAULT FALSE;
+      ALTER TABLE "godowns" ADD COLUMN IF NOT EXISTS "default_processing_preference" VARCHAR(50) NOT NULL DEFAULT 'AUTO_ACCEPT';
+      ALTER TABLE "godowns" ADD COLUMN IF NOT EXISTS "sync_status" VARCHAR(50) NOT NULL DEFAULT 'ACTIVE';
+      CREATE INDEX IF NOT EXISTS "godowns_b2b_sync_idx" ON "godowns" ("enable_b2b_order_sync");
+      CREATE INDEX IF NOT EXISTS "godowns_dealer_party_idx" ON "godowns" ("dealer_party_id");
+
+      ALTER TABLE "purchase_orders" ADD COLUMN IF NOT EXISTS "is_b2b_synchronized" BOOLEAN NOT NULL DEFAULT FALSE;
+      ALTER TABLE "purchase_orders" ADD COLUMN IF NOT EXISTS "b2b_sync_status" VARCHAR(50) NOT NULL DEFAULT 'SYNCED';
+      ALTER TABLE "purchase_orders" ADD COLUMN IF NOT EXISTS "source_sales_order_number" VARCHAR(100);
+      ALTER TABLE "purchase_orders" ADD COLUMN IF NOT EXISTS "source_sales_invoice_number" VARCHAR(100);
+      ALTER TABLE "purchase_orders" ADD COLUMN IF NOT EXISTS "source_business_name" VARCHAR(255);
+      ALTER TABLE "purchase_orders" ADD COLUMN IF NOT EXISTS "sync_notes" TEXT;
+      ALTER TABLE "purchase_orders" ADD COLUMN IF NOT EXISTS "rejection_reason" TEXT;
+      CREATE INDEX IF NOT EXISTS "purchase_orders_b2b_sync_idx" ON "purchase_orders" ("is_b2b_synchronized");
+      CREATE INDEX IF NOT EXISTS "purchase_orders_main_so_idx" ON "purchase_orders" ("main_sales_order_id");
+      CREATE UNIQUE INDEX IF NOT EXISTS "purchase_orders_b2b_so_unique_idx"
+        ON "purchase_orders" ("business_id", "main_sales_order_id")
+        WHERE "main_sales_order_id" IS NOT NULL;
+      CREATE UNIQUE INDEX IF NOT EXISTS "purchase_orders_b2b_si_unique_idx"
+        ON "purchase_orders" ("business_id", "main_sales_invoice_id")
+        WHERE "main_sales_invoice_id" IS NOT NULL;
+
+      CREATE TABLE IF NOT EXISTS "b2b_order_sync_logs" (
+        "id" UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+        "business_id" UUID NOT NULL REFERENCES "businesses"("id") ON DELETE CASCADE,
+        "source_voucher_type" VARCHAR(50) NOT NULL,
+        "source_voucher_id" UUID NOT NULL,
+        "source_voucher_number" VARCHAR(100) NOT NULL,
+        "destination_godown_id" UUID NOT NULL REFERENCES "godowns"("id") ON DELETE CASCADE,
+        "destination_purchase_order_id" UUID REFERENCES "purchase_orders"("id") ON DELETE SET NULL,
+        "destination_purchase_order_number" VARCHAR(100),
+        "event_type" VARCHAR(50) NOT NULL,
+        "status" VARCHAR(50) NOT NULL DEFAULT 'SYNCED',
+        "error_details" TEXT,
+        "payload" JSONB,
+        "retry_count" INTEGER NOT NULL DEFAULT 0,
+        "created_at" TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW(),
+        "updated_at" TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW()
+      );
+
+      CREATE UNIQUE INDEX IF NOT EXISTS "b2b_sync_idempotency_idx" 
+        ON "b2b_order_sync_logs" ("source_voucher_id", "destination_godown_id", "event_type");
+      CREATE INDEX IF NOT EXISTS "b2b_sync_biz_idx" ON "b2b_order_sync_logs" ("business_id");
+      CREATE INDEX IF NOT EXISTS "b2b_sync_dest_gdn_idx" ON "b2b_order_sync_logs" ("destination_godown_id");
+      CREATE INDEX IF NOT EXISTS "b2b_sync_src_voucher_idx" ON "b2b_order_sync_logs" ("source_voucher_id");
+      CREATE INDEX IF NOT EXISTS "b2b_sync_status_idx" ON "b2b_order_sync_logs" ("status");
     `);
 
     // Verify all created tables

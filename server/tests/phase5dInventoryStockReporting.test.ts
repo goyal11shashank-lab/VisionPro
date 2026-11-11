@@ -270,20 +270,13 @@ async function runTests() {
     });
 
     // Update optical_stocks table to reflect current stock
-    await db.insert(opticalStocks).values({
-      businessId,
-      batchId: b1.id,
-      physicalStock: '12.50',
-      reservedStock: '0.00',
-      availableStock: '12.50',
-    }).onConflictDoUpdate({
-      target: [opticalStocks.businessId, opticalStocks.batchId],
-      set: {
-        physicalStock: '12.50',
-        reservedStock: '0.00',
-        availableStock: '12.50',
-      },
-    });
+    await pool.query(
+      `INSERT INTO optical_stocks (business_id, batch_id, godown_id, physical_stock, reserved_stock, available_stock, updated_at)
+       VALUES ($1, $2, NULL, '12.50', '0.00', '12.50', NOW())
+       ON CONFLICT (business_id, batch_id, COALESCE(godown_id, '00000000-0000-0000-0000-000000000000'::uuid))
+       DO UPDATE SET physical_stock = '12.50', reserved_stock = '0.00', available_stock = '12.50', updated_at = NOW()`,
+      [businessId, b1.id]
+    );
 
     // Fetch ledger using StockItemLedgerService
     const batchLedger = await StockItemLedgerService.getLedger(businessId, createdItem.id, {
@@ -371,20 +364,13 @@ async function runTests() {
       createdAt: day(7),
     });
 
-    await db.insert(opticalStocks).values({
-      businessId,
-      batchId: b2.id,
-      physicalStock: '-3.00',
-      reservedStock: '0.00',
-      availableStock: '-3.00',
-    }).onConflictDoUpdate({
-      target: [opticalStocks.businessId, opticalStocks.batchId],
-      set: {
-        physicalStock: '-3.00',
-        reservedStock: '0.00',
-        availableStock: '-3.00',
-      },
-    });
+    await pool.query(
+      `INSERT INTO optical_stocks (business_id, batch_id, godown_id, physical_stock, reserved_stock, available_stock, updated_at)
+       VALUES ($1, $2, NULL, '-3.00', '0.00', '-3.00', NOW())
+       ON CONFLICT (business_id, batch_id, COALESCE(godown_id, '00000000-0000-0000-0000-000000000000'::uuid))
+       DO UPDATE SET physical_stock = '-3.00', reserved_stock = '0.00', available_stock = '-3.00', updated_at = NOW()`,
+      [businessId, b2.id]
+    );
 
     const b2Ledger = await StockItemLedgerService.getLedger(businessId, createdItem.id, {
       batchId: b2.id,

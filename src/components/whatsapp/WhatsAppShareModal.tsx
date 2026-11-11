@@ -175,12 +175,17 @@ export const WhatsAppShareModal: React.FC<Props> = ({
 
       const data = await res.json().catch(() => ({}));
 
-      if (!res.ok) {
-        throw new Error(data.error || 'Failed to dispatch WhatsApp message');
+      if (!res.ok || !data.success || data.result?.success === false) {
+        throw new Error(
+          data.error ||
+          data.result?.error ||
+          'Failed to send message via connected WhatsApp'
+        );
       }
 
       setActionSuccess(
-        `Invoice successfully queued for delivery to ${recipientPhone}!`
+        data.result?.message ||
+        `Invoice successfully sent to ${recipientPhone} via connected WhatsApp!`
       );
       fetchStatusAndHistory();
       if (onSuccess) onSuccess();
@@ -247,9 +252,22 @@ export const WhatsAppShareModal: React.FC<Props> = ({
         {/* Modal Body */}
         <div className="p-6 space-y-5 max-h-[78vh] overflow-y-auto">
           {actionError && (
-            <div className="p-3.5 bg-rose-50 border border-rose-200 text-rose-700 text-xs rounded-xl flex items-center gap-2">
-              <AlertCircle className="w-4 h-4 shrink-0" />
-              <span>{actionError}</span>
+            <div className="p-3.5 bg-rose-50 border border-rose-200 text-rose-700 text-xs rounded-xl flex items-start sm:items-center justify-between gap-2">
+              <div className="flex items-center gap-2">
+                <AlertCircle className="w-4 h-4 shrink-0 text-rose-600" />
+                <span>{actionError}</span>
+              </div>
+              {isValidPhone && (
+                <a
+                  href={waMeUrl}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="shrink-0 underline font-semibold text-rose-800 hover:text-rose-950 flex items-center gap-1"
+                >
+                  <ExternalLink className="w-3.5 h-3.5" />
+                  <span>Use 1-Click Link</span>
+                </a>
+              )}
             </div>
           )}
 
@@ -365,6 +383,7 @@ export const WhatsAppShareModal: React.FC<Props> = ({
               {sessionStatus === 'CONNECTED' && (
                 <button
                   type="button"
+                  id="btn-whatsapp-send-session"
                   onClick={handleSendViaSession}
                   disabled={loading || !isValidPhone}
                   className="flex-1 flex items-center justify-center gap-2 px-4 py-2.5 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl text-sm font-semibold shadow-sm transition disabled:opacity-50"

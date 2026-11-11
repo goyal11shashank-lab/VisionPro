@@ -23,6 +23,7 @@ router.get(
     try {
       const businessId = req.user!.currentBusinessId;
       const { partyId, status, search, limit, offset } = req.query;
+      const targetGodownId = req.user?.assignedGodownId || (req.query.godownId as string) || undefined;
 
       const result = await SalesService.getSalesOrders(businessId, {
         partyId: partyId as string,
@@ -30,6 +31,7 @@ router.get(
         search: search as string,
         limit: limit ? parseInt(limit as string, 10) : 50,
         offset: offset ? parseInt(offset as string, 10) : 0,
+        godownId: targetGodownId,
       });
 
       res.json(result);
@@ -65,8 +67,9 @@ router.post(
     try {
       const businessId = req.user!.currentBusinessId;
       const userId = req.user!.id;
+      const godownId = req.user?.assignedGodownId || req.body.godownId || null;
 
-      const order = await SalesService.createSalesOrder(businessId, req.body, userId);
+      const order = await SalesService.createSalesOrder(businessId, { ...req.body, godownId }, userId);
       res.status(201).json(order);
     } catch (err: any) {
       console.error('[POST /api/sales/orders Error]', err);
@@ -247,7 +250,8 @@ router.post(
       const businessId = req.user!.currentBusinessId;
       const userId = req.user!.id;
 
-      const invoice = await SalesService.convertOrderToInvoice(businessId, req.params.id, req.body, userId);
+      const godownId = req.user?.assignedGodownId || req.body.godownId || null;
+      const invoice = await SalesService.convertOrderToInvoice(businessId, req.params.id, { ...req.body, godownId }, userId);
       res.status(201).json(invoice);
     } catch (err: any) {
       console.error('[POST /api/sales/orders/:id/convert Error]', err);
@@ -271,6 +275,7 @@ router.get(
     try {
       const businessId = req.user!.currentBusinessId;
       const { partyId, status, search, limit, offset, fromDate, toDate } = req.query;
+      const targetGodownId = req.user?.assignedGodownId || (req.query.godownId as string) || undefined;
 
       const result = await SalesService.getSalesInvoices(businessId, {
         partyId: partyId as string,
@@ -280,6 +285,7 @@ router.get(
         offset: offset ? parseInt(offset as string, 10) : 0,
         fromDate: fromDate as string,
         toDate: toDate as string,
+        godownId: targetGodownId,
       });
 
       res.json(result);
@@ -315,8 +321,9 @@ router.post(
     try {
       const businessId = req.user!.currentBusinessId;
       const userId = req.user!.id;
+      const godownId = req.user?.assignedGodownId || req.body.godownId || null;
 
-      const invoice = await SalesService.createSalesInvoice(businessId, req.body, userId);
+      const invoice = await SalesService.createSalesInvoice(businessId, { ...req.body, godownId }, userId);
       res.status(201).json(invoice);
     } catch (err: any) {
       console.error('[POST /api/sales/invoices Error]', err);

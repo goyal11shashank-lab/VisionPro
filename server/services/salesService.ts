@@ -27,6 +27,7 @@ import { BusinessSettingsService } from './businessSettingsService.js';
 import { validateQuantity, assertValidQuantity } from '../utils/quantityValidator.js';
 import { DocumentSequenceService } from './documentSequenceService.js';
 import { WhatsAppService } from './whatsapp/whatsappService.js';
+import { B2bOrderSyncService } from './b2bOrderSyncService.js';
 
 const UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 function isValidUUID(id: string): boolean {
@@ -51,6 +52,7 @@ export interface SalesLineInput {
 
 export interface CreateSalesOrderDTO {
   partyId: string;
+  godownId?: string | null;
   orderDate?: string | Date;
   orderNumber?: string;
   gstMode?: 'INTRA_STATE' | 'INTER_STATE';
@@ -63,6 +65,7 @@ export interface CreateSalesOrderDTO {
 
 export interface CreateSalesInvoiceDTO {
   partyId: string;
+  godownId?: string | null;
   salesOrderId?: string;
   invoiceDate?: string | Date;
   invoiceNumber?: string;
@@ -79,6 +82,7 @@ export interface CreateSalesInvoiceDTO {
 }
 
 export interface ConvertOrderToInvoiceDTO {
+  godownId?: string | null;
   invoiceDate?: string | Date;
   invoiceNumber?: string;
   dueDate?: string | Date;
@@ -450,19 +454,20 @@ export class SalesService {
       // 1. Insert Sales Order
       const insertOrderRes = await client.query(
         `INSERT INTO sales_orders (
-          business_id, party_id, order_number, order_date,
+          business_id, party_id, godown_id, order_number, order_date,
           subtotal, discount_total, taxable_amount,
           igst_rate, igst_amount, cgst_rate, cgst_amount, sgst_rate, sgst_amount,
           round_off, grand_total, status, notes, created_by, updated_by
         ) VALUES (
-          $1, $2, $3, $4,
-          $5, $6, $7,
-          $8, $9, $10, $11, $12, $13,
-          $14, $15, $16, $17, $18, $19
+          $1, $2, $3, $4, $5,
+          $6, $7, $8,
+          $9, $10, $11, $12, $13, $14,
+          $15, $16, $17, $18, $19, $20
         ) RETURNING id`,
         [
           businessId,
           data.partyId,
+          data.godownId || null,
           orderNumber,
           orderDate,
           totals.subtotal.toFixed(2),
@@ -579,6 +584,13 @@ export class SalesService {
         newValue: { orderNumber, partyId: data.partyId, grandTotal: totals.grandTotal, status: targetStatus },
       });
 
+      // B2B Automatic Order Synchronization to Dealer / Extra Godown
+      try {
+        await B2bOrderSyncService.syncSalesOrderToPurchaseOrder(businessId, orderId, userId);
+      } catch (syncErr) {
+        console.error('[B2B Order Sync Error on createSalesOrder]', syncErr);
+      }
+
       return await this.getSalesOrderById(businessId, orderId);
     } catch (err) {
       await client.query('ROLLBACK');
@@ -643,13 +655,19 @@ export class SalesService {
     const isResEnabled = await BusinessSettingsService.isOrderReservationEnabled(businessId).catch(() => true);
     const allowBeyond = await BusinessSettingsService.isAllowOrderBeyondAvailable(businessId).catch(() => true);
 
+    const orderQuery = await client.query(
+      `SELECT id, godown_id FROM sales_orders WHERE id = $1`,
+      [orderId]
+    );
+    const godownId = orderQuery.rows[0]?.godown_id || null;
+
     if (isResEnabled) {
       for (const row of linesRes.rows) {
         const batchId = row.batch_id;
         const qty = parseFloat(row.batch_qty);
 
         // Lock optical_stocks row (auto-creates row with 0 stock if not exists)
-        const stock = await StockService.lockAndGetStock(client, businessId, batchId);
+        const stock = await StockService.lockAndGetStock(client, businessId, batchId, godownId);
 
         if (!allowBeyond && stock.availableStock < qty) {
           throw new Error(
@@ -672,27 +690,28 @@ export class SalesService {
         // Insert stock_reservations
         await client.query(
           `INSERT INTO stock_reservations (
-            business_id, batch_id, quantity, status, reference_type, reference_id, notes, created_by
+            business_id, batch_id, godown_id, quantity, status, reference_type, reference_id, notes, created_by
           ) VALUES (
-            $1, $2, $3, 'ACTIVE', 'SALES_ORDER', $4, 'Sales Order Reservation', $5
+            $1, $2, $3, $4, 'ACTIVE', 'SALES_ORDER', $5, 'Sales Order Reservation', $6
           )`,
-          [businessId, batchId, qty.toFixed(2), orderId, userId || null]
+          [businessId, batchId, godownId, qty.toFixed(2), orderId, userId || null]
         );
 
         // Insert stock_ledger for reservation hold
         await client.query(
           `INSERT INTO stock_ledger (
-            business_id, batch_id, transaction_type, reference_type, reference_id,
+            business_id, batch_id, godown_id, transaction_type, reference_type, reference_id,
             quantity_in, quantity_out, reserved_in, reserved_out,
             balance, reason, created_by
           ) VALUES (
-            $1, $2, 'RESERVATION_HOLD', 'SALES_ORDER', $3,
-            0.00, 0.00, $4, 0.00,
-            $5, 'Sales Order Reservation Hold', $6
+            $1, $2, $3, 'RESERVATION_HOLD', 'SALES_ORDER', $4,
+            0.00, 0.00, $5, 0.00,
+            $6, 'Sales Order Reservation Hold', $7
           )`,
           [
             businessId,
             batchId,
+            godownId,
             orderId,
             qty.toFixed(2),
             stock.physicalStock.toFixed(2),
@@ -957,6 +976,13 @@ export class SalesService {
         newValue: { orderNumber: existingOrder.order_number, changes: data },
       });
 
+      // B2B Order Sync Edit to Linked Dealer Purchase Order
+      try {
+        await B2bOrderSyncService.syncSalesOrderEdit(businessId, orderId, userId);
+      } catch (syncErr) {
+        console.error('[B2B Order Sync Error on editSalesOrder]', syncErr);
+      }
+
       return await this.getSalesOrderById(businessId, orderId);
     } catch (err) {
       await client.query('ROLLBACK');
@@ -976,7 +1002,7 @@ export class SalesService {
     userId?: string
   ) {
     const res = await client.query(
-      `SELECT id, batch_id, quantity 
+      `SELECT id, batch_id, godown_id, quantity 
        FROM stock_reservations 
        WHERE business_id = $1 AND reference_type = 'SALES_ORDER' AND reference_id = $2 AND status = 'ACTIVE'`,
       [businessId, orderId]
@@ -984,15 +1010,16 @@ export class SalesService {
 
     for (const r of res.rows) {
       const batchId = r.batch_id;
+      const targetGodown = r.godown_id || null;
       const qty = parseFloat(r.quantity);
 
       // Lock optical_stocks
       const stockRes = await client.query(
         `SELECT id, physical_stock, reserved_stock, available_stock 
          FROM optical_stocks 
-         WHERE business_id = $1 AND batch_id = $2 
+         WHERE business_id = $1 AND batch_id = $2 AND ((godown_id IS NULL AND $3::uuid IS NULL) OR godown_id = $3::uuid)
          FOR UPDATE`,
-        [businessId, batchId]
+        [businessId, batchId, targetGodown]
       );
 
       if (stockRes.rows.length > 0) {
@@ -1018,17 +1045,18 @@ export class SalesService {
         // Record stock_ledger entry
         await client.query(
           `INSERT INTO stock_ledger (
-            business_id, batch_id, transaction_type, reference_type, reference_id,
+            business_id, batch_id, godown_id, transaction_type, reference_type, reference_id,
             quantity_in, quantity_out, reserved_in, reserved_out,
             balance, reason, created_by
           ) VALUES (
-            $1, $2, 'RESERVATION_RELEASE', 'SALES_ORDER', $3,
-            0.00, 0.00, 0.00, $4,
-            $5, 'Sales Order Reservation Released', $6
+            $1, $2, $3, 'RESERVATION_RELEASE', 'SALES_ORDER', $4,
+            0.00, 0.00, 0.00, $5,
+            $6, 'Sales Order Reservation Released', $7
           )`,
           [
             businessId,
             batchId,
+            targetGodown,
             orderId,
             qty.toFixed(2),
             parseFloat(cur.physical_stock).toFixed(2),
@@ -1106,6 +1134,13 @@ export class SalesService {
         entityId: orderId,
         newValue: { orderNumber: order.order_number, status: 'CANCELLED', reason },
       });
+
+      // B2B Order Sync Cancellation to Linked Dealer Purchase Order
+      try {
+        await B2bOrderSyncService.syncSalesOrderCancellation(businessId, orderId, reason, userId);
+      } catch (syncErr) {
+        console.error('[B2B Order Sync Error on cancelSalesOrder]', syncErr);
+      }
 
       return await this.getSalesOrderById(businessId, orderId);
     } catch (err) {
@@ -1368,12 +1403,21 @@ export class SalesService {
       search?: string;
       limit?: number;
       offset?: number;
+      godownId?: string | null;
     }
   ) {
     const limit = filters?.limit || 50;
     const offset = filters?.offset || 0;
 
     let conditions = [eq(salesOrders.businessId, businessId)];
+
+    if (filters?.godownId !== undefined) {
+      if (filters.godownId === null) {
+        conditions.push(sql`${salesOrders.godownId} IS NULL`);
+      } else {
+        conditions.push(eq(salesOrders.godownId, filters.godownId));
+      }
+    }
 
     if (filters?.partyId) {
       conditions.push(eq(salesOrders.partyId, filters.partyId));
@@ -1590,21 +1634,22 @@ export class SalesService {
       // 1. Insert Sales Invoice
       const insertInvRes = await client.query(
         `INSERT INTO sales_invoices (
-          business_id, party_id, sales_order_id, invoice_number, invoice_date,
+          business_id, party_id, godown_id, sales_order_id, invoice_number, invoice_date,
           due_date, credit_days_snapshot,
           subtotal, discount_total, taxable_amount,
           igst_rate, igst_amount, cgst_rate, cgst_amount, sgst_rate, sgst_amount,
           courier_charges, round_off, grand_total, status, notes, created_by, updated_by
         ) VALUES (
-          $1, $2, $3, $4, $5,
-          $6, $7,
-          $8, $9, $10,
-          $11, $12, $13, $14, $15, $16,
-          $17, $18, $19, $20, $21, $22, $23
+          $1, $2, $3, $4, $5, $6,
+          $7, $8,
+          $9, $10, $11,
+          $12, $13, $14, $15, $16, $17,
+          $18, $19, $20, $21, $22, $23, $24
         ) RETURNING id`,
         [
           businessId,
           data.partyId,
+          data.godownId || null,
           data.salesOrderId || null,
           invoiceNumber,
           invoiceDate,
@@ -1735,6 +1780,15 @@ export class SalesService {
         entityId: invoiceId,
         newValue: { invoiceNumber, partyId: data.partyId, grandTotal: totals.grandTotal, status: targetStatus },
       });
+
+      // B2B Direct Sales Invoice Synchronization (only if dealer configuration enables it)
+      if (!data.salesOrderId) {
+        try {
+          await B2bOrderSyncService.syncDirectInvoiceToPurchaseOrder(businessId, invoiceId, userId);
+        } catch (syncErr) {
+          console.error('[B2B Order Sync Error on createSalesInvoice]', syncErr);
+        }
+      }
 
       return await this.getSalesInvoiceById(businessId, invoiceId);
     } catch (err) {
@@ -2063,12 +2117,13 @@ export class SalesService {
     userId?: string
   ) {
     const invRes = await client.query(
-      `SELECT id, invoice_number, party_id, grand_total, invoice_date 
+      `SELECT id, invoice_number, party_id, grand_total, invoice_date, godown_id 
        FROM sales_invoices 
        WHERE id = $1`,
       [invoiceId]
     );
     const invoice = invRes.rows[0];
+    const godownId = invoice.godown_id || null;
 
     // Auto-allocate default batch for lines that do not have batches yet
     const allLinesRes = await client.query(
@@ -2119,7 +2174,7 @@ export class SalesService {
       const lineRate = parseFloat(row.rate);
 
       // Lock optical_stocks row (auto-creates row with 0 stock if not exists)
-      const stock = await StockService.lockAndGetStock(client, businessId, batchId);
+      const stock = await StockService.lockAndGetStock(client, businessId, batchId, godownId);
 
       // Check if negative inventory is allowed per business settings
       const allowNeg = await BusinessSettingsService.isNegativeStockAllowed(businessId).catch(() => true);
@@ -2143,17 +2198,18 @@ export class SalesService {
       // Stock Ledger entry
       await client.query(
         `INSERT INTO stock_ledger (
-          business_id, batch_id, transaction_type, reference_type, reference_id,
+          business_id, batch_id, godown_id, transaction_type, reference_type, reference_id,
           quantity_in, quantity_out, reserved_in, reserved_out,
           balance, reason, created_by
         ) VALUES (
-          $1, $2, 'SALE', 'SALES_INVOICE', $3,
-          0.00, $4, 0.00, 0.00,
-          $5, $6, $7
+          $1, $2, $3, 'SALE', 'SALES_INVOICE', $4,
+          0.00, $5, 0.00, 0.00,
+          $6, $7, $8
         )`,
         [
           businessId,
           batchId,
+          godownId,
           invoiceId,
           qty.toFixed(2),
           newPhys.toFixed(2),
@@ -2181,15 +2237,16 @@ export class SalesService {
 
     await client.query(
       `INSERT INTO customer_ledgers (
-        business_id, party_id, transaction_type, reference_type, reference_id,
+        business_id, party_id, godown_id, transaction_type, reference_type, reference_id,
         debit, credit, balance, transaction_date, notes, created_by
       ) VALUES (
-        $1, $2, 'SALE', 'SALES_INVOICE', $3,
-        $4, 0.00, $5, $6, $7, $8
+        $1, $2, $3, 'SALE', 'SALES_INVOICE', $4,
+        $5, 0.00, $6, $7, $8, $9
       )`,
       [
         businessId,
         invoice.party_id,
+        godownId,
         invoiceId,
         grandTotal.toFixed(2),
         newBalance.toFixed(2),
@@ -2393,24 +2450,27 @@ export class SalesService {
         gstMode: parseFloat(order.igst_amount) > 0 ? 'INTER_STATE' : 'INTRA_STATE',
       });
 
+      const godownId = order.godown_id || data.godownId || null;
+
       // Insert Sales Invoice
       const insertInvRes = await client.query(
         `INSERT INTO sales_invoices (
-          business_id, party_id, sales_order_id, invoice_number, invoice_date,
+          business_id, party_id, godown_id, sales_order_id, invoice_number, invoice_date,
           due_date, credit_days_snapshot,
           subtotal, discount_total, taxable_amount,
           igst_rate, igst_amount, cgst_rate, cgst_amount, sgst_rate, sgst_amount,
           round_off, grand_total, status, notes, created_by, updated_by
         ) VALUES (
-          $1, $2, $3, $4, $5,
-          $6, $7,
-          $8, $9, $10,
-          $11, $12, $13, $14, $15, $16,
-          $17, $18, 'POSTED', $19, $20, $21
+          $1, $2, $3, $4, $5, $6,
+          $7, $8,
+          $9, $10, $11,
+          $12, $13, $14, $15, $16, $17,
+          $18, $19, 'POSTED', $20, $21, $22
         ) RETURNING id`,
         [
           businessId,
           order.party_id,
+          godownId,
           orderId,
           invoiceNumber,
           invoiceDate,
@@ -2502,7 +2562,7 @@ export class SalesService {
           const convQty = b.quantity;
 
           // Lock optical_stocks row (auto-creates if missing)
-          const stock = await StockService.lockAndGetStock(client, businessId, batchId);
+          const stock = await StockService.lockAndGetStock(client, businessId, batchId, godownId);
 
           const newPhys = round2(stock.physicalStock - convQty);
           const newRes = round2(Math.max(0, stock.reservedStock - convQty));
@@ -2550,17 +2610,18 @@ export class SalesService {
             // Stock Ledger entry
             await client.query(
               `INSERT INTO stock_ledger (
-                business_id, batch_id, transaction_type, reference_type, reference_id,
+                business_id, batch_id, godown_id, transaction_type, reference_type, reference_id,
                 quantity_in, quantity_out, reserved_in, reserved_out,
                 balance, reason, created_by
               ) VALUES (
-                $1, $2, 'RESERVATION_CONVERSION', 'SALES_INVOICE', $3,
-                0.00, $4, 0.00, $4,
-                $5, $6, $7
+                $1, $2, $3, 'RESERVATION_CONVERSION', 'SALES_INVOICE', $4,
+                0.00, $5, 0.00, $5,
+                $6, $7, $8
               )`,
               [
                 businessId,
                 batchId,
+                godownId,
                 invoiceId,
                 convQty.toFixed(2),
                 newPhys.toFixed(2),
@@ -2589,15 +2650,16 @@ export class SalesService {
 
       await client.query(
         `INSERT INTO customer_ledgers (
-          business_id, party_id, transaction_type, reference_type, reference_id,
+          business_id, party_id, godown_id, transaction_type, reference_type, reference_id,
           debit, credit, balance, transaction_date, notes, created_by
         ) VALUES (
-          $1, $2, 'SALE', 'SALES_INVOICE', $3,
-          $4, 0.00, $5, $6, $7, $8
+          $1, $2, $3, 'SALE', 'SALES_INVOICE', $4,
+          $5, 0.00, $6, $7, $8, $9
         )`,
         [
           businessId,
           order.party_id,
+          godownId,
           invoiceId,
           grandTotal.toFixed(2),
           newBalance.toFixed(2),
@@ -2648,6 +2710,20 @@ export class SalesService {
           grandTotal,
         },
       });
+
+      // B2B Order Sync Fulfillment to Linked Dealer Purchase Order
+      try {
+        await B2bOrderSyncService.syncSalesOrderFulfillment(
+          businessId,
+          orderId,
+          invoiceId,
+          invoiceNumber,
+          newOrderStatus,
+          userId
+        );
+      } catch (syncErr) {
+        console.error('[B2B Order Sync Error on convertOrderToInvoice]', syncErr);
+      }
 
       return await this.getSalesInvoiceById(businessId, invoiceId);
     } catch (err) {
@@ -3189,12 +3265,21 @@ export class SalesService {
       offset?: number;
       fromDate?: string;
       toDate?: string;
+      godownId?: string | null;
     }
   ) {
     const limit = Math.min(filters?.limit || 100, 500);
     const offset = filters?.offset || 0;
 
     let conditions = [eq(salesInvoices.businessId, businessId)];
+
+    if (filters?.godownId !== undefined) {
+      if (filters.godownId === null) {
+        conditions.push(sql`${salesInvoices.godownId} IS NULL`);
+      } else {
+        conditions.push(eq(salesInvoices.godownId, filters.godownId));
+      }
+    }
 
     if (filters?.partyId) {
       conditions.push(eq(salesInvoices.partyId, filters.partyId));

@@ -20,6 +20,7 @@ import {
   ShoppingCart,
   Printer,
   Download,
+  ArrowRightLeft,
 } from 'lucide-react';
 import { apiRequest } from '../../api/client.js';
 import { useAuth } from '../../context/AuthContext.js';
@@ -54,6 +55,11 @@ export const PurchaseOrdersPage: React.FC<PurchaseOrdersPageProps> = ({ onNaviga
   const [confirmCancelOrder, setConfirmCancelOrder] = useState<{ id: string; orderNumber: string } | null>(null);
   const [cancelReasonInput, setCancelReasonInput] = useState<string>('');
   const [cancellingOrderId, setCancellingOrderId] = useState<string | null>(null);
+
+  // Dealer B2B Accept / Reject State
+  const [rejectModalOrder, setRejectModalOrder] = useState<{ id: string; orderNumber: string } | null>(null);
+  const [rejectReasonInput, setRejectReasonInput] = useState<string>('');
+  const [actionLoadingId, setActionLoadingId] = useState<string | null>(null);
 
   // Print Preview
   const [printPreviewOrder, setPrintPreviewOrder] = useState<any | null>(null);
@@ -198,6 +204,46 @@ export const PurchaseOrdersPage: React.FC<PurchaseOrdersPageProps> = ({ onNaviga
       setError(err.message || 'Failed to cancel purchase order');
     } finally {
       setCancellingOrderId(null);
+    }
+  };
+
+  const handleAcceptOrder = async (orderId: string, orderNumber: string) => {
+    setActionLoadingId(orderId);
+    setError(null);
+    try {
+      await apiRequest(`/api/purchases/orders/${orderId}/accept`, {
+        method: 'POST',
+      });
+      setSuccessMsg(`Auto-synced Order #${orderNumber} accepted into inward queue.`);
+      fetchOrders();
+    } catch (err: any) {
+      setError(err.message || 'Failed to accept purchase order');
+    } finally {
+      setActionLoadingId(null);
+    }
+  };
+
+  const handleExecuteReject = async () => {
+    if (!rejectModalOrder || actionLoadingId) return;
+    if (!rejectReasonInput.trim()) {
+      setError('Please provide a reason for rejecting this order.');
+      return;
+    }
+    setActionLoadingId(rejectModalOrder.id);
+    setError(null);
+    try {
+      await apiRequest(`/api/purchases/orders/${rejectModalOrder.id}/reject`, {
+        method: 'POST',
+        body: JSON.stringify({ reason: rejectReasonInput.trim() }),
+      });
+      setSuccessMsg(`Auto-synced Order #${rejectModalOrder.orderNumber} rejected.`);
+      setRejectModalOrder(null);
+      setRejectReasonInput('');
+      fetchOrders();
+    } catch (err: any) {
+      setError(err.message || 'Failed to reject purchase order');
+    } finally {
+      setActionLoadingId(null);
     }
   };
 
@@ -442,8 +488,26 @@ export const PurchaseOrdersPage: React.FC<PurchaseOrdersPageProps> = ({ onNaviga
                       key={order.id}
                       className="hover:bg-slate-50/80 transition-colors font-sans"
                     >
-                      <td className="py-2.5 px-3 font-mono font-bold text-blue-600">
-                        {order.orderNumber}
+                      <td className="py-2.5 px-3">
+                        <div className="font-mono font-bold text-blue-600">{order.orderNumber}</div>
+                        {order.isB2bSynchronized && (
+                          <div className="mt-1 space-y-0.5">
+                            <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] font-bold bg-indigo-50 text-indigo-700 border border-indigo-200">
+                              <ArrowRightLeft className="w-2.5 h-2.5" />
+                              <span>Auto-Synced</span>
+                            </span>
+                            {order.sourceSalesOrderNumber && (
+                              <div className="text-[10px] text-slate-500 font-mono">
+                                SO #{order.sourceSalesOrderNumber}
+                              </div>
+                            )}
+                            {order.sourceSalesInvoiceNumber && (
+                              <div className="text-[10px] text-slate-500 font-mono">
+                                Inv #{order.sourceSalesInvoiceNumber}
+                              </div>
+                            )}
+                          </div>
+                        )}
                       </td>
                       <td className="py-2.5 px-3 font-mono text-slate-600">
                         {new Date(order.orderDate).toLocaleDateString('en-IN', {
@@ -452,8 +516,11 @@ export const PurchaseOrdersPage: React.FC<PurchaseOrdersPageProps> = ({ onNaviga
                           year: 'numeric',
                         })}
                       </td>
-                      <td className="py-2.5 px-3 font-medium text-slate-900">
-                        {order.supplier?.name || '—'}
+                      <td className="py-2.5 px-3">
+                        <div className="font-medium text-slate-900">{order.supplier?.name || order.sourceBusinessName || '—'}</div>
+                        {order.sourceBusinessName && (
+                          <div className="text-[10px] text-indigo-600 font-medium">Main Business: {order.sourceBusinessName}</div>
+                        )}
                       </td>
                       <td className="py-2.5 px-3 font-mono text-slate-500">
                         {order.supplierReference || '—'}
@@ -481,9 +548,59 @@ export const PurchaseOrdersPage: React.FC<PurchaseOrdersPageProps> = ({ onNaviga
                         >
                           {order.status}
                         </span>
+                        {order.isB2bSynchronized && order.b2bSyncStatus && (
+                          <div className="mt-1" title="Documentary Purchase Order booking only. Does not increase stock or create financial ledgers until Invoiced/Received.">
+                            <span
+                              className={`inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-mono font-bold uppercase ${
+                                order.b2bSyncStatus === 'ACCEPTED'
+                                  ? 'bg-emerald-50 text-emerald-700 border border-emerald-200'
+                                  : order.b2bSyncStatus === 'SYNCED'
+                                  ? 'bg-indigo-50 text-indigo-700 border border-indigo-200'
+                                  : order.b2bSyncStatus === 'REJECTED'
+                                  ? 'bg-rose-50 text-rose-700 border border-rose-200'
+                                  : 'bg-amber-50 text-amber-800 border border-amber-200'
+                              }`}
+                            >
+                              {order.b2bSyncStatus === 'SYNCED'
+                                ? 'Auto-Accepted'
+                                : order.b2bSyncStatus === 'ACCEPTED'
+                                ? 'Accepted'
+                                : order.b2bSyncStatus === 'PENDING' || order.b2bSyncStatus === 'PENDING_ACCEPTANCE'
+                                ? 'Pending Ack'
+                                : order.b2bSyncStatus}
+                            </span>
+                          </div>
+                        )}
                       </td>
                       <td className="py-2.5 px-3 text-right">
                         <div className="flex items-center justify-end gap-1.5">
+                          {order.isB2bSynchronized && (order.b2bSyncStatus === 'PENDING' || order.b2bSyncStatus === 'PENDING_ACCEPTANCE') && order.status === 'OPEN' && (
+                            <>
+                              <button
+                                type="button"
+                                onClick={() => handleAcceptOrder(order.id, order.orderNumber)}
+                                disabled={actionLoadingId === order.id}
+                                className="inline-flex items-center gap-1 px-2 py-1 bg-emerald-600 hover:bg-emerald-700 text-white rounded font-bold text-[11px] shadow-2xs disabled:opacity-50 cursor-pointer"
+                                title="Acknowledge and Accept Auto-Synced Order"
+                              >
+                                <CheckCircle2 className="w-3 h-3" />
+                                <span>Accept</span>
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  setRejectReasonInput('');
+                                  setRejectModalOrder({ id: order.id, orderNumber: order.orderNumber });
+                                }}
+                                disabled={actionLoadingId === order.id}
+                                className="inline-flex items-center gap-1 px-2 py-1 bg-rose-50 hover:bg-rose-100 text-rose-700 border border-rose-200 rounded font-bold text-[11px] disabled:opacity-50 cursor-pointer"
+                                title="Reject Auto-Synced Order"
+                              >
+                                <XCircle className="w-3 h-3" />
+                                <span>Reject</span>
+                              </button>
+                            </>
+                          )}
                           <button
                             onClick={() => handleViewOrder(order.id)}
                             className="p-1 text-slate-500 hover:text-blue-600 hover:bg-blue-50 rounded"
@@ -591,6 +708,52 @@ export const PurchaseOrdersPage: React.FC<PurchaseOrdersPageProps> = ({ onNaviga
                 className="px-4 py-1.5 text-xs text-white bg-red-600 hover:bg-red-700 rounded font-bold transition-colors disabled:opacity-50"
               >
                 {cancellingOrderId ? 'Cancelling...' : 'Confirm Cancellation'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* REJECT MODAL DIALOG */}
+      {rejectModalOrder && (
+        <div className="fixed inset-0 z-50 bg-slate-900/40 backdrop-blur-2xs flex items-center justify-center p-4">
+          <div className="bg-white rounded-xl p-5 max-w-md w-full shadow-xl border border-slate-200 space-y-3">
+            <div className="flex items-center gap-2 text-rose-600">
+              <ShieldAlert className="w-6 h-6 shrink-0" />
+              <h3 className="font-bold text-slate-900 text-base">
+                Reject Synced Order #{rejectModalOrder.orderNumber}?
+              </h3>
+            </div>
+            <p className="text-xs text-slate-600">
+              Rejecting this auto-synced order notifies Main Business and stops this order from being inwarded into your godown.
+            </p>
+            <div>
+              <label className="block text-xs font-semibold text-slate-700 mb-1">
+                Reason for Rejection <span className="text-rose-500">*</span>:
+              </label>
+              <textarea
+                value={rejectReasonInput}
+                onChange={e => setRejectReasonInput(e.target.value)}
+                placeholder="e.g. Price mismatch, wrong power/quantity, damaged allocation..."
+                rows={2}
+                className="w-full text-xs p-2 border border-slate-300 rounded focus:ring-1 focus:ring-rose-500 focus:outline-hidden"
+              />
+            </div>
+            <div className="flex items-center justify-end gap-2 pt-2">
+              <button
+                type="button"
+                onClick={() => setRejectModalOrder(null)}
+                className="px-3 py-1.5 text-xs text-slate-700 hover:bg-slate-100 rounded border border-slate-300 font-semibold cursor-pointer"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={handleExecuteReject}
+                disabled={!rejectReasonInput.trim() || !!actionLoadingId}
+                className="px-4 py-1.5 text-xs text-white bg-rose-600 hover:bg-rose-700 rounded font-bold transition-colors disabled:opacity-50 cursor-pointer"
+              >
+                {actionLoadingId ? 'Rejecting...' : 'Confirm Rejection'}
               </button>
             </div>
           </div>

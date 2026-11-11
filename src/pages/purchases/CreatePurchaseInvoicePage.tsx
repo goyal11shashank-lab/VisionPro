@@ -20,6 +20,7 @@ import { VoucherFooter } from '../../components/voucher/VoucherFooter';
 import { useBusinessSettings } from '../../context/BusinessSettingsContext';
 import { OpticalBatchModal } from '../../components/voucher/OpticalBatchModal';
 import { StockItemChangeModal } from '../../components/voucher/StockItemChangeModal';
+import { PurchaseExcelImportModal } from '../../components/purchases/PurchaseExcelImportModal';
 import {
   isSameOpticalCategory,
   remapBatchAllocations,
@@ -206,6 +207,7 @@ export const CreatePurchaseInvoicePage: React.FC<Props> = ({
   const [showPrintModal, setShowPrintModal] = useState<boolean>(false);
   const [isPrintPreviewOpen, setIsPrintPreviewOpen] = useState<boolean>(false);
   const [autoInvokePrint, setAutoInvokePrint] = useState<boolean>(false);
+  const [isExcelImportOpen, setIsExcelImportOpen] = useState<boolean>(false);
 
   // User Permissions
   const canDelete = Boolean(
@@ -1407,6 +1409,40 @@ export const CreatePurchaseInvoicePage: React.FC<Props> = ({
     });
   };
 
+  // Handle Excel Purchase Import (groups batches under stock items, zero batch creation)
+  const handleExcelImportSuccess = (importedLines: VoucherLineItem[]) => {
+    setLines(prev => {
+      const existingNonEmpty = prev.filter(l => !isVoucherLineEmpty(l));
+      const updatedLines = [...existingNonEmpty];
+
+      for (const impLine of importedLines) {
+        const existingIdx = updatedLines.findIndex(l => l.uniqueItemId === impLine.uniqueItemId);
+        if (existingIdx >= 0) {
+          const target = updatedLines[existingIdx];
+          const combinedBatches = [...target.batches];
+          for (const b of impLine.batches) {
+            const foundB = combinedBatches.find(cb => cb.batchId === b.batchId);
+            if (foundB) {
+              foundB.quantity = Math.round((foundB.quantity + b.quantity) * 100) / 100;
+            } else {
+              combinedBatches.push({ ...b });
+            }
+          }
+          const newTotalQty = combinedBatches.reduce((sum, b) => sum + b.quantity, 0);
+          updatedLines[existingIdx] = {
+            ...target,
+            batches: combinedBatches,
+            quantity: newTotalQty,
+          };
+        } else {
+          updatedLines.push(impLine);
+        }
+      }
+
+      return ensureTrailingBlankRow(updatedLines, 'p-row');
+    });
+  };
+
   const handleResetForm = () => {
     if (currentBusiness?.id && user?.id) {
       clearVoucherDraft(currentBusiness.id, user.id, 'PURCHASE', editInvoiceId || editOrderId || null);
@@ -2199,6 +2235,7 @@ export const CreatePurchaseInvoicePage: React.FC<Props> = ({
               setIsPrintPreviewOpen(true);
             }}
             onBack={onBack}
+            onImportExcel={() => setIsExcelImportOpen(true)}
           />
 
           {/* 2. Dominant Item Grid */}
@@ -2572,6 +2609,15 @@ export const CreatePurchaseInvoicePage: React.FC<Props> = ({
           defaultPartyType="SUPPLIER"
           initialName={partyModalInitialName}
           onSuccess={handlePartyCreated}
+        />
+      )}
+
+      {/* Excel Purchase Batch Import Modal */}
+      {isExcelImportOpen && (
+        <PurchaseExcelImportModal
+          isOpen={isExcelImportOpen}
+          onClose={() => setIsExcelImportOpen(false)}
+          onImport={handleExcelImportSuccess}
         />
       )}
     </div>

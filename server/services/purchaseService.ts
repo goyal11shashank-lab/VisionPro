@@ -17,7 +17,7 @@ import {
   opticalStocks,
   stockLedger,
 } from '../db/schema.js';
-import { eq, and, desc, count, ilike, or, gte, lte } from 'drizzle-orm';
+import { eq, and, desc, count, ilike, or, gte, lte, sql } from 'drizzle-orm';
 import { calculateLineTax, calculateInvoiceTotals, round2 } from './taxCalculationService.js';
 import { findOrCreateOpticalBatch, OpticalPowerInput } from './opticalMasterService.js';
 import { AuditService } from './auditService.js';
@@ -55,6 +55,7 @@ export interface PurchaseLineInput {
 
 export interface CreatePurchaseOrderDTO {
   supplierPartyId: string;
+  godownId?: string | null;
   orderDate?: string | Date;
   expectedDeliveryDate?: string | Date;
   orderNumber?: string;
@@ -71,6 +72,7 @@ export interface CreatePurchaseOrderDTO {
 
 export interface CreatePurchaseInvoiceDTO {
   supplierPartyId: string;
+  godownId?: string | null;
   purchaseOrderId?: string;
   invoiceDate: string | Date;
   invoiceNumber?: string;
@@ -332,7 +334,7 @@ export class PurchaseService {
 
       const invRes = await client.query(
         `INSERT INTO purchase_invoices (
-          business_id, supplier_party_id, purchase_order_id, invoice_number, invoice_date,
+          business_id, supplier_party_id, purchase_order_id, godown_id, invoice_number, invoice_date,
           due_date, credit_days_snapshot,
           supplier_invoice_number, supplier_invoice_date, gst_mode,
           subtotal, discount_total, taxable_amount,
@@ -340,19 +342,20 @@ export class PurchaseService {
           courier_charges, round_off, grand_total, payment_status, status, notes,
           created_by, updated_by
         ) VALUES (
-          $1, $2, $3, $4, $5,
-          $6, $7,
-          $8, $9, $10,
-          $11, $12, $13,
-          $14, $15, $16, $17, $18, $19,
-          $20, $21, $22,
-          'UNPAID', 'DRAFT', $23,
-          $24, $24
+          $1, $2, $3, $4, $5, $6,
+          $7, $8,
+          $9, $10, $11,
+          $12, $13, $14,
+          $15, $16, $17, $18, $19, $20,
+          $21, $22, $23,
+          'UNPAID', 'DRAFT', $24,
+          $25, $25
         ) RETURNING *`,
         [
           businessId,
           data.supplierPartyId,
           data.purchaseOrderId || null,
+          data.godownId || null,
           invoiceNumber,
           invoiceDate.toISOString(),
           dueDate.toISOString(),
@@ -1104,6 +1107,7 @@ export class PurchaseService {
     filters: {
       supplierPartyId?: string;
       status?: string;
+      godownId?: string | null;
       search?: string;
       limit?: number;
       offset?: number;
@@ -1115,6 +1119,14 @@ export class PurchaseService {
     const offset = filters.offset || 0;
 
     let conditions = [eq(purchaseInvoices.businessId, businessId)];
+
+    if (filters.godownId !== undefined) {
+      if (filters.godownId === null) {
+        conditions.push(sql`${purchaseInvoices.godownId} IS NULL`);
+      } else {
+        conditions.push(eq(purchaseInvoices.godownId, filters.godownId));
+      }
+    }
 
     if (filters.supplierPartyId) {
       conditions.push(eq(purchaseInvoices.supplierPartyId, filters.supplierPartyId));
@@ -1285,20 +1297,25 @@ export class PurchaseService {
         const qty = parseFloat(alloc.quantity);
         const rate = parseFloat(alloc.rate);
 
+        const godownId = inv.godown_id || null;
+
         // Lock stock row FOR UPDATE (or initialize if missing)
         let stockRow = (
           await client.query(
-            `SELECT * FROM optical_stocks WHERE business_id = $1 AND batch_id = $2 FOR UPDATE`,
-            [businessId, alloc.batch_id]
+            `SELECT * FROM optical_stocks 
+             WHERE business_id = $1 AND batch_id = $2 
+               AND ((godown_id IS NULL AND $3::uuid IS NULL) OR godown_id = $3::uuid) 
+             FOR UPDATE`,
+            [businessId, alloc.batch_id, godownId]
           )
         ).rows[0];
 
         if (!stockRow) {
           const insStock = await client.query(
-            `INSERT INTO optical_stocks (business_id, batch_id, physical_stock, reserved_stock, available_stock)
-             VALUES ($1, $2, '0.00', '0.00', '0.00')
+            `INSERT INTO optical_stocks (business_id, batch_id, godown_id, physical_stock, reserved_stock, available_stock)
+             VALUES ($1, $2, $3, '0.00', '0.00', '0.00')
              RETURNING *`,
-            [businessId, alloc.batch_id]
+            [businessId, alloc.batch_id, godownId]
           );
           stockRow = insStock.rows[0];
         }
@@ -1319,13 +1336,14 @@ export class PurchaseService {
         // Write stock ledger entry
         await client.query(
           `INSERT INTO stock_ledger (
-            business_id, batch_id, transaction_type, reference_type, reference_id,
+            business_id, batch_id, godown_id, transaction_type, reference_type, reference_id,
             quantity_in, quantity_out, reserved_in, reserved_out, balance,
             reason, created_by, created_at
-          ) VALUES ($1, $2, 'PURCHASE', 'PURCHASE_INVOICE', $3, $4, '0.00', '0.00', '0.00', $5, $6, $7, NOW())`,
+          ) VALUES ($1, $2, $3, 'PURCHASE', 'PURCHASE_INVOICE', $4, $5, '0.00', '0.00', '0.00', $6, $7, $8, NOW())`,
           [
             businessId,
             alloc.batch_id,
+            godownId,
             inv.id,
             qty.toFixed(2),
             newPhysical.toFixed(2),
@@ -1365,6 +1383,8 @@ export class PurchaseService {
       );
     }
 
+    const godownId = inv.godown_id || null;
+
     // Update Supplier Ledger
     const lastLedgerRes = await client.query(
       `SELECT balance FROM supplier_ledgers 
@@ -1379,12 +1399,13 @@ export class PurchaseService {
 
     await client.query(
       `INSERT INTO supplier_ledgers (
-        business_id, party_id, transaction_type, reference_type, reference_id,
+        business_id, party_id, godown_id, transaction_type, reference_type, reference_id,
         debit, credit, balance, transaction_date, notes, created_by, created_at
-      ) VALUES ($1, $2, 'PURCHASE', 'PURCHASE_INVOICE', $3, '0.00', $4, $5, $6, $7, $8, NOW())`,
+      ) VALUES ($1, $2, $3, 'PURCHASE', 'PURCHASE_INVOICE', $4, '0.00', $5, $6, $7, $8, $9, NOW())`,
       [
         businessId,
         inv.supplier_party_id,
+        godownId,
         inv.id,
         grandTotalNum.toFixed(2),
         newSupplierBalance.toFixed(2),
@@ -2040,17 +2061,18 @@ export class PurchaseService {
 
       const poRes = await client.query(
         `INSERT INTO purchase_orders (
-          business_id, supplier_party_id, order_number, order_date,
+          business_id, supplier_party_id, godown_id, order_number, order_date,
           expected_delivery_date, gst_mode, subtotal, discount_total, taxable_amount,
           igst_rate, igst_amount, cgst_rate, cgst_amount, sgst_rate, sgst_amount,
           round_off, grand_total, status, source, supplier_reference, notes,
           dealer_order_id, main_sales_order_id, main_sales_invoice_id,
           created_by, updated_by
-        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, 'OPEN', $18, $19, $20, $21, $22, $23, $24, $24)
+        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, 'OPEN', $19, $20, $21, $22, $23, $24, $25, $25)
         RETURNING *`,
         [
           businessId,
           data.supplierPartyId,
+          data.godownId || null,
           orderNumber,
           orderDate.toISOString(),
           expectedDeliveryDate ? expectedDeliveryDate.toISOString() : null,
@@ -2163,6 +2185,7 @@ export class PurchaseService {
     options?: {
       supplierPartyId?: string;
       status?: string;
+      godownId?: string | null;
       source?: string;
       search?: string;
       limit?: number;
@@ -2173,6 +2196,14 @@ export class PurchaseService {
     const offset = options?.offset || 0;
 
     const conditions = [eq(purchaseOrders.businessId, businessId)];
+
+    if (options?.godownId !== undefined) {
+      if (options.godownId === null) {
+        conditions.push(sql`${purchaseOrders.godownId} IS NULL`);
+      } else {
+        conditions.push(eq(purchaseOrders.godownId, options.godownId));
+      }
+    }
 
     if (options?.supplierPartyId && isValidUUID(options.supplierPartyId)) {
       conditions.push(eq(purchaseOrders.supplierPartyId, options.supplierPartyId));
@@ -2955,6 +2986,7 @@ export class PurchaseService {
     const invoicePayload: CreatePurchaseInvoiceDTO = {
       supplierPartyId: order.supplier_party_id,
       purchaseOrderId: order.id,
+      godownId: order.godown_id || null,
       invoiceDate: invoiceOverrides?.invoiceDate || new Date(),
       supplierInvoiceNumber: invoiceOverrides?.supplierInvoiceNumber || order.supplier_reference || undefined,
       supplierInvoiceDate: invoiceOverrides?.supplierInvoiceDate,
