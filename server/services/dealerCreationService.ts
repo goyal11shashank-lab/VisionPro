@@ -1,6 +1,7 @@
 import { pool } from '../db/index.js';
 import { recordAuditLog } from './auditService.js';
 import { PartyService } from './partyService.js';
+import { DealerCatalogInitializationService } from './dealerCatalogInitializationService.js';
 import { Request } from 'express';
 
 export interface CreateDealerDTO {
@@ -439,6 +440,14 @@ export class DealerCreationService {
       );
       const supplierParty = insertSupRes.rows[0];
 
+      // 8B. Replicate Lumina Optical Catalog with Zero Opening Stock (Atomic Transaction)
+      const catalogStats = await DealerCatalogInitializationService.initializeDealerCatalog(
+        client,
+        mainBusinessId,
+        dealerBusinessId,
+        userId
+      );
+
       await client.query('COMMIT');
 
       // 9. Record Audit Logs
@@ -457,6 +466,7 @@ export class DealerCreationService {
           businessType: 'DEALER',
           customerPartyId: customerParty.id,
           supplierPartyId: supplierParty.id,
+          catalogStats,
         },
         req,
       });
@@ -493,9 +503,20 @@ export class DealerCreationService {
         req,
       });
 
+      await recordAuditLog({
+        businessId: dealerBusinessId,
+        userId: userId || null,
+        action: 'DEALER_CATALOG_INITIALIZED',
+        module: 'DEALER_ADMINISTRATION',
+        entityType: 'Catalog',
+        entityId: dealerBusinessId,
+        newValue: catalogStats,
+        req,
+      });
+
       return {
         success: true,
-        message: `Dealer '${newDealer.name}' (${newDealer.code}) successfully created.`,
+        message: `Dealer '${newDealer.name}' (${newDealer.code}) successfully created with initialized optical catalog.`,
         dealer: newDealer,
         customerParty: {
           id: customerParty.id,
@@ -511,6 +532,7 @@ export class DealerCreationService {
           name: supplierParty.name,
           displayName: supplierParty.display_name,
         },
+        catalogStats,
       };
     } catch (err) {
       await client.query('ROLLBACK');

@@ -55,7 +55,10 @@ export class PurchaseReturnService {
    * Generate next sequential return number per business (e.g., PR-000001)
    */
   static async generateReturnNumber(businessId: string, client?: PoolClient, options?: any): Promise<string> {
-    return await DocumentSequenceService.getNextVoucherNumber(client || pool, businessId, 'PURCHASE_RETURN', options);
+    if (client) {
+      return await DocumentSequenceService.getNextVoucherNumber(client, businessId, 'PURCHASE_RETURN', options);
+    }
+    return await DocumentSequenceService.previewNextVoucherNumber(pool, businessId, 'PURCHASE_RETURN', options);
   }
 
   /**

@@ -49,7 +49,7 @@ router.get(
 router.get('/orders/number-preview', async (req: Request, res: Response) => {
   try {
     const businessId = req.user!.currentBusinessId;
-    const nextNum = await SalesService.generateOrderNumber(businessId);
+    const nextNum = await SalesService.previewOrderNumber(businessId);
     res.json({ orderNumber: nextNum });
   } catch (err: any) {
     res.status(400).json({ error: 'NUMBER_GEN_FAILED', message: err.message });
@@ -303,7 +303,7 @@ router.get(
 router.get('/invoices/number-preview', async (req: Request, res: Response) => {
   try {
     const businessId = req.user!.currentBusinessId;
-    const nextNum = await SalesService.generateInvoiceNumber(businessId);
+    const nextNum = await SalesService.previewInvoiceNumber(businessId);
     res.json({ invoiceNumber: nextNum });
   } catch (err: any) {
     res.status(400).json({ error: 'NUMBER_GEN_FAILED', message: err.message });

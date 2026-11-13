@@ -94,7 +94,10 @@ export class PurchaseService {
    * Generates a sequential, business-scoped purchase invoice number (e.g. PUR-000001)
    */
   static async generateInvoiceNumber(businessId: string, client?: PoolClient, options?: any): Promise<string> {
-    return await DocumentSequenceService.getNextVoucherNumber(client || pool, businessId, 'PURCHASE_INVOICE', options);
+    if (client) {
+      return await DocumentSequenceService.getNextVoucherNumber(client, businessId, 'PURCHASE_INVOICE', options);
+    }
+    return await DocumentSequenceService.previewNextVoucherNumber(pool, businessId, 'PURCHASE_INVOICE', options);
   }
 
   /**
@@ -1799,6 +1802,9 @@ export class PurchaseService {
         [businessId, invoiceId]
       );
 
+      // Resynchronize sequence counter to highest remaining purchase invoice
+      await DocumentSequenceService.syncSequenceToExistingMax(client, businessId, 'PURCHASE_INVOICE');
+
       await client.query('COMMIT');
 
       await AuditService.log({
@@ -1915,7 +1921,10 @@ export class PurchaseService {
    * Generates a sequential, business-scoped purchase order number (e.g. PO-000001)
    */
   static async generatePurchaseOrderNumber(businessId: string, client?: PoolClient, options?: any): Promise<string> {
-    return await DocumentSequenceService.getNextVoucherNumber(client || pool, businessId, 'PURCHASE_ORDER', options);
+    if (client) {
+      return await DocumentSequenceService.getNextVoucherNumber(client, businessId, 'PURCHASE_ORDER', options);
+    }
+    return await DocumentSequenceService.previewNextVoucherNumber(pool, businessId, 'PURCHASE_ORDER', options);
   }
 
   /**

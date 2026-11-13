@@ -133,8 +133,7 @@ export class DocumentSequenceService {
     const fyResolution = await this.resolveFinancialYear(businessId, options?.voucherDate);
     const financialYear = resetNumbering === 'FINANCIAL_YEAR' ? fyResolution.fyKey : 'ALL';
 
-    // 3. Atomically upsert and increment sequence
-    // First, verify if the row exists
+    // 3. Atomically upsert and increment sequence under FOR UPDATE lock
     const checkRes = await executor.query(
       `SELECT current_number FROM document_sequences 
        WHERE business_id = $1 AND document_type = $2 AND financial_year = $3 
@@ -144,14 +143,14 @@ export class DocumentSequenceService {
 
     let nextNumber: number;
 
+    const existingMax = await this.findExistingMaxNumber(
+      executor,
+      businessId,
+      documentType,
+      prefix
+    );
+
     if (checkRes.rows.length === 0) {
-      // Find maximum existing number in records if table was already populated prior to sequence migration
-      const existingMax = await this.findExistingMaxNumber(
-        executor,
-        businessId,
-        documentType,
-        prefix
-      );
       const initialSeed = Math.max(existingMax, startNumber - 1);
       nextNumber = initialSeed + 1;
 
@@ -160,19 +159,22 @@ export class DocumentSequenceService {
          VALUES ($1, $2, $3, $4, $5, NOW())
          ON CONFLICT (business_id, document_type, financial_year)
          DO UPDATE SET 
-           current_number = document_sequences.current_number + 1,
+           current_number = GREATEST(document_sequences.current_number, EXCLUDED.current_number) + 1,
            updated_at = NOW()
          RETURNING current_number`,
         [businessId, documentType, financialYear, nextNumber, prefix]
       );
       nextNumber = insertRes.rows[0].current_number;
     } else {
+      const currentVal = parseInt(checkRes.rows[0].current_number, 10) || 0;
+      nextNumber = Math.max(currentVal, existingMax) + 1;
+
       const updateRes = await executor.query(
         `UPDATE document_sequences 
-         SET current_number = current_number + 1, updated_at = NOW() 
-         WHERE business_id = $1 AND document_type = $2 AND financial_year = $3 
+         SET current_number = $1, updated_at = NOW() 
+         WHERE business_id = $2 AND document_type = $3 AND financial_year = $4 
          RETURNING current_number`,
-        [businessId, documentType, financialYear]
+        [nextNumber, businessId, documentType, financialYear]
       );
       nextNumber = updateRes.rows[0].current_number;
     }
@@ -186,13 +188,185 @@ export class DocumentSequenceService {
   }
 
   /**
-   * Helper to scan existing table to initialize sequence counter accurately
+   * Strictly READ-ONLY preview of the next voucher number.
+   * Does NOT increment or touch document_sequences in the database.
+   * Calling this 100 times will not cause sequence skips or burned numbers.
    */
-  private static async findExistingMaxNumber(
+  static async previewNextVoucherNumber(
+    clientOrPool: PoolClient | Pool,
+    businessId: string,
+    documentType: DocumentType,
+    options?: NextNumberOptions
+  ): Promise<string> {
+    const executor = clientOrPool || pool;
+
+    const settingsRes = await BusinessSettingsService.getSettings(businessId).catch(() => null);
+    const resetNumbering =
+      settingsRes?.settings?.voucherNumbering?.resetNumbering || 'NEVER';
+
+    const mapping: Record<DocumentType, string> = {
+      SALES_INVOICE: 'salesInvoice',
+      SALES_ORDER: 'salesOrder',
+      SALES_RETURN: 'salesReturn',
+      PURCHASE_INVOICE: 'purchaseInvoice',
+      PURCHASE_ORDER: 'purchaseOrder',
+      PURCHASE_RETURN: 'purchaseReturn',
+      CUSTOMER_RECEIPT: 'customerReceipt',
+      SUPPLIER_PAYMENT: 'supplierPayment',
+      DEALER_ORDER: 'dealerOrder',
+      DEALER_SHIPMENT: 'dealerShipment',
+      DEALER_GRN: 'dealerGoodsReceipt',
+      DEALER_ADVICE: 'dealerPaymentAdvice',
+      DEALER_RETURN: 'dealerReturn',
+    };
+
+    const settingKey = mapping[documentType] || 'salesInvoice';
+    const vConfig =
+      (settingsRes?.settings?.voucher?.numbering as any)?.[settingKey] ||
+      (settingsRes?.settings?.voucherNumbering as any)?.[settingKey];
+
+    const defaultPrefixes: Record<DocumentType, string> = {
+      SALES_INVOICE: 'INV-',
+      SALES_ORDER: 'SO-',
+      SALES_RETURN: 'SR-',
+      PURCHASE_INVOICE: 'PUR-',
+      PURCHASE_ORDER: 'PO-',
+      PURCHASE_RETURN: 'PR-',
+      CUSTOMER_RECEIPT: 'REC-',
+      SUPPLIER_PAYMENT: 'PAY-',
+      DEALER_ORDER: 'DO-',
+      DEALER_SHIPMENT: 'SHP-',
+      DEALER_GRN: 'GR-',
+      DEALER_ADVICE: 'ADV-',
+      DEALER_RETURN: 'RET-',
+    };
+
+    const prefix = options?.customPrefix || vConfig?.prefix || defaultPrefixes[documentType] || 'VCH-';
+    const startNumber = options?.startNumber || vConfig?.startNumber || 1;
+
+    const fyResolution = await this.resolveFinancialYear(businessId, options?.voucherDate);
+    const financialYear = resetNumbering === 'FINANCIAL_YEAR' ? fyResolution.fyKey : 'ALL';
+
+    // Pure read-only query (no FOR UPDATE, no write)
+    const checkRes = await executor.query(
+      `SELECT current_number FROM document_sequences 
+       WHERE business_id = $1 AND document_type = $2 AND financial_year = $3`,
+      [businessId, documentType, financialYear]
+    );
+
+    const existingMax = await this.findExistingMaxNumber(
+      executor,
+      businessId,
+      documentType,
+      prefix
+    );
+
+    let nextNumber: number;
+    if (checkRes.rows.length === 0) {
+      nextNumber = Math.max(existingMax, startNumber - 1) + 1;
+    } else {
+      const currentVal = parseInt(checkRes.rows[0].current_number, 10) || 0;
+      nextNumber = Math.max(currentVal, existingMax) + 1;
+    }
+
+    const padded = String(nextNumber).padStart(6, '0');
+    if (options?.useFyInPrefix) {
+      return `${prefix}${fyResolution.fyShort}/${padded}`;
+    }
+    return `${prefix}${padded}`;
+  }
+
+  /**
+   * Resynchronizes the document sequence down to the actual maximum voucher number
+   * in the database for this business and document type.
+   * Used when a draft voucher is discarded/deleted so that its number is not skipped.
+   */
+  static async syncSequenceToExistingMax(
+    clientOrPool: PoolClient | Pool,
+    businessId: string,
+    documentType: DocumentType,
+    options?: NextNumberOptions
+  ): Promise<number> {
+    const executor = clientOrPool || pool;
+
+    const settingsRes = await BusinessSettingsService.getSettings(businessId).catch(() => null);
+    const resetNumbering =
+      settingsRes?.settings?.voucherNumbering?.resetNumbering || 'NEVER';
+
+    const mapping: Record<DocumentType, string> = {
+      SALES_INVOICE: 'salesInvoice',
+      SALES_ORDER: 'salesOrder',
+      SALES_RETURN: 'salesReturn',
+      PURCHASE_INVOICE: 'purchaseInvoice',
+      PURCHASE_ORDER: 'purchaseOrder',
+      PURCHASE_RETURN: 'purchaseReturn',
+      CUSTOMER_RECEIPT: 'customerReceipt',
+      SUPPLIER_PAYMENT: 'supplierPayment',
+      DEALER_ORDER: 'dealerOrder',
+      DEALER_SHIPMENT: 'dealerShipment',
+      DEALER_GRN: 'dealerGoodsReceipt',
+      DEALER_ADVICE: 'dealerPaymentAdvice',
+      DEALER_RETURN: 'dealerReturn',
+    };
+
+    const settingKey = mapping[documentType] || 'salesInvoice';
+    const vConfig =
+      (settingsRes?.settings?.voucher?.numbering as any)?.[settingKey] ||
+      (settingsRes?.settings?.voucherNumbering as any)?.[settingKey];
+
+    const defaultPrefixes: Record<DocumentType, string> = {
+      SALES_INVOICE: 'INV-',
+      SALES_ORDER: 'SO-',
+      SALES_RETURN: 'SR-',
+      PURCHASE_INVOICE: 'PUR-',
+      PURCHASE_ORDER: 'PO-',
+      PURCHASE_RETURN: 'PR-',
+      CUSTOMER_RECEIPT: 'REC-',
+      SUPPLIER_PAYMENT: 'PAY-',
+      DEALER_ORDER: 'DO-',
+      DEALER_SHIPMENT: 'SHP-',
+      DEALER_GRN: 'GR-',
+      DEALER_ADVICE: 'ADV-',
+      DEALER_RETURN: 'RET-',
+    };
+
+    const prefix = options?.customPrefix || vConfig?.prefix || defaultPrefixes[documentType] || 'VCH-';
+    const startNumber = options?.startNumber || vConfig?.startNumber || 1;
+
+    const fyResolution = await this.resolveFinancialYear(businessId, options?.voucherDate);
+    const financialYear = resetNumbering === 'FINANCIAL_YEAR' ? fyResolution.fyKey : 'ALL';
+
+    const existingMax = await this.findExistingMaxNumber(
+      executor,
+      businessId,
+      documentType,
+      prefix
+    );
+
+    const targetNumber = Math.max(existingMax, startNumber - 1);
+
+    await executor.query(
+      `INSERT INTO document_sequences (business_id, document_type, financial_year, current_number, prefix, updated_at)
+       VALUES ($1, $2, $3, $4, $5, NOW())
+       ON CONFLICT (business_id, document_type, financial_year)
+       DO UPDATE SET 
+         current_number = $4,
+         updated_at = NOW()`,
+      [businessId, documentType, financialYear, targetNumber, prefix]
+    );
+
+    return targetNumber;
+  }
+
+  /**
+   * Helper to scan existing table to initialize or resynchronize sequence counter accurately.
+   * Extracts trailing numeric sequences (e.g. "INV-000337" -> 337, "INV-2026-27/000012" -> 12).
+   */
+  public static async findExistingMaxNumber(
     executor: PoolClient | Pool,
     businessId: string,
     documentType: DocumentType,
-    prefix: string
+    prefix?: string
   ): Promise<number> {
     try {
       let query = '';
@@ -229,10 +403,12 @@ export class DocumentSequenceService {
       let maxFound = 0;
       for (const row of res.rows) {
         if (!row.num) continue;
-        const cleaned = String(row.num).replace(/^[^\d]+/, '');
-        const parsed = parseInt(cleaned, 10);
-        if (!isNaN(parsed) && parsed > maxFound) {
-          maxFound = parsed;
+        const match = String(row.num).match(/(\d+)\s*$/);
+        if (match) {
+          const parsed = parseInt(match[1], 10);
+          if (!isNaN(parsed) && parsed > maxFound) {
+            maxFound = parsed;
+          }
         }
       }
       return maxFound;

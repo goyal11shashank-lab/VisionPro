@@ -104,17 +104,39 @@ export interface ConvertOrderToInvoiceDTO {
 
 export class SalesService {
   /**
-   * Generates a sequential, business-scoped sales order number (e.g. SO-000001)
+   * Returns a read-only preview of the next sales order number without advancing sequence
    */
-  static async generateOrderNumber(businessId: string, client?: PoolClient, options?: any): Promise<string> {
-    return await DocumentSequenceService.getNextVoucherNumber(client || pool, businessId, 'SALES_ORDER', options);
+  static async previewOrderNumber(businessId: string, options?: any): Promise<string> {
+    return await DocumentSequenceService.previewNextVoucherNumber(pool, businessId, 'SALES_ORDER', options);
   }
 
   /**
-   * Generates a sequential, business-scoped sales invoice number (e.g. INV-000001)
+   * Generates a sequential, business-scoped sales order number (e.g. SO-000001).
+   * Kept for backwards compatibility with existing preview callers.
+   */
+  static async generateOrderNumber(businessId: string, client?: PoolClient, options?: any): Promise<string> {
+    if (client) {
+      return await DocumentSequenceService.getNextVoucherNumber(client, businessId, 'SALES_ORDER', options);
+    }
+    return await DocumentSequenceService.previewNextVoucherNumber(pool, businessId, 'SALES_ORDER', options);
+  }
+
+  /**
+   * Returns a read-only preview of the next sales invoice number without advancing sequence
+   */
+  static async previewInvoiceNumber(businessId: string, options?: any): Promise<string> {
+    return await DocumentSequenceService.previewNextVoucherNumber(pool, businessId, 'SALES_INVOICE', options);
+  }
+
+  /**
+   * Generates a sequential, business-scoped sales invoice number (e.g. INV-000001).
+   * Kept for backwards compatibility with existing preview callers.
    */
   static async generateInvoiceNumber(businessId: string, client?: PoolClient, options?: any): Promise<string> {
-    return await DocumentSequenceService.getNextVoucherNumber(client || pool, businessId, 'SALES_INVOICE', options);
+    if (client) {
+      return await DocumentSequenceService.getNextVoucherNumber(client, businessId, 'SALES_INVOICE', options);
+    }
+    return await DocumentSequenceService.previewNextVoucherNumber(pool, businessId, 'SALES_INVOICE', options);
   }
 
   /**
@@ -445,11 +467,24 @@ export class SalesService {
     try {
       await client.query('BEGIN');
 
-      const orderNumber =
-        data.orderNumber ||
-        (await DocumentSequenceService.getNextVoucherNumber(client, businessId, 'SALES_ORDER', {
+      const soSettings = await BusinessSettingsService.getVoucherPrefix(businessId, 'salesOrder').catch(() => null);
+      const soMethod = soSettings?.method || 'AUTOMATIC';
+
+      let orderNumber: string;
+      if (soMethod === 'MANUAL' && data.orderNumber && data.orderNumber.trim()) {
+        orderNumber = data.orderNumber.trim();
+        const dupCheck = await client.query(
+          `SELECT id FROM sales_orders WHERE business_id = $1 AND order_number = $2`,
+          [businessId, orderNumber]
+        );
+        if (dupCheck.rows.length > 0) {
+          throw new Error(`Order number "${orderNumber}" is already in use.`);
+        }
+      } else {
+        orderNumber = await DocumentSequenceService.getNextVoucherNumber(client, businessId, 'SALES_ORDER', {
           voucherDate: orderDate,
-        }));
+        });
+      }
 
       // 1. Insert Sales Order
       const insertOrderRes = await client.query(
@@ -1162,9 +1197,9 @@ export class SalesService {
       const orderRes = await client.query(
         `SELECT id, business_id, order_number, status 
          FROM sales_orders 
-         WHERE id = $1 
+         WHERE business_id = $1 AND id = $2 
          FOR UPDATE`,
-        [orderId]
+        [businessId, orderId]
       );
 
       if (orderRes.rows.length === 0) {
@@ -1232,9 +1267,12 @@ export class SalesService {
 
       // Delete sales order
       await client.query(
-        `DELETE FROM sales_orders WHERE id = $1`,
-        [orderId]
+        `DELETE FROM sales_orders WHERE business_id = $1 AND id = $2`,
+        [businessId, orderId]
       );
+
+      // Resynchronize sequence counter to highest remaining order
+      await DocumentSequenceService.syncSequenceToExistingMax(client, actualBusinessId, 'SALES_ORDER');
 
       await client.query('COMMIT');
 
@@ -1625,11 +1663,39 @@ export class SalesService {
     try {
       await client.query('BEGIN');
 
-      const invoiceNumber =
-        data.invoiceNumber ||
-        (await DocumentSequenceService.getNextVoucherNumber(client, businessId, 'SALES_INVOICE', {
+      // Determine invoice number according to business voucher numbering method
+      const vSettings = await BusinessSettingsService.getVoucherPrefix(businessId, 'salesInvoice').catch(() => null);
+      const numberingMethod = vSettings?.method || 'AUTOMATIC';
+
+      let invoiceNumber: string;
+      if (numberingMethod === 'MANUAL' && data.invoiceNumber && data.invoiceNumber.trim()) {
+        invoiceNumber = data.invoiceNumber.trim();
+        const dup = await client.query(
+          `SELECT id FROM sales_invoices WHERE business_id = $1 AND invoice_number = $2`,
+          [businessId, invoiceNumber]
+        );
+        if (dup.rows.length > 0) {
+          throw new Error(`Sales invoice number "${invoiceNumber}" is already in use.`);
+        }
+      } else if (numberingMethod === 'AUTO_OVERRIDE' && data.invoiceNumber && data.invoiceNumber.trim()) {
+        const customNumber = data.invoiceNumber.trim();
+        const dup = await client.query(
+          `SELECT id FROM sales_invoices WHERE business_id = $1 AND invoice_number = $2`,
+          [businessId, customNumber]
+        );
+        if (dup.rows.length === 0) {
+          invoiceNumber = customNumber;
+        } else {
+          invoiceNumber = await DocumentSequenceService.getNextVoucherNumber(client, businessId, 'SALES_INVOICE', {
+            voucherDate: invoiceDate,
+          });
+        }
+      } else {
+        // AUTOMATIC: atomically assign sequential voucher number inside transaction
+        invoiceNumber = await DocumentSequenceService.getNextVoucherNumber(client, businessId, 'SALES_INVOICE', {
           voucherDate: invoiceDate,
-        }));
+        });
+      }
 
       // 1. Insert Sales Invoice
       const insertInvRes = await client.query(
@@ -2361,11 +2427,37 @@ export class SalesService {
       );
 
       const invoiceDate = new Date(data.invoiceDate || new Date());
-      const invoiceNumber =
-        data.invoiceNumber ||
-        (await DocumentSequenceService.getNextVoucherNumber(client, businessId, 'SALES_INVOICE', {
+      const vSettings = await BusinessSettingsService.getVoucherPrefix(businessId, 'salesInvoice').catch(() => null);
+      const numberingMethod = vSettings?.method || 'AUTOMATIC';
+
+      let invoiceNumber: string;
+      if (numberingMethod === 'MANUAL' && data.invoiceNumber && data.invoiceNumber.trim()) {
+        invoiceNumber = data.invoiceNumber.trim();
+        const dup = await client.query(
+          `SELECT id FROM sales_invoices WHERE business_id = $1 AND invoice_number = $2`,
+          [businessId, invoiceNumber]
+        );
+        if (dup.rows.length > 0) {
+          throw new Error(`Sales invoice number "${invoiceNumber}" is already in use.`);
+        }
+      } else if (numberingMethod === 'AUTO_OVERRIDE' && data.invoiceNumber && data.invoiceNumber.trim()) {
+        const customNumber = data.invoiceNumber.trim();
+        const dup = await client.query(
+          `SELECT id FROM sales_invoices WHERE business_id = $1 AND invoice_number = $2`,
+          [businessId, customNumber]
+        );
+        if (dup.rows.length === 0) {
+          invoiceNumber = customNumber;
+        } else {
+          invoiceNumber = await DocumentSequenceService.getNextVoucherNumber(client, businessId, 'SALES_INVOICE', {
+            voucherDate: invoiceDate,
+          });
+        }
+      } else {
+        invoiceNumber = await DocumentSequenceService.getNextVoucherNumber(client, businessId, 'SALES_INVOICE', {
           voucherDate: invoiceDate,
-        }));
+        });
+      }
 
       const partyRes = await client.query(`SELECT credit_days FROM parties WHERE id = $1`, [order.party_id]);
       const creditDaysSnapshot = parseInt(String(partyRes.rows[0]?.credit_days || 0), 10) || 0;
@@ -2911,21 +3003,10 @@ export class SalesService {
     try {
       await client.query('BEGIN');
 
-      let invRes = await client.query(
+      const invRes = await client.query(
         `SELECT * FROM sales_invoices WHERE business_id = $1 AND id = $2 FOR UPDATE`,
         [businessId, invoiceId]
       );
-
-      if (invRes.rows.length === 0) {
-        const anyInv = await client.query(`SELECT business_id FROM sales_invoices WHERE id = $1`, [invoiceId]);
-        if (anyInv.rows.length > 0) {
-          businessId = anyInv.rows[0].business_id;
-          invRes = await client.query(
-            `SELECT * FROM sales_invoices WHERE business_id = $1 AND id = $2 FOR UPDATE`,
-            [businessId, invoiceId]
-          );
-        }
-      }
 
       if (invRes.rows.length === 0) {
         throw new Error('Sales invoice not found');
@@ -3095,6 +3176,9 @@ export class SalesService {
         `DELETE FROM sales_invoices WHERE business_id = $1 AND id = $2`,
         [businessId, invoiceId]
       );
+
+      // Resynchronize sequence counter to highest remaining invoice so discarded draft number is not skipped
+      await DocumentSequenceService.syncSequenceToExistingMax(client, businessId, 'SALES_INVOICE');
 
       await client.query('COMMIT');
 

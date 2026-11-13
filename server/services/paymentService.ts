@@ -53,8 +53,16 @@ export class PaymentService {
   ): Promise<string> {
     const docType: DocumentType =
       paymentType === 'RECEIPT' ? 'CUSTOMER_RECEIPT' : 'SUPPLIER_PAYMENT';
-    return await DocumentSequenceService.getNextVoucherNumber(
-      client || pool,
+    if (client) {
+      return await DocumentSequenceService.getNextVoucherNumber(
+        client,
+        businessId,
+        docType,
+        options
+      );
+    }
+    return await DocumentSequenceService.previewNextVoucherNumber(
+      pool,
       businessId,
       docType,
       options

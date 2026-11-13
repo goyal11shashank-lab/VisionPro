@@ -52,7 +52,10 @@ export class SalesReturnService {
    * Generate next sequential return number per business (e.g., SR-000001)
    */
   static async generateReturnNumber(businessId: string, client?: PoolClient, options?: any): Promise<string> {
-    return await DocumentSequenceService.getNextVoucherNumber(client || pool, businessId, 'SALES_RETURN', options);
+    if (client) {
+      return await DocumentSequenceService.getNextVoucherNumber(client, businessId, 'SALES_RETURN', options);
+    }
+    return await DocumentSequenceService.previewNextVoucherNumber(pool, businessId, 'SALES_RETURN', options);
   }
 
   /**
