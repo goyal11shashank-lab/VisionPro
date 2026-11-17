@@ -74,6 +74,45 @@ export const PurchaseInvoicesPage: React.FC = () => {
     return () => window.removeEventListener('click', handleClickOutside);
   }, [contextMenu.visible]);
 
+  const statesRef = useRef({
+    contextMenuVisible: contextMenu.visible,
+    confirmDeleteInvoice,
+    confirmCancelInvoice,
+    isPrintPreviewOpen,
+    selectedInvoice,
+  });
+
+  useEffect(() => {
+    statesRef.current = {
+      contextMenuVisible: contextMenu.visible,
+      confirmDeleteInvoice,
+      confirmCancelInvoice,
+      isPrintPreviewOpen,
+      selectedInvoice,
+    };
+  });
+
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        const s = statesRef.current;
+        if (s.contextMenuVisible) {
+          setContextMenu({ visible: false, x: 0, y: 0, invoice: null });
+        } else if (s.confirmDeleteInvoice) {
+          setConfirmDeleteInvoice(null);
+        } else if (s.confirmCancelInvoice) {
+          setConfirmCancelInvoice(null);
+        } else if (s.isPrintPreviewOpen) {
+          setIsPrintPreviewOpen(false);
+        } else if (s.selectedInvoice) {
+          setSelectedInvoice(null);
+        }
+      }
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, []);
+
   const handleInvoiceContextMenu = (e: React.MouseEvent, inv: PurchaseInvoice) => {
     e.preventDefault();
     setContextMenu({

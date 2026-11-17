@@ -18,6 +18,7 @@ import {
 } from 'lucide-react';
 import { exportToPdf } from '../../utils/pdfExporter.js';
 import { printDocument } from '../../utils/printService.js';
+import { useEscapeKey } from '../../hooks/useEscapeKey.js';
 
 export interface PrintPreviewModalProps {
   isOpen: boolean;
@@ -28,6 +29,8 @@ export interface PrintPreviewModalProps {
   onExportExcel?: () => void;
   onExportCsv?: () => void;
   autoInvokePrint?: boolean;
+  autoInvokePdf?: boolean;
+  autoInvokeExport?: boolean;
   onAfterPrint?: () => void;
   children: (props: { orientation: 'portrait' | 'landscape'; documentId: string }) => React.ReactNode;
 }
@@ -44,6 +47,7 @@ export const PrintPreviewModal: React.FC<PrintPreviewModalProps> = ({
   onAfterPrint,
   children,
 }) => {
+  useEscapeKey(isOpen, onClose);
   const [orientation, setOrientation] = useState<'portrait' | 'landscape'>(defaultOrientation);
   const [zoom, setZoom] = useState<number>(100);
   const [isExportingPdf, setIsExportingPdf] = useState(false);

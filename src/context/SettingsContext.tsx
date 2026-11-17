@@ -161,3 +161,5 @@ export const useBusinessSettings = (): SettingsContextType => {
   }
   return context;
 };
+
+export const useSettings = useBusinessSettings;

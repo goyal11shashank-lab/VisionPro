@@ -16,6 +16,7 @@ import {
 } from 'lucide-react';
 import { getAuthHeaders } from '../../api/client.js';
 import { WhatsAppStatusBadge } from './WhatsAppStatusBadge.js';
+import { useEscapeKey } from '../../hooks/useEscapeKey.js';
 
 interface Props {
   invoice: {
@@ -52,6 +53,7 @@ export const WhatsAppShareModal: React.FC<Props> = ({
   onOpenSettings,
   onDownloadPdf,
 }) => {
+  useEscapeKey(true, onClose);
   const initialPhone =
     invoice.party?.mobile ||
     invoice.party?.alternateMobile ||

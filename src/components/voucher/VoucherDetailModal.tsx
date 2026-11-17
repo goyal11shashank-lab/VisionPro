@@ -5,6 +5,7 @@ import {
   AlertTriangle, ArrowDownLeft, ArrowUpRight, Copy, Check
 } from 'lucide-react';
 import { apiRequest } from '../../api/client.js';
+import { useEscapeKey } from '../../hooks/useEscapeKey.js';
 
 interface VoucherDetailModalProps {
   isOpen: boolean;
@@ -25,6 +26,7 @@ export const VoucherDetailModal: React.FC<VoucherDetailModalProps> = ({
   referenceType,
   onNavigate,
 }) => {
+  useEscapeKey(isOpen, onClose);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [voucherData, setVoucherData] = useState<any | null>(null);

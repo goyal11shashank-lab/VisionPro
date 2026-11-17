@@ -68,6 +68,7 @@ export interface AppSettings {
     enableRoundOff?: boolean;
     requireSalesperson?: boolean;
     autoPrintOnSave?: boolean;
+    enablePos?: boolean;
   };
   purchase: {
     defaultPaymentMode: 'Credit' | 'Cash';
@@ -271,6 +272,7 @@ export const DEFAULT_APP_SETTINGS: AppSettings = {
     enableRoundOff: true,
     requireSalesperson: false,
     autoPrintOnSave: false,
+    enablePos: true,
   },
   purchase: {
     defaultPaymentMode: 'Credit',

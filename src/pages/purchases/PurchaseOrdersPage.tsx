@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import {
   FileSpreadsheet,
   Plus,
@@ -64,6 +64,34 @@ export const PurchaseOrdersPage: React.FC<PurchaseOrdersPageProps> = ({ onNaviga
   // Print Preview
   const [printPreviewOrder, setPrintPreviewOrder] = useState<any | null>(null);
   const [isPrintPreviewOpen, setIsPrintPreviewOpen] = useState<boolean>(false);
+
+  // Context Menu State
+  const [contextMenu, setContextMenu] = useState<{
+    visible: boolean;
+    x: number;
+    y: number;
+    order: PurchaseOrder | null;
+  }>({ visible: false, x: 0, y: 0, order: null });
+
+  useEffect(() => {
+    const handleClickOutside = () => {
+      if (contextMenu.visible) {
+        setContextMenu({ visible: false, x: 0, y: 0, order: null });
+      }
+    };
+    window.addEventListener('click', handleClickOutside);
+    return () => window.removeEventListener('click', handleClickOutside);
+  }, [contextMenu.visible]);
+
+  const handleOrderContextMenu = (e: React.MouseEvent, ord: PurchaseOrder) => {
+    e.preventDefault();
+    setContextMenu({
+      visible: true,
+      x: e.clientX,
+      y: e.clientY,
+      order: ord,
+    });
+  };
 
   const handleRowPrintPreview = async (ordId: string) => {
     try {
@@ -442,24 +470,20 @@ export const PurchaseOrdersPage: React.FC<PurchaseOrdersPageProps> = ({ onNaviga
                 <th className="py-2.5 px-3">Order No</th>
                 <th className="py-2.5 px-3">Date</th>
                 <th className="py-2.5 px-3">Supplier Name</th>
-                <th className="py-2.5 px-3">Supplier Ref</th>
-                <th className="py-2.5 px-3">Items</th>
-                <th className="py-2.5 px-3 text-right">Order Amount</th>
-                <th className="py-2.5 px-3 text-center">Status</th>
-                <th className="py-2.5 px-3 text-right">Actions</th>
+                <th className="py-2.5 px-3 text-right">Grand Total</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-100">
               {loading && orders.length === 0 ? (
                 <tr>
-                  <td colSpan={8} className="py-12 text-center text-slate-400">
+                  <td colSpan={4} className="py-12 text-center text-slate-400">
                     <Loader2 className="w-6 h-6 animate-spin mx-auto text-blue-600 mb-2" />
                     <span>Loading Purchase Orders...</span>
                   </td>
                 </tr>
               ) : orders.length === 0 ? (
                 <tr>
-                  <td colSpan={8} className="py-12 text-center text-slate-400">
+                  <td colSpan={4} className="py-12 text-center text-slate-400">
                     <ShoppingCart className="w-8 h-8 mx-auto text-slate-300 mb-2" />
                     <p className="font-semibold text-slate-600">No purchase orders found</p>
                     <p className="text-xs text-slate-400 mt-1">
@@ -475,18 +499,12 @@ export const PurchaseOrdersPage: React.FC<PurchaseOrdersPageProps> = ({ onNaviga
                 </tr>
               ) : (
                 orders.map(order => {
-                  const isCancel = order.status === 'CANCELLED';
-                  const isConverted = order.status === 'CONVERTED';
-                  const isOpen = order.status === 'OPEN';
-                  const isDealerOrder = order.source === 'DEALER_ORDER' || !!order.dealerOrderId;
-                  const canConvert = (order.status === 'OPEN' || order.status === 'PARTIALLY_CONVERTED') && !isDealerOrder;
-                  const canEdit = order.status === 'OPEN' && !isDealerOrder;
-                  const canCancel = (order.status === 'OPEN' || order.status === 'PARTIALLY_CONVERTED') && !isDealerOrder;
-
                   return (
                     <tr
                       key={order.id}
-                      className="hover:bg-slate-50/80 transition-colors font-sans"
+                      className="hover:bg-slate-50/80 transition-colors font-sans cursor-pointer"
+                      onContextMenu={(e) => handleOrderContextMenu(e, order)}
+                      onClick={() => handleViewOrder(order.id)}
                     >
                       <td className="py-2.5 px-3">
                         <div className="font-mono font-bold text-blue-600">{order.orderNumber}</div>
@@ -496,16 +514,6 @@ export const PurchaseOrdersPage: React.FC<PurchaseOrdersPageProps> = ({ onNaviga
                               <ArrowRightLeft className="w-2.5 h-2.5" />
                               <span>Auto-Synced</span>
                             </span>
-                            {order.sourceSalesOrderNumber && (
-                              <div className="text-[10px] text-slate-500 font-mono">
-                                SO #{order.sourceSalesOrderNumber}
-                              </div>
-                            )}
-                            {order.sourceSalesInvoiceNumber && (
-                              <div className="text-[10px] text-slate-500 font-mono">
-                                Inv #{order.sourceSalesInvoiceNumber}
-                              </div>
-                            )}
                           </div>
                         )}
                       </td>
@@ -522,134 +530,11 @@ export const PurchaseOrdersPage: React.FC<PurchaseOrdersPageProps> = ({ onNaviga
                           <div className="text-[10px] text-indigo-600 font-medium">Main Business: {order.sourceBusinessName}</div>
                         )}
                       </td>
-                      <td className="py-2.5 px-3 font-mono text-slate-500">
-                        {order.supplierReference || '—'}
-                      </td>
-                      <td className="py-2.5 px-3 text-slate-600 font-mono">
-                        {order.lines?.length || 0} line(s)
-                      </td>
                       <td className="py-2.5 px-3 text-right font-mono font-bold text-slate-900">
                         ₹{parseFloat(order.grandTotal || '0').toLocaleString('en-IN', {
                           minimumFractionDigits: 2,
                           maximumFractionDigits: 2,
                         })}
-                      </td>
-                      <td className="py-2.5 px-3 text-center">
-                        <span
-                          className={`inline-flex items-center px-2 py-0.5 rounded text-[11px] font-bold font-mono uppercase ${
-                            order.status === 'OPEN'
-                              ? 'bg-blue-100 text-blue-800'
-                              : order.status === 'CONVERTED'
-                              ? 'bg-emerald-100 text-emerald-800'
-                              : order.status === 'PARTIALLY_CONVERTED'
-                              ? 'bg-amber-100 text-amber-800'
-                              : 'bg-red-100 text-red-800'
-                          }`}
-                        >
-                          {order.status}
-                        </span>
-                        {order.isB2bSynchronized && order.b2bSyncStatus && (
-                          <div className="mt-1" title="Documentary Purchase Order booking only. Does not increase stock or create financial ledgers until Invoiced/Received.">
-                            <span
-                              className={`inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-mono font-bold uppercase ${
-                                order.b2bSyncStatus === 'ACCEPTED'
-                                  ? 'bg-emerald-50 text-emerald-700 border border-emerald-200'
-                                  : order.b2bSyncStatus === 'SYNCED'
-                                  ? 'bg-indigo-50 text-indigo-700 border border-indigo-200'
-                                  : order.b2bSyncStatus === 'REJECTED'
-                                  ? 'bg-rose-50 text-rose-700 border border-rose-200'
-                                  : 'bg-amber-50 text-amber-800 border border-amber-200'
-                              }`}
-                            >
-                              {order.b2bSyncStatus === 'SYNCED'
-                                ? 'Auto-Accepted'
-                                : order.b2bSyncStatus === 'ACCEPTED'
-                                ? 'Accepted'
-                                : order.b2bSyncStatus === 'PENDING' || order.b2bSyncStatus === 'PENDING_ACCEPTANCE'
-                                ? 'Pending Ack'
-                                : order.b2bSyncStatus}
-                            </span>
-                          </div>
-                        )}
-                      </td>
-                      <td className="py-2.5 px-3 text-right">
-                        <div className="flex items-center justify-end gap-1.5">
-                          {order.isB2bSynchronized && (order.b2bSyncStatus === 'PENDING' || order.b2bSyncStatus === 'PENDING_ACCEPTANCE') && order.status === 'OPEN' && (
-                            <>
-                              <button
-                                type="button"
-                                onClick={() => handleAcceptOrder(order.id, order.orderNumber)}
-                                disabled={actionLoadingId === order.id}
-                                className="inline-flex items-center gap-1 px-2 py-1 bg-emerald-600 hover:bg-emerald-700 text-white rounded font-bold text-[11px] shadow-2xs disabled:opacity-50 cursor-pointer"
-                                title="Acknowledge and Accept Auto-Synced Order"
-                              >
-                                <CheckCircle2 className="w-3 h-3" />
-                                <span>Accept</span>
-                              </button>
-                              <button
-                                type="button"
-                                onClick={() => {
-                                  setRejectReasonInput('');
-                                  setRejectModalOrder({ id: order.id, orderNumber: order.orderNumber });
-                                }}
-                                disabled={actionLoadingId === order.id}
-                                className="inline-flex items-center gap-1 px-2 py-1 bg-rose-50 hover:bg-rose-100 text-rose-700 border border-rose-200 rounded font-bold text-[11px] disabled:opacity-50 cursor-pointer"
-                                title="Reject Auto-Synced Order"
-                              >
-                                <XCircle className="w-3 h-3" />
-                                <span>Reject</span>
-                              </button>
-                            </>
-                          )}
-                          <button
-                            onClick={() => handleViewOrder(order.id)}
-                            className="p-1 text-slate-500 hover:text-blue-600 hover:bg-blue-50 rounded"
-                            title="View Order Details"
-                          >
-                            <Eye className="w-4 h-4" />
-                          </button>
-                          <button
-                            onClick={() => handleRowPrintPreview(order.id)}
-                            className="p-1 text-slate-500 hover:text-blue-600 hover:bg-blue-50 rounded"
-                            title="Print Preview / Export PDF"
-                          >
-                            <Printer className="w-4 h-4" />
-                          </button>
-
-                          {canEdit && (
-                            <button
-                              onClick={() => handleEditOrder(order.id)}
-                              className="p-1 text-slate-500 hover:text-indigo-600 hover:bg-indigo-50 rounded"
-                              title="Edit Purchase Order"
-                            >
-                              <Pencil className="w-4 h-4" />
-                            </button>
-                          )}
-                          {canConvert && (
-                            <button
-                              onClick={() => handleConvertToInvoice(order.id)}
-                              className="flex items-center gap-1 px-2 py-1 bg-emerald-50 text-emerald-700 hover:bg-emerald-100 border border-emerald-200 rounded font-semibold text-[11px]"
-                              title="Convert Order to Actual Purchase Invoice"
-                            >
-                              <span>Inward</span>
-                              <ArrowRight className="w-3 h-3" />
-                            </button>
-                          )}
-                          {canCancel && (
-                            <button
-                              onClick={() => handleCancelClick(order.id, order.orderNumber)}
-                              className="p-1 text-slate-400 hover:text-red-600 hover:bg-red-50 rounded"
-                              title="Cancel Order"
-                            >
-                              <XCircle className="w-4 h-4" />
-                            </button>
-                          )}
-                          {isDealerOrder && (
-                            <span className="text-[10px] text-amber-700 bg-amber-50 border border-amber-200 px-1.5 py-0.5 rounded font-medium" title="Fulfilled via Dealer Shipments & GRN">
-                              GRN
-                            </span>
-                          )}
-                        </div>
                       </td>
                     </tr>
                   );
@@ -659,6 +544,80 @@ export const PurchaseOrdersPage: React.FC<PurchaseOrdersPageProps> = ({ onNaviga
           </table>
         </div>
       </div>
+
+      {/* Right-Click Context Menu */}
+      {contextMenu.visible && contextMenu.order && (
+        <div
+          className="fixed z-50 bg-white rounded-xl shadow-2xl border border-slate-200 py-2 w-56 text-sm text-slate-700 animate-in fade-in zoom-in-95 duration-100"
+          style={{ top: `${Math.min(contextMenu.y, window.innerHeight - 250)}px`, left: `${Math.min(contextMenu.x, window.innerWidth - 230)}px` }}
+          onClick={(e) => e.stopPropagation()}
+        >
+          <div className="px-4 py-2 border-b border-slate-100 font-mono font-bold text-xs text-slate-900 bg-slate-50 flex items-center justify-between">
+            <span>#{contextMenu.order.orderNumber}</span>
+            <span className="text-[10px] text-slate-500 font-sans">{contextMenu.order.status}</span>
+          </div>
+          <button
+            onClick={() => {
+              const ordId = contextMenu.order!.id;
+              setContextMenu({ visible: false, x: 0, y: 0, order: null });
+              handleViewOrder(ordId);
+            }}
+            className="w-full text-left px-4 py-2 hover:bg-blue-50 hover:text-blue-800 flex items-center gap-2.5 transition font-medium"
+          >
+            <Eye className="w-4 h-4 text-slate-500" />
+            View Purchase Order
+          </button>
+          <button
+            onClick={() => {
+              const ordId = contextMenu.order!.id;
+              setContextMenu({ visible: false, x: 0, y: 0, order: null });
+              handleRowPrintPreview(ordId);
+            }}
+            className="w-full text-left px-4 py-2 hover:bg-slate-100 hover:text-slate-900 flex items-center gap-2.5 transition font-medium"
+          >
+            <Printer className="w-4 h-4 text-slate-500" />
+            Print Purchase Order
+          </button>
+          {contextMenu.order.status === 'OPEN' && !contextMenu.order.dealerOrderId && (
+            <button
+              onClick={() => {
+                const ordId = contextMenu.order!.id;
+                setContextMenu({ visible: false, x: 0, y: 0, order: null });
+                handleEditOrder(ordId);
+              }}
+              className="w-full text-left px-4 py-2 hover:bg-blue-50 hover:text-blue-800 flex items-center gap-2.5 transition font-medium"
+            >
+              <Pencil className="w-4 h-4 text-blue-600" />
+              Edit Purchase Order
+            </button>
+          )}
+          {contextMenu.order.status === 'OPEN' && (
+            <button
+              onClick={() => {
+                const ordId = contextMenu.order!.id;
+                setContextMenu({ visible: false, x: 0, y: 0, order: null });
+                handleConvertToInvoice(ordId);
+              }}
+              className="w-full text-left px-4 py-2 hover:bg-emerald-50 hover:text-emerald-800 flex items-center gap-2.5 transition font-medium text-emerald-700"
+            >
+              <ArrowRight className="w-4 h-4 text-emerald-600" />
+              Convert to Inward Invoice
+            </button>
+          )}
+          <div className="my-1 border-t border-slate-100"></div>
+          <button
+            onClick={() => {
+              const ord = contextMenu.order!;
+              setContextMenu({ visible: false, x: 0, y: 0, order: null });
+              setConfirmCancelOrder({ id: ord.id, orderNumber: ord.orderNumber });
+            }}
+            className="w-full text-left px-4 py-2 hover:bg-rose-50 hover:text-rose-700 flex items-center gap-2.5 transition font-medium text-rose-600"
+          >
+            <Trash2 className="w-4 h-4 text-rose-500" />
+            Delete / Cancel Order
+          </button>
+        </div>
+      )}
 
       {/* Order Detail Modal */}
       {selectedOrder && (

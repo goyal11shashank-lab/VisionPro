@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 import { AuthProvider, useAuth } from './context/AuthContext.js';
-import { SettingsProvider } from './context/SettingsContext.js';
+import { SettingsProvider, useSettings } from './context/SettingsContext.js';
 import { MainLayout } from './components/layout/MainLayout.js';
 import { LoginPage } from './pages/LoginPage.js';
 import { DashboardPage } from './pages/DashboardPage.js';
@@ -26,7 +26,7 @@ import { PurchaseInvoicesPage } from './pages/purchases/PurchaseInvoicesPage.js'
 import { PurchaseOrdersPage } from './pages/purchases/PurchaseOrdersPage.js';
 import { CreatePurchaseInvoicePage } from './pages/purchases/CreatePurchaseInvoicePage.js';
 import { PurchaseLotsPage } from './pages/purchases/PurchaseLotsPage.js';
-import { SupplierLedgerPage } from './pages/parties/SupplierLedgerPage.js';
+import { PartyLedgerPage } from './pages/parties/PartyLedgerPage.js';
 import { CustomerLedgerPage } from './pages/parties/CustomerLedgerPage.js';
 import { SalesOrdersPage } from './pages/sales/SalesOrdersPage.js';
 import { SalesInvoicesPage } from './pages/sales/SalesInvoicesPage.js';
@@ -48,6 +48,8 @@ import { UnsavedChangesProvider, useUnsavedChanges } from './context/UnsavedChan
 const AppContent: React.FC = () => {
   const { user, isLoading, currentBusiness, accessibleBusinesses, logout, hasPermission, roles, refreshUser } = useAuth();
   const { currentPath, setCurrentPath, navigate } = useUnsavedChanges();
+  const { settings } = useSettings();
+  const enablePos = settings?.sales?.enablePos ?? true;
 
   const canConfigureDealer = Boolean(
     user?.isSuperAdmin ||
@@ -375,6 +377,9 @@ const AppContent: React.FC = () => {
       case '/sales/invoices':
         return <SalesInvoicesPage onNavigate={navigate} />;
       case '/sales/pos':
+        if (!enablePos) {
+          return <NormalSalesVoucherPage onNavigate={navigate} orderId={orderIdParam} />;
+        }
         return <SalesInvoicesPage initialOpenPos={true} onNavigate={navigate} />;
       case '/sales/invoices/new':
       case '/sales/voucher/new':
@@ -499,7 +504,7 @@ const AppContent: React.FC = () => {
         return <PartiesPage initialType="CUSTOMER" />;
       case '/parties/ledger':
       case '/parties/supplier-ledger':
-        return <SupplierLedgerPage />;
+        return <PartyLedgerPage />;
 
       // Accounts Submodules
       case '/accounts/receipts':

@@ -46,7 +46,7 @@ export const PartiesPage: React.FC<{ initialType?: 'ALL' | 'SUPPLIER' | 'CUSTOME
 
   // Filters & Pagination
   const [search, setSearch] = useState<string>('');
-  const [typeFilter, setTypeFilter] = useState<'ALL' | 'SUPPLIER' | 'CUSTOMER' | 'BOTH'>(initialType);
+  const [typeFilter, setTypeFilter] = useState<'ALL' | 'SUPPLIER' | 'CUSTOMER' | 'BOTH'>('ALL');
   const [statusFilter, setStatusFilter] = useState<string>('ALL');
 
   // Modal State
@@ -99,8 +99,11 @@ export const PartiesPage: React.FC<{ initialType?: 'ALL' | 'SUPPLIER' | 'CUSTOME
   };
 
   useEffect(() => {
-    fetchParties();
-  }, [typeFilter, statusFilter]);
+    const timer = setTimeout(() => {
+      fetchParties();
+    }, 200);
+    return () => clearTimeout(timer);
+  }, [search, statusFilter]);
 
   const handleSearchSubmit = (e: React.FormEvent) => {
     e.preventDefault();
@@ -351,23 +354,7 @@ export const PartiesPage: React.FC<{ initialType?: 'ALL' | 'SUPPLIER' | 'CUSTOME
 
       {/* Filter and Search Bar */}
       <div className="bg-white p-4 rounded-2xl border border-slate-200/80 shadow-xs flex flex-col md:flex-row gap-4 justify-between items-center">
-        {/* Type Tabs */}
-        <div className="flex items-center p-1 bg-slate-100/80 rounded-xl w-full md:w-auto">
-          {(['ALL', 'SUPPLIER', 'CUSTOMER', 'BOTH'] as const).map(tab => (
-            <button
-              key={tab}
-              id={`tab-party-${tab.toLowerCase()}`}
-              onClick={() => setTypeFilter(tab)}
-              className={`px-3.5 py-1.5 rounded-lg text-xs font-semibold transition-all ${
-                typeFilter === tab
-                  ? 'bg-white text-purple-700 shadow-xs'
-                  : 'text-slate-600 hover:text-slate-900'
-              }`}
-            >
-              {tab === 'ALL' ? 'All Parties' : tab === 'SUPPLIER' ? 'Suppliers Only' : tab === 'CUSTOMER' ? 'Customers Only' : 'Both (Vendors & Clients)'}
-            </button>
-          ))}
-        </div>
+        <div></div>
 
         {/* Search & Status Controls */}
         <div className="flex items-center gap-3 w-full md:w-auto">

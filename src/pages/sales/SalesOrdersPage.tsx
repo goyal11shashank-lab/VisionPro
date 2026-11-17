@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import {
   ShoppingCart,
   Plus,
@@ -129,6 +129,34 @@ export const SalesOrdersPage: React.FC<{ onNavigateToInvoice?: (orderId: string)
 
   // Global Notification Banner State
   const [notification, setNotification] = useState<{ type: 'success' | 'error'; message: string } | null>(null);
+
+  // Context Menu State
+  const [contextMenu, setContextMenu] = useState<{
+    visible: boolean;
+    x: number;
+    y: number;
+    order: any | null;
+  }>({ visible: false, x: 0, y: 0, order: null });
+
+  useEffect(() => {
+    const handleClickOutside = () => {
+      if (contextMenu.visible) {
+        setContextMenu({ visible: false, x: 0, y: 0, order: null });
+      }
+    };
+    window.addEventListener('click', handleClickOutside);
+    return () => window.removeEventListener('click', handleClickOutside);
+  }, [contextMenu.visible]);
+
+  const handleOrderContextMenu = (e: React.MouseEvent, ord: any) => {
+    e.preventDefault();
+    setContextMenu({
+      visible: true,
+      x: e.clientX,
+      y: e.clientY,
+      order: ord,
+    });
+  };
 
   // Print Preview Modal State
   const [printPreviewOrder, setPrintPreviewOrder] = useState<any | null>(null);
@@ -934,10 +962,7 @@ export const SalesOrdersPage: React.FC<{ onNavigateToInvoice?: (orderId: string)
                   <th className="py-3.5 px-4">Order #</th>
                   <th className="py-3.5 px-4">Date</th>
                   <th className="py-3.5 px-4">Customer</th>
-                  <th className="py-3.5 px-4">Status</th>
-                  <th className="py-3.5 px-4 text-right">Taxable</th>
                   <th className="py-3.5 px-4 text-right">Grand Total</th>
-                  <th className="py-3.5 px-4 text-center">Actions</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-100">
@@ -946,7 +971,12 @@ export const SalesOrdersPage: React.FC<{ onNavigateToInvoice?: (orderId: string)
                   return (
                     <tr
                       key={order.id}
-                      className={`transition ${isSelected ? 'bg-blue-50/70 hover:bg-blue-50' : 'hover:bg-slate-50'}`}
+                      className={`transition cursor-pointer ${isSelected ? 'bg-blue-50/70 hover:bg-blue-50' : 'hover:bg-slate-50'}`}
+                      onContextMenu={(e) => handleOrderContextMenu(e, order)}
+                      onClick={() => {
+                        setSelectedOrder(order);
+                        setIsDetailOpen(true);
+                      }}
                     >
                       <td className="py-3.5 px-3 text-center w-10" onClick={e => e.stopPropagation()}>
                         <button
@@ -971,64 +1001,8 @@ export const SalesOrdersPage: React.FC<{ onNavigateToInvoice?: (orderId: string)
                         <div className="font-medium text-slate-900">{order.partyName}</div>
                         <div className="text-xs text-slate-400 font-mono">{order.partyGstin || order.partyState}</div>
                       </td>
-                      <td className="py-3.5 px-4">{getStatusBadge(order.status)}</td>
-                      <td className="py-3.5 px-4 text-right font-mono text-slate-700">
-                        ₹{parseFloat(String(order.taxableAmount)).toLocaleString('en-IN', { minimumFractionDigits: 2 })}
-                      </td>
                       <td className="py-3.5 px-4 text-right font-mono font-semibold text-slate-900">
                         ₹{parseFloat(String(order.grandTotal)).toLocaleString('en-IN', { minimumFractionDigits: 2 })}
-                      </td>
-                      <td className="py-3.5 px-4 text-center">
-                        <div className="flex items-center justify-center gap-1.5">
-                          <button
-                            type="button"
-                            id={`btn-view-order-${order.id}`}
-                            onClick={() => {
-                              setSelectedOrder(order);
-                              setIsDetailOpen(true);
-                            }}
-                            className="p-1.5 text-slate-600 hover:text-blue-600 hover:bg-blue-50 rounded transition"
-                            title="View Details"
-                          >
-                            <Eye className="w-4 h-4" />
-                          </button>
-
-                          <button
-                            type="button"
-                            id={`btn-print-preview-order-${order.id}`}
-                            onClick={() => handleOpenPrintPreview(order)}
-                            className="p-1.5 text-slate-500 hover:text-slate-900 hover:bg-slate-100 rounded transition"
-                            title="Print Preview / Export PDF"
-                          >
-                            <Printer className="w-4 h-4" />
-                          </button>
-
-                          <button
-                            type="button"
-                            id={`btn-delete-order-${order.id}`}
-                            onClick={(e) => {
-                              e.stopPropagation();
-                              promptDeleteOrder(order);
-                            }}
-                            className="p-1.5 text-slate-400 hover:text-rose-600 hover:bg-rose-50 rounded transition cursor-pointer"
-                            title="Delete Sales Order"
-                          >
-                            <Trash2 className="w-4 h-4" />
-                          </button>
-
-                          {(order.status === 'CONFIRMED' || order.status === 'PARTIALLY_CONVERTED') && onNavigateToInvoice && (
-                            <button
-                              type="button"
-                              id={`btn-convert-order-${order.id}`}
-                              onClick={() => onNavigateToInvoice(order.id)}
-                              className="flex items-center gap-1 px-2.5 py-1 text-xs font-medium text-emerald-700 bg-emerald-50 hover:bg-emerald-100 rounded border border-emerald-200 transition"
-                              title="Convert to Sales Invoice"
-                            >
-                              <ArrowRight className="w-3.5 h-3.5" />
-                              Invoice
-                            </button>
-                          )}
-                        </div>
                       </td>
                     </tr>
                   );
@@ -1037,6 +1011,68 @@ export const SalesOrdersPage: React.FC<{ onNavigateToInvoice?: (orderId: string)
             </table>
           </div>
         )}
+
+      {/* Right-Click Context Menu */}
+      {contextMenu.visible && contextMenu.order && (
+        <div
+          className="fixed z-50 bg-white rounded-xl shadow-2xl border border-slate-200 py-2 w-56 text-sm text-slate-700 animate-in fade-in zoom-in-95 duration-100"
+          style={{ top: `${Math.min(contextMenu.y, window.innerHeight - 250)}px`, left: `${Math.min(contextMenu.x, window.innerWidth - 230)}px` }}
+          onClick={(e) => e.stopPropagation()}
+        >
+          <div className="px-4 py-2 border-b border-slate-100 font-mono font-bold text-xs text-slate-900 bg-slate-50 flex items-center justify-between">
+            <span>#{contextMenu.order.orderNumber}</span>
+            <span className="text-[10px] text-slate-500 font-sans">{contextMenu.order.status}</span>
+          </div>
+          <button
+            onClick={() => {
+              const ord = contextMenu.order!;
+              setContextMenu({ visible: false, x: 0, y: 0, order: null });
+              setSelectedOrder(ord);
+              setIsDetailOpen(true);
+            }}
+            className="w-full text-left px-4 py-2 hover:bg-blue-50 hover:text-blue-800 flex items-center gap-2.5 transition font-medium"
+          >
+            <Eye className="w-4 h-4 text-slate-500" />
+            View Sales Order
+          </button>
+          <button
+            onClick={() => {
+              const ord = contextMenu.order!;
+              setContextMenu({ visible: false, x: 0, y: 0, order: null });
+              handleOpenPrintPreview(ord);
+            }}
+            className="w-full text-left px-4 py-2 hover:bg-slate-100 hover:text-slate-900 flex items-center gap-2.5 transition font-medium"
+          >
+            <Printer className="w-4 h-4 text-slate-500" />
+            Print Sales Order
+          </button>
+          {(contextMenu.order.status === 'CONFIRMED' || contextMenu.order.status === 'PARTIALLY_CONVERTED') && onNavigateToInvoice && (
+            <button
+              onClick={() => {
+                const ordId = contextMenu.order!.id;
+                setContextMenu({ visible: false, x: 0, y: 0, order: null });
+                onNavigateToInvoice(ordId);
+              }}
+              className="w-full text-left px-4 py-2 hover:bg-emerald-50 hover:text-emerald-800 flex items-center gap-2.5 transition font-medium text-emerald-700"
+            >
+              <ArrowRight className="w-4 h-4 text-emerald-600" />
+              Convert to Sales Invoice
+            </button>
+          )}
+          <div className="my-1 border-t border-slate-100"></div>
+          <button
+            onClick={() => {
+              const ord = contextMenu.order!;
+              setContextMenu({ visible: false, x: 0, y: 0, order: null });
+              promptDeleteOrder(ord);
+            }}
+            className="w-full text-left px-4 py-2 hover:bg-rose-50 hover:text-rose-700 flex items-center gap-2.5 transition font-medium text-rose-600"
+          >
+            <Trash2 className="w-4 h-4 text-rose-500" />
+            Delete Sales Order
+          </button>
+        </div>
+      )}
       </div>
 
       {/* CREATE ORDER MODAL */}

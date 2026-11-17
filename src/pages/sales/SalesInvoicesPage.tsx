@@ -29,6 +29,7 @@ import {
 } from 'lucide-react';
 import { useAuth } from '../../context/AuthContext.js';
 import { useBusinessSettings } from '../../context/BusinessSettingsContext.js';
+import { useSettings } from '../../context/SettingsContext.js';
 import { getAuthHeaders, getStoredToken, apiRequest } from '../../api/client.js';
 import { NormalSalesVoucherPage } from './NormalSalesVoucherPage.js';
 import { PrintPreviewModal } from '../../components/print/PrintPreviewModal.js';
@@ -112,6 +113,8 @@ export const SalesInvoicesPage: React.FC<{
 }) => {
   const { currentBusiness, hasPermission } = useAuth();
   const { settings } = useBusinessSettings();
+  const { settings: appSettings } = useSettings();
+  const enablePos = appSettings?.sales?.enablePos ?? true;
 
   const [invoices, setInvoices] = useState<SalesInvoice[]>([]);
   const [loading, setLoading] = useState(true);
@@ -182,6 +185,8 @@ export const SalesInvoicesPage: React.FC<{
     window.addEventListener('click', handleClickOutside);
     return () => window.removeEventListener('click', handleClickOutside);
   }, [contextMenu.visible]);
+
+
 
   const handleInvoiceContextMenu = (e: React.MouseEvent, inv: SalesInvoice) => {
     e.preventDefault();
@@ -264,6 +269,57 @@ export const SalesInvoicesPage: React.FC<{
     }
     setIsPrintPreviewOpen(true);
   };
+
+  const statesRef = useRef({
+    contextMenuVisible: contextMenu.visible,
+    invoiceToDelete,
+    invoiceToCancel,
+    whatsappModalInvoice,
+    isPrintPreviewOpen,
+    isDetailOpen,
+    isDirectCreateOpen,
+    isConvertModalOpen,
+  });
+
+  useEffect(() => {
+    statesRef.current = {
+      contextMenuVisible: contextMenu.visible,
+      invoiceToDelete,
+      invoiceToCancel,
+      whatsappModalInvoice,
+      isPrintPreviewOpen,
+      isDetailOpen,
+      isDirectCreateOpen,
+      isConvertModalOpen,
+    };
+  });
+
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        const s = statesRef.current;
+        if (s.contextMenuVisible) {
+          setContextMenu({ visible: false, x: 0, y: 0, invoice: null });
+        } else if (s.invoiceToDelete) {
+          setInvoiceToDelete(null);
+        } else if (s.invoiceToCancel) {
+          setInvoiceToCancel(null);
+        } else if (s.whatsappModalInvoice) {
+          setWhatsappModalInvoice(null);
+        } else if (s.isPrintPreviewOpen) {
+          setIsPrintPreviewOpen(false);
+        } else if (s.isDetailOpen) {
+          setIsDetailOpen(false);
+        } else if (s.isDirectCreateOpen) {
+          setIsDirectCreateOpen(false);
+        } else if (s.isConvertModalOpen) {
+          setIsConvertModalOpen(false);
+        }
+      }
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, []);
 
   const handleExportInvoicesExcel = () => {
     const columns: ExcelColumn[] = [
@@ -385,9 +441,14 @@ export const SalesInvoicesPage: React.FC<{
   // Handle Initial Direct POS Open
   useEffect(() => {
     if (initialOpenPos) {
-      handleOpenDirectCreate();
+      if (!enablePos) {
+        if (onNavigate) onNavigate('/sales/voucher/new');
+        else window.location.href = '/sales/voucher/new';
+      } else {
+        handleOpenDirectCreate();
+      }
     }
-  }, [initialOpenPos]);
+  }, [initialOpenPos, enablePos]);
 
   const loadFormData = async () => {
     if (!currentBusiness) return;
@@ -416,6 +477,11 @@ export const SalesInvoicesPage: React.FC<{
   };
 
   const handleOpenDirectCreate = () => {
+    if (!enablePos) {
+      if (onNavigate) onNavigate('/sales/voucher/new');
+      else window.location.href = '/sales/voucher/new';
+      return;
+    }
     isSavingRef.current = false;
     idempotencyKeyRef.current = crypto.randomUUID();
     setSelectedPartyId('');
@@ -1012,14 +1078,16 @@ export const SalesInvoicesPage: React.FC<{
             Convert from Sales Order
           </button>
 
-          <button
-            id="btn-create-pos-invoice"
-            onClick={handleOpenDirectCreate}
-            className="flex items-center gap-2 px-4 py-2.5 bg-emerald-600 hover:bg-emerald-700 text-white font-medium rounded-lg shadow-sm transition"
-          >
-            <Sparkles className="w-4 h-4" />
-            POS
-          </button>
+          {enablePos && (
+            <button
+              id="btn-create-pos-invoice"
+              onClick={handleOpenDirectCreate}
+              className="flex items-center gap-2 px-4 py-2.5 bg-emerald-600 hover:bg-emerald-700 text-white font-medium rounded-lg shadow-sm transition"
+            >
+              <Sparkles className="w-4 h-4" />
+              POS
+            </button>
+          )}
 
           <button
             id="btn-create-normal-voucher"

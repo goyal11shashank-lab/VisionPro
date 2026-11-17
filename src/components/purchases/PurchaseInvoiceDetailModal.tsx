@@ -22,6 +22,7 @@ import { apiRequest } from '../../api/client.js';
 import { useAuth } from '../../context/AuthContext.js';
 import { PrintPreviewModal } from '../print/PrintPreviewModal.js';
 import { PrintableVoucher } from '../print/PrintableVoucher.js';
+import { useEscapeKey } from '../../hooks/useEscapeKey.js';
 
 interface PurchaseInvoiceDetailModalProps {
   invoice: PurchaseInvoice;
@@ -36,6 +37,7 @@ export const PurchaseInvoiceDetailModal: React.FC<PurchaseInvoiceDetailModalProp
   onRefresh,
   onEdit,
 }) => {
+  useEscapeKey(true, onClose);
   const { currentBusiness } = useAuth();
   const [actionLoading, setActionLoading] = useState<boolean>(false);
   const [actionError, setActionError] = useState<string | null>(null);

@@ -1008,6 +1008,19 @@ export const BusinessSettingsPage: React.FC<Props> = ({ initialTab = 'general' }
                       </span>
                     </label>
 
+                    <label className="flex items-center gap-2 cursor-pointer">
+                      <input
+                        id="toggle-sales-enable-pos"
+                        type="checkbox"
+                        checked={formData.sales.enablePos ?? true}
+                        onChange={(e) => handleUpdate('sales', 'enablePos', e.target.checked)}
+                        className="w-4 h-4 text-blue-600 rounded border-slate-300 focus:ring-blue-500"
+                      />
+                      <span className="text-xs text-slate-800 font-medium">
+                        Enable Optical POS (Point of Sale) billing interface (Uncheck to use Normal Sales Voucher by default and hide POS)
+                      </span>
+                    </label>
+
                     <label className="flex items-start gap-2 cursor-pointer pt-1">
                       <input
                         id="toggle-sales-show-success-popup"

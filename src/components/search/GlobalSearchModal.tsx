@@ -14,6 +14,7 @@ import {
   AlertCircle,
 } from 'lucide-react';
 import { apiRequest } from '../../api/client.js';
+import { useEscapeKey } from '../../hooks/useEscapeKey.js';
 
 interface SearchResultItem {
   id: string;
@@ -37,6 +38,7 @@ export const GlobalSearchModal: React.FC<GlobalSearchModalProps> = ({
   onClose,
   onNavigate,
 }) => {
+  useEscapeKey(isOpen, onClose);
   const [query, setQuery] = useState('');
   const [loading, setLoading] = useState(false);
   const [activeFilter, setActiveFilter] = useState<'ALL' | 'BARCODE' | 'DOCUMENT' | 'PARTY' | 'PRODUCT'>('ALL');

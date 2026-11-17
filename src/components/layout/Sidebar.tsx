@@ -36,6 +36,7 @@ import {
 } from 'lucide-react';
 import { useAuth } from '../../context/AuthContext.js';
 import { useUnsavedChanges } from '../../context/UnsavedChangesContext.js';
+import { useSettings } from '../../context/SettingsContext.js';
 
 interface SidebarProps {
   currentPath: string;
@@ -94,6 +95,8 @@ export const Sidebar: React.FC<SidebarProps> = ({
   };
 
   const isDealer = currentBusiness?.businessType === 'DEALER';
+  const { settings } = useSettings();
+  const enablePos = settings?.sales?.enablePos ?? true;
 
   const defaultSections: NavSection[] = [
     {
@@ -114,7 +117,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
       icon: ShoppingCart,
       items: [
         { id: 'dealer-control-center', label: 'Dealer Control Center', icon: Store, path: '/dealers', permission: 'sales:view' },
-        {
+        ...(enablePos ? [{
           id: 'sales-create-invoice',
           label: 'Create Sales Invoice',
           icon: Receipt,
@@ -124,7 +127,13 @@ export const Sidebar: React.FC<SidebarProps> = ({
             { id: 'sales-pos', label: 'POS', icon: Sparkles, path: '/sales/pos', permission: 'sales:view' },
             { id: 'sales-normal-voucher', label: 'Normal Sales Voucher', icon: FileSpreadsheet, path: '/sales/voucher/new', permission: 'sales:view' },
           ],
-        },
+        }] : [{
+          id: 'sales-create-invoice',
+          label: 'Create Sales Invoice',
+          icon: Receipt,
+          path: '/sales/voucher/new',
+          permission: 'sales:view',
+        }]),
         { id: 'sales-invoices', label: 'Sales Invoices Register', icon: Receipt, path: '/sales/invoices', permission: 'sales:view' },
         { id: 'sales-orders', label: 'Sales Orders', icon: ShoppingCart, path: '/sales/orders', permission: 'sales:view' },
         { id: 'sales-returns', label: 'Sales Returns', icon: RotateCcw, path: '/sales/returns', permission: 'sales:view' },
@@ -148,9 +157,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
       icon: Users,
       items: [
         { id: 'parties-all', label: 'Party Master', icon: Users, path: '/parties', permission: 'parties:view' },
-        { id: 'parties-suppliers', label: 'Suppliers', icon: Building2, path: '/parties/suppliers', permission: 'parties:view' },
-        { id: 'parties-customers', label: 'Customers', icon: Users, path: '/parties/customers', permission: 'parties:view' },
-        { id: 'parties-ledger', label: 'Supplier Ledger', icon: BookOpen, path: '/parties/ledger', permission: 'parties:view' },
+        { id: 'parties-ledger', label: 'Party Ledger', icon: BookOpen, path: '/parties/ledger', permission: 'parties:view' },
       ],
     },
     {
@@ -217,7 +224,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
       title: 'Sales',
       icon: ShoppingCart,
       items: [
-        { id: 'dealer-sales-pos', label: 'POS Billing', icon: Sparkles, path: '/sales/pos', permission: 'sales:view' },
+        ...(enablePos ? [{ id: 'dealer-sales-pos', label: 'POS Billing', icon: Sparkles, path: '/sales/pos', permission: 'sales:view' }] : []),
         { id: 'dealer-sales-invoices', label: 'Sales Invoices', icon: Receipt, path: '/sales/invoices', permission: 'sales:view' },
         { id: 'dealer-sales-orders', label: 'Sales Orders', icon: ShoppingCart, path: '/sales/orders', permission: 'sales:view' },
         { id: 'dealer-sales-returns', label: 'Sales Returns', icon: RotateCcw, path: '/sales/returns', permission: 'sales:view' },
@@ -259,7 +266,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
       title: 'Sales & Receipts',
       icon: ShoppingCart,
       items: [
-        {
+        ...(enablePos ? [{
           id: 'godown-sales-create',
           label: 'Create Sales Invoice',
           icon: Receipt,
@@ -268,7 +275,12 @@ export const Sidebar: React.FC<SidebarProps> = ({
             { id: 'godown-sales-pos', label: 'POS Billing', icon: Sparkles, path: '/sales/pos' },
             { id: 'godown-sales-normal', label: 'Normal Sales Voucher', icon: FileSpreadsheet, path: '/sales/voucher/new' },
           ],
-        },
+        }] : [{
+          id: 'godown-sales-create',
+          label: 'Create Sales Invoice',
+          icon: Receipt,
+          path: '/sales/voucher/new',
+        }]),
         { id: 'godown-sales-invoices', label: 'Sales Invoices Register', icon: Receipt, path: '/sales/invoices' },
         { id: 'godown-sales-orders', label: 'Sales Orders', icon: ShoppingBag, path: '/sales/orders' },
         { id: 'godown-customer-receipts', label: 'Customer Receipts', icon: ArrowDownLeft, path: '/accounts/receipts' },

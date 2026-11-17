@@ -24,6 +24,7 @@ import {
 import { apiRequest } from '../../api/client.js';
 import { formatQuantity, formatCurrency } from '../../utils/numberFormatting.js';
 import { QuickPeriodKey, getDateRangeForPeriod } from '../../utils/datePeriods.js';
+import { useEscapeKey } from '../../hooks/useEscapeKey.js';
 
 export interface MonthlySummary {
   month: string;
@@ -109,6 +110,7 @@ export const StockItemLedgerModal: React.FC<StockItemLedgerModalProps> = ({
   isOpen = true,
   onClose,
 }) => {
+  useEscapeKey(isOpen, onClose);
   const targetItemId = itemId || uniqueItemId || null;
   const targetItemName = itemName || uniqueItemName || '';
 
