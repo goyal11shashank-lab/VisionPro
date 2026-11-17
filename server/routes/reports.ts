@@ -44,6 +44,7 @@ router.get(
             stockStatus: req.query.stockStatus as string,
             categoryId: req.query.categoryId as string,
             uniqueItemId: req.query.uniqueItemId as string,
+            godownId: req.query.godownId as string,
           }
         );
         sendXlsx(res, fileName, buffer);
@@ -62,6 +63,7 @@ router.get(
         axis: req.query.axis !== undefined ? Number(req.query.axis) : undefined,
         add: req.query.add !== undefined ? Number(req.query.add) : undefined,
         side: req.query.side as string,
+        godownId: req.query.godownId as string,
         page: req.query.page ? Number(req.query.page) : 1,
         limit: req.query.limit ? Number(req.query.limit) : 50,
       });

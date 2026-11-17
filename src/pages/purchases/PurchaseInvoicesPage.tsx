@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import {
   FileSpreadsheet,
   Plus,
@@ -55,6 +55,34 @@ export const PurchaseInvoicesPage: React.FC = () => {
   // Print Preview
   const [printPreviewInvoice, setPrintPreviewInvoice] = useState<any | null>(null);
   const [isPrintPreviewOpen, setIsPrintPreviewOpen] = useState<boolean>(false);
+
+  // Context Menu State
+  const [contextMenu, setContextMenu] = useState<{
+    visible: boolean;
+    x: number;
+    y: number;
+    invoice: PurchaseInvoice | null;
+  }>({ visible: false, x: 0, y: 0, invoice: null });
+
+  useEffect(() => {
+    const handleClickOutside = () => {
+      if (contextMenu.visible) {
+        setContextMenu({ visible: false, x: 0, y: 0, invoice: null });
+      }
+    };
+    window.addEventListener('click', handleClickOutside);
+    return () => window.removeEventListener('click', handleClickOutside);
+  }, [contextMenu.visible]);
+
+  const handleInvoiceContextMenu = (e: React.MouseEvent, inv: PurchaseInvoice) => {
+    e.preventDefault();
+    setContextMenu({
+      visible: true,
+      x: e.clientX,
+      y: e.clientY,
+      invoice: inv,
+    });
+  };
 
   const handleRowPrintPreview = async (invId: string) => {
     try {
@@ -462,18 +490,13 @@ export const PurchaseInvoicesPage: React.FC = () => {
                 <th className="px-5 py-3.5">Invoice #</th>
                 <th className="px-4 py-3.5">Invoice Date</th>
                 <th className="px-4 py-3.5">Supplier / Vendor</th>
-                <th className="px-4 py-3.5">Vendor Bill #</th>
-                <th className="px-4 py-3.5">GST Mode</th>
-                <th className="px-4 py-3.5 text-right">Taxable (₹)</th>
                 <th className="px-4 py-3.5 text-right">Grand Total (₹)</th>
-                <th className="px-4 py-3.5 text-center">Status</th>
-                <th className="px-5 py-3.5 text-right">Actions</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-100">
               {loading ? (
                 <tr>
-                  <td colSpan={9} className="px-6 py-12 text-center text-slate-400">
+                  <td colSpan={4} className="px-6 py-12 text-center text-slate-400">
                     <div className="flex flex-col items-center justify-center gap-2">
                       <RefreshCw className="w-6 h-6 animate-spin text-purple-600" />
                       <span>Loading purchase invoices...</span>
@@ -482,7 +505,7 @@ export const PurchaseInvoicesPage: React.FC = () => {
                 </tr>
               ) : invoices.length === 0 ? (
                 <tr>
-                  <td colSpan={9} className="px-6 py-12 text-center text-slate-400">
+                  <td colSpan={4} className="px-6 py-12 text-center text-slate-400">
                     <div className="flex flex-col items-center justify-center gap-2">
                       <FileSpreadsheet className="w-8 h-8 text-slate-300" />
                       <span className="font-medium text-slate-600">No purchase invoices found</span>
@@ -494,7 +517,13 @@ export const PurchaseInvoicesPage: React.FC = () => {
                 </tr>
               ) : (
                 invoices.map(inv => (
-                  <tr key={inv.id} className="hover:bg-slate-50/60 transition-colors" id={`row-invoice-${inv.id}`}>
+                  <tr
+                    key={inv.id}
+                    className="hover:bg-slate-50/60 transition-colors cursor-pointer"
+                    id={`row-invoice-${inv.id}`}
+                    onContextMenu={(e) => handleInvoiceContextMenu(e, inv)}
+                    onClick={() => handleViewInvoice(inv.id)}
+                  >
                     {/* Invoice Number */}
                     <td className="px-5 py-4">
                       <div className="font-mono font-bold text-slate-900">{inv.invoiceNumber}</div>
@@ -518,91 +547,9 @@ export const PurchaseInvoicesPage: React.FC = () => {
                       <div className="text-[11px] font-mono text-purple-700">{inv.supplier?.partyCode}</div>
                     </td>
 
-                    {/* Vendor Bill # */}
-                    <td className="px-4 py-4 text-xs font-mono text-slate-600">
-                      {inv.supplierInvoiceNumber || '—'}
-                    </td>
-
-                    {/* GST Mode */}
-                    <td className="px-4 py-4 text-xs text-slate-500">
-                      <span className="px-2 py-0.5 rounded bg-slate-100 text-slate-700 text-[11px]">
-                        {inv.gstMode === 'INTRA_STATE' ? 'Intra (CGST+SGST)' : inv.gstMode === 'INTER_STATE' ? 'Inter (IGST)' : 'Exempt'}
-                      </span>
-                    </td>
-
-                    {/* Taxable */}
-                    <td className="px-4 py-4 text-right font-mono text-xs text-slate-700">
-                      ₹{Number(inv.taxableAmount).toLocaleString('en-IN', { minimumFractionDigits: 2 })}
-                    </td>
-
                     {/* Grand Total */}
                     <td className="px-4 py-4 text-right font-mono font-bold text-xs text-purple-900">
                       ₹{Number(inv.grandTotal).toLocaleString('en-IN', { minimumFractionDigits: 2 })}
-                    </td>
-
-                    {/* Status */}
-                    <td className="px-4 py-4 text-center">
-                      {getStatusBadge(inv.status)}
-                    </td>
-
-                    {/* Actions */}
-                    <td className="px-5 py-4 text-right">
-                      <div className="flex items-center justify-end gap-1.5">
-                        <button
-                          id={`btn-view-invoice-${inv.id}`}
-                          onClick={() => handleViewInvoice(inv.id)}
-                          className="flex items-center gap-1 px-2.5 py-1 rounded-lg text-xs font-semibold text-purple-700 bg-purple-50 hover:bg-purple-100 transition-colors"
-                        >
-                          <Eye className="w-3.5 h-3.5" />
-                          <span>View</span>
-                        </button>
-                        <button
-                          id={`btn-print-preview-invoice-${inv.id}`}
-                          onClick={() => handleRowPrintPreview(inv.id)}
-                          className="p-1 text-slate-500 hover:text-purple-600 hover:bg-purple-50 rounded-lg transition-colors"
-                          title="Print Preview / Export PDF"
-                        >
-                          <Printer className="w-3.5 h-3.5" />
-                        </button>
-                        {inv.status !== 'CANCELLED' && (
-                          <button
-                            id={`btn-edit-invoice-${inv.id}`}
-                            onClick={() => handleEditInvoice(inv.id)}
-                            className="p-1 text-slate-500 hover:text-purple-600 hover:bg-purple-50 rounded-lg transition-colors"
-                            title="Edit Invoice"
-                          >
-                            <Pencil className="w-3.5 h-3.5" />
-                          </button>
-                        )}
-                        {inv.status === 'POSTED' && (
-                          <button
-                            id={`btn-cancel-invoice-${inv.id}`}
-                            onClick={() => handleCancelClick(inv.id, inv.invoiceNumber)}
-                            disabled={cancellingInvoiceId === inv.id}
-                            className="p-1 text-amber-600 hover:text-amber-700 hover:bg-amber-50 disabled:opacity-50 rounded-lg transition-colors"
-                            title="Cancel Invoice & Reverse Stock"
-                          >
-                            {cancellingInvoiceId === inv.id ? (
-                              <Loader2 className="w-3.5 h-3.5 animate-spin text-amber-600" />
-                            ) : (
-                              <RotateCcw className="w-3.5 h-3.5" />
-                            )}
-                          </button>
-                        )}
-                        <button
-                          id={`btn-delete-invoice-${inv.id}`}
-                          onClick={() => handleDeleteClick(inv.id, inv.invoiceNumber)}
-                          disabled={deletingInvoiceId === inv.id}
-                          className="p-1 text-slate-400 hover:text-rose-600 hover:bg-rose-50 disabled:opacity-50 disabled:cursor-not-allowed rounded-lg transition-colors"
-                          title="Delete Invoice"
-                        >
-                          {deletingInvoiceId === inv.id ? (
-                            <Loader2 className="w-3.5 h-3.5 animate-spin text-rose-600" />
-                          ) : (
-                            <Trash2 className="w-3.5 h-3.5" />
-                          )}
-                        </button>
-                      </div>
                     </td>
                   </tr>
                 ))
@@ -611,6 +558,80 @@ export const PurchaseInvoicesPage: React.FC = () => {
           </table>
         </div>
       </div>
+
+      {/* Right-Click Context Menu */}
+      {contextMenu.visible && contextMenu.invoice && (
+        <div
+          className="fixed z-50 bg-white rounded-xl shadow-2xl border border-slate-200 py-2 w-56 text-sm text-slate-700 animate-in fade-in zoom-in-95 duration-100"
+          style={{ top: `${Math.min(contextMenu.y, window.innerHeight - 250)}px`, left: `${Math.min(contextMenu.x, window.innerWidth - 230)}px` }}
+          onClick={(e) => e.stopPropagation()}
+        >
+          <div className="px-4 py-2 border-b border-slate-100 font-mono font-bold text-xs text-slate-900 bg-slate-50 flex items-center justify-between">
+            <span>#{contextMenu.invoice.invoiceNumber}</span>
+            <span className="text-[10px] text-slate-500 font-sans">{contextMenu.invoice.status}</span>
+          </div>
+          <button
+            onClick={() => {
+              const invId = contextMenu.invoice!.id;
+              setContextMenu({ visible: false, x: 0, y: 0, invoice: null });
+              handleViewInvoice(invId);
+            }}
+            className="w-full text-left px-4 py-2 hover:bg-purple-50 hover:text-purple-800 flex items-center gap-2.5 transition font-medium"
+          >
+            <Eye className="w-4 h-4 text-slate-500" />
+            View Purchase Bill
+          </button>
+          <button
+            onClick={() => {
+              const invId = contextMenu.invoice!.id;
+              setContextMenu({ visible: false, x: 0, y: 0, invoice: null });
+              handleRowPrintPreview(invId);
+            }}
+            className="w-full text-left px-4 py-2 hover:bg-slate-100 hover:text-slate-900 flex items-center gap-2.5 transition font-medium"
+          >
+            <Printer className="w-4 h-4 text-slate-500" />
+            Print Purchase Bill
+          </button>
+          {contextMenu.invoice.status !== 'CANCELLED' && (
+            <button
+              onClick={() => {
+                const invId = contextMenu.invoice!.id;
+                setContextMenu({ visible: false, x: 0, y: 0, invoice: null });
+                handleEditInvoice(invId);
+              }}
+              className="w-full text-left px-4 py-2 hover:bg-blue-50 hover:text-blue-800 flex items-center gap-2.5 transition font-medium"
+            >
+              <Pencil className="w-4 h-4 text-blue-600" />
+              Edit Purchase Bill
+            </button>
+          )}
+          {contextMenu.invoice.status === 'POSTED' && (
+            <button
+              onClick={() => {
+                const inv = contextMenu.invoice!;
+                setContextMenu({ visible: false, x: 0, y: 0, invoice: null });
+                handleCancelClick(inv.id, inv.invoiceNumber);
+              }}
+              className="w-full text-left px-4 py-2 hover:bg-amber-50 hover:text-amber-800 flex items-center gap-2.5 transition font-medium text-amber-700"
+            >
+              <RotateCcw className="w-4 h-4 text-amber-600" />
+              Cancel & Reverse Stock
+            </button>
+          )}
+          <div className="my-1 border-t border-slate-100"></div>
+          <button
+            onClick={() => {
+              const inv = contextMenu.invoice!;
+              setContextMenu({ visible: false, x: 0, y: 0, invoice: null });
+              setConfirmDeleteInvoice({ id: inv.id, invoiceNumber: inv.invoiceNumber });
+            }}
+            className="w-full text-left px-4 py-2 hover:bg-rose-50 hover:text-rose-700 flex items-center gap-2.5 transition font-medium text-rose-600"
+          >
+            <Trash2 className="w-4 h-4 text-rose-500" />
+            Delete Purchase Bill
+          </button>
+        </div>
+      )}
 
       {/* Cancel Confirmation Modal */}
       {confirmCancelInvoice && (

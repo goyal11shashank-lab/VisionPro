@@ -54,6 +54,12 @@ export class DealerCatalogInitializationService {
 
     const startTime = Date.now();
 
+    // 0. Concurrency / transaction advisory lock to prevent race conditions during initialization
+    await client.query(
+      `SELECT pg_advisory_xact_lock(hashtext($1 || '-' || $2))`,
+      [mainBusinessId, dealerBusinessId]
+    );
+
     // 1. Validate source business exists and is active
     const sourceBizRes = await client.query(
       `SELECT id, name, status FROM businesses WHERE id = $1`,
@@ -90,9 +96,9 @@ export class DealerCatalogInitializationService {
       FROM categories 
       WHERE business_id = $3 AND status = 'ACTIVE'
       ON CONFLICT (business_id, code) DO UPDATE SET 
-        name = EXCLUDED.name, 
-        description = EXCLUDED.description,
-        status = EXCLUDED.status, 
+        name = COALESCE(categories.name, EXCLUDED.name), 
+        description = COALESCE(categories.description, EXCLUDED.description),
+        status = COALESCE(categories.status, EXCLUDED.status), 
         updated_at = NOW()
       RETURNING id`,
       [dealerBusinessId, auditUserId, mainBusinessId]
@@ -108,9 +114,9 @@ export class DealerCatalogInitializationService {
       FROM coatings 
       WHERE business_id = $3 AND status = 'ACTIVE'
       ON CONFLICT (business_id, code) DO UPDATE SET 
-        name = EXCLUDED.name, 
-        description = EXCLUDED.description,
-        status = EXCLUDED.status, 
+        name = COALESCE(coatings.name, EXCLUDED.name), 
+        description = COALESCE(coatings.description, EXCLUDED.description),
+        status = COALESCE(coatings.status, EXCLUDED.status), 
         updated_at = NOW()
       RETURNING id`,
       [dealerBusinessId, auditUserId, mainBusinessId]
@@ -128,11 +134,11 @@ export class DealerCatalogInitializationService {
       LEFT JOIN coatings c_new ON c_new.business_id = $1 AND c_new.code = c_old.code
       WHERE b.business_id = $3 AND b.status = 'ACTIVE'
       ON CONFLICT (business_id, code) DO UPDATE SET 
-        name = EXCLUDED.name, 
-        family = EXCLUDED.family,
-        coating_id = EXCLUDED.coating_id,
-        description = EXCLUDED.description,
-        status = EXCLUDED.status, 
+        name = COALESCE(bases.name, EXCLUDED.name), 
+        family = COALESCE(bases.family, EXCLUDED.family),
+        coating_id = COALESCE(bases.coating_id, EXCLUDED.coating_id),
+        description = COALESCE(bases.description, EXCLUDED.description),
+        status = COALESCE(bases.status, EXCLUDED.status), 
         updated_at = NOW()
       RETURNING id`,
       [dealerBusinessId, auditUserId, mainBusinessId]
@@ -172,19 +178,19 @@ export class DealerCatalogInitializationService {
       LEFT JOIN coatings c_new ON c_new.business_id = $1 AND c_new.code = c_old.code
       WHERE pi.business_id = $3 AND pi.status = 'ACTIVE'
       ON CONFLICT (business_id, code) DO UPDATE SET 
-        category_id = EXCLUDED.category_id,
-        base_id = EXCLUDED.base_id,
-        coating_id = EXCLUDED.coating_id,
-        name = EXCLUDED.name,
-        description = EXCLUDED.description,
-        status = EXCLUDED.status, 
+        category_id = COALESCE(primary_items.category_id, EXCLUDED.category_id),
+        base_id = COALESCE(primary_items.base_id, EXCLUDED.base_id),
+        coating_id = COALESCE(primary_items.coating_id, EXCLUDED.coating_id),
+        name = COALESCE(primary_items.name, EXCLUDED.name),
+        description = COALESCE(primary_items.description, EXCLUDED.description),
+        status = COALESCE(primary_items.status, EXCLUDED.status), 
         updated_at = NOW()
       RETURNING id`,
       [dealerBusinessId, auditUserId, mainBusinessId]
     );
 
     // 8. Step 6: Replicate Active Unique Items
-    // Strips purchase_rate and last_purchase_price to '0.00', preserves mrp, gst_rate, maintain_batches, optical_category, unit
+    // Preserves dealer-owned commercial metadata (purchase_rate, last_purchase_price, mrp, gst_rate, name, status) if already populated or modified by dealer.
     const uiRes = await client.query(
       `INSERT INTO unique_items (
         id, business_id, primary_item_id, name, code, description, maintain_batches,
@@ -200,17 +206,17 @@ export class DealerCatalogInitializationService {
       LEFT JOIN primary_items pi_new ON pi_new.business_id = $1 AND pi_new.code = pi_old.code
       WHERE ui.business_id = $3 AND ui.status = 'ACTIVE'
       ON CONFLICT (business_id, code) DO UPDATE SET 
-        primary_item_id = EXCLUDED.primary_item_id,
-        name = EXCLUDED.name,
-        description = EXCLUDED.description,
-        maintain_batches = EXCLUDED.maintain_batches,
-        optical_category = EXCLUDED.optical_category,
-        unit = EXCLUDED.unit,
-        purchase_rate = '0.00',
-        last_purchase_price = '0.00',
-        mrp = EXCLUDED.mrp,
-        gst_rate = EXCLUDED.gst_rate,
-        status = EXCLUDED.status, 
+        primary_item_id = COALESCE(unique_items.primary_item_id, EXCLUDED.primary_item_id),
+        name = COALESCE(unique_items.name, EXCLUDED.name),
+        description = COALESCE(unique_items.description, EXCLUDED.description),
+        maintain_batches = COALESCE(unique_items.maintain_batches, EXCLUDED.maintain_batches),
+        optical_category = COALESCE(unique_items.optical_category, EXCLUDED.optical_category),
+        unit = COALESCE(unique_items.unit, EXCLUDED.unit),
+        purchase_rate = COALESCE(NULLIF(unique_items.purchase_rate, 0), '0.00'),
+        last_purchase_price = COALESCE(NULLIF(unique_items.last_purchase_price, 0), '0.00'),
+        mrp = COALESCE(NULLIF(unique_items.mrp, 0), EXCLUDED.mrp),
+        gst_rate = COALESCE(NULLIF(unique_items.gst_rate, 0), EXCLUDED.gst_rate),
+        status = COALESCE(unique_items.status, EXCLUDED.status), 
         updated_at = NOW()
       RETURNING id`,
       [dealerBusinessId, auditUserId, mainBusinessId]
@@ -218,7 +224,7 @@ export class DealerCatalogInitializationService {
 
     // 9. Step 7: Replicate Active Optical Batches
     // Generates deterministic, globally unique Code 128 barcodes per dealer and source batch.
-    // Preserves optical power coordinates (sph, cyl, axis, add, side) and identity_key.
+    // Preserves optical power coordinates (sph, cyl, axis, add, side) and identity_key while protecting dealer custom status.
     const batchRes = await client.query(
       `INSERT INTO optical_batches (
         id, business_id, unique_item_id, category_id, barcode,
@@ -249,7 +255,7 @@ export class DealerCatalogInitializationService {
       JOIN categories cat_new ON cat_new.business_id = $1 AND cat_new.code = cat_old.code
       WHERE ob.business_id = $3 AND ob.status = 'ACTIVE'
       ON CONFLICT (business_id, identity_key) DO UPDATE SET 
-        status = EXCLUDED.status,
+        status = COALESCE(optical_batches.status, EXCLUDED.status),
         updated_at = NOW()
       RETURNING id`,
       [dealerBusinessId, auditUserId, mainBusinessId]

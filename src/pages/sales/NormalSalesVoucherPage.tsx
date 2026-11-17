@@ -178,6 +178,8 @@ export const NormalSalesVoucherPage: React.FC<Props> = ({ onNavigate, onSuccess,
 
   // Submission & Post-Creation States
   const [submitting, setSubmitting] = useState<boolean>(false);
+  const isSavingRef = useRef<boolean>(false);
+  const idempotencyKeyRef = useRef<string>(crypto.randomUUID());
   const [formError, setFormError] = useState<string | null>(null);
   const [createdInvoice, setCreatedInvoice] = useState<any | null>(null);
   const [showPrintModal, setShowPrintModal] = useState<boolean>(false);
@@ -1234,15 +1236,18 @@ export const NormalSalesVoucherPage: React.FC<Props> = ({ onNavigate, onSuccess,
 
   // Save Voucher (DRAFT or POSTED)
   const handleSaveVoucher = async (targetStatus: 'DRAFT' | 'POSTED', isSaveAndNew: boolean = false): Promise<any | null> => {
-    if (submitting) return null;
+    if (submitting || isSavingRef.current) return null;
+    isSavingRef.current = true;
     setFormError(null);
 
     if (!selectedPartyId) {
+      isSavingRef.current = false;
       setFormError('Please select a Customer / Party to create the invoice.');
       return null;
     }
 
     if (targetStatus === 'POSTED' && isPartyStateMissing) {
+      isSavingRef.current = false;
       setFormError('Party registered state is missing. Please update customer profile with state to determine GST place of supply.');
       return null;
     }
@@ -1250,6 +1255,7 @@ export const NormalSalesVoucherPage: React.FC<Props> = ({ onNavigate, onSuccess,
     const nonBlankLines = lines.filter(l => !isVoucherLineEmpty(l));
 
     if (nonBlankLines.length === 0) {
+      isSavingRef.current = false;
       setFormError('Invoice must contain at least one stock item line.');
       return null;
     }
@@ -1260,17 +1266,20 @@ export const NormalSalesVoucherPage: React.FC<Props> = ({ onNavigate, onSuccess,
       const itemName = l.uniqueItemName || 'Item';
 
       if (!l.uniqueItemId) {
+        isSavingRef.current = false;
         setFormError(`Line #${lineNum}: Stock Item is required.`);
         return null;
       }
 
       if (l.maintainBatches !== false) {
         if (!l.batches || l.batches.length === 0) {
+          isSavingRef.current = false;
           setFormError(`Line #${lineNum} (${itemName}): Batch allocations are required. Please allocate at least one batch.`);
           return null;
         }
         const unresolved = l.batches.filter(b => (b as any).unresolved || !b.batchId);
         if (unresolved.length > 0) {
+          isSavingRef.current = false;
           setFormError(
             `Line #${lineNum} (${itemName}): Contains ${unresolved.length} unresolved batch power(s). Please open batch allocations and select or create valid batches.`
           );
@@ -1278,12 +1287,14 @@ export const NormalSalesVoucherPage: React.FC<Props> = ({ onNavigate, onSuccess,
         }
         const batchSum = l.batches.reduce((sum, b) => sum + Number(b.quantity || 0), 0);
         if (batchSum <= 0 || Math.abs(batchSum - l.quantity) > 0.001) {
+          isSavingRef.current = false;
           setFormError(`Line #${lineNum} (${itemName}): Sum of batch quantities (${batchSum.toFixed(2)}) must match line quantity (${l.quantity.toFixed(2)}).`);
           return null;
         }
         for (const b of l.batches) {
           const bVal = validateQuantity(b.quantity, l.unit || 'PRS');
           if (!bVal.valid) {
+            isSavingRef.current = false;
             setFormError(`Line #${lineNum} (${itemName}) batch allocation: ${bVal.error}`);
             return null;
           }
@@ -1292,10 +1303,12 @@ export const NormalSalesVoucherPage: React.FC<Props> = ({ onNavigate, onSuccess,
 
       const qVal = validateQuantity(l.quantity, l.unit || 'PRS');
       if (!qVal.valid) {
+        isSavingRef.current = false;
         setFormError(`Line #${lineNum} (${itemName}): ${qVal.error}`);
         return null;
       }
       if (l.rate < 0) {
+        isSavingRef.current = false;
         setFormError(`Line #${lineNum} (${itemName}) has negative unit price.`);
         return null;
       }
@@ -1314,6 +1327,7 @@ export const NormalSalesVoucherPage: React.FC<Props> = ({ onNavigate, onSuccess,
         gstRate: effectiveGstRate,
         courierCharges: courierCharges || 0,
         notes: cleanNarrationNotes(notes) || undefined,
+        idempotencyKey: idempotencyKeyRef.current,
         lines: nonBlankLines.map(l => ({
           uniqueItemId: l.uniqueItemId,
           quantity: l.quantity,
@@ -1369,11 +1383,14 @@ export const NormalSalesVoucherPage: React.FC<Props> = ({ onNavigate, onSuccess,
       );
       return null;
     } finally {
+      isSavingRef.current = false;
       setSubmitting(false);
     }
   };
 
   const handleResetForm = () => {
+    isSavingRef.current = false;
+    idempotencyKeyRef.current = crypto.randomUUID();
     if (currentBusiness?.id && user?.id) {
       clearVoucherDraft(currentBusiness.id, user.id, 'SALES', editInvoiceId || null);
     }

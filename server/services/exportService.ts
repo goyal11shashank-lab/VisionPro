@@ -38,6 +38,7 @@ export interface ExportFilterOptions {
   axis?: number;
   add?: number;
   side?: string;
+  godownId?: string;
 }
 
 export class ExportService {
@@ -226,7 +227,40 @@ export class ExportService {
   }
 
   private static async queryBatches(businessId: string, filters: ExportFilterOptions = {}): Promise<any[]> {
+    const params: any[] = [businessId];
+    let idx = 2;
+
+    let stockAggregateSql = '';
+    if (filters.godownId === 'MAIN' || filters.godownId === 'null' || filters.godownId === 'MAIN_WAREHOUSE') {
+      stockAggregateSql = `
+        SELECT batch_id, business_id, physical_stock, reserved_stock, available_stock
+        FROM optical_stocks
+        WHERE business_id = $1 AND godown_id IS NULL
+      `;
+    } else if (filters.godownId && filters.godownId !== 'ALL' && filters.godownId !== '') {
+      stockAggregateSql = `
+        SELECT batch_id, business_id, physical_stock, reserved_stock, available_stock
+        FROM optical_stocks
+        WHERE business_id = $1 AND godown_id = $${idx}
+      `;
+      params.push(filters.godownId);
+      idx++;
+    } else {
+      stockAggregateSql = `
+        SELECT
+          batch_id,
+          business_id,
+          SUM(physical_stock) AS physical_stock,
+          SUM(reserved_stock) AS reserved_stock,
+          SUM(physical_stock - reserved_stock) AS available_stock
+        FROM optical_stocks
+        WHERE business_id = $1
+        GROUP BY batch_id, business_id
+      `;
+    }
+
     let sql = `
+      WITH aggregated_stock AS (${stockAggregateSql})
       SELECT
         b.id AS batch_id,
         b.barcode,
@@ -256,12 +290,10 @@ export class ExportService {
       FROM optical_batches b
       JOIN categories c ON b.category_id = c.id
       JOIN unique_items u ON b.unique_item_id = u.id
-      JOIN primary_items p ON u.primary_item_id = p.id
-      LEFT JOIN optical_stocks s ON (s.batch_id = b.id AND s.business_id = b.business_id)
+      LEFT JOIN primary_items p ON u.primary_item_id = p.id
+      LEFT JOIN aggregated_stock s ON (s.batch_id = b.id AND s.business_id = b.business_id)
       WHERE b.business_id = $1
     `;
-    const params: any[] = [businessId];
-    let idx = 2;
 
     if (filters.categoryId) {
       sql += ` AND b.category_id = $${idx++}`;
@@ -328,7 +360,50 @@ export class ExportService {
     const settings = await BusinessSettingsService.getSettings(businessId);
     const lowStockThreshold = settings.lowStockThreshold;
 
+    const params: any[] = [businessId];
+    let idx = 2;
+
+    let stockAggregateSql = '';
+    if (filters.godownId === 'MAIN' || filters.godownId === 'null' || filters.godownId === 'MAIN_WAREHOUSE') {
+      stockAggregateSql = `
+        SELECT
+          batch_id,
+          business_id,
+          physical_stock,
+          reserved_stock,
+          (physical_stock - reserved_stock) AS available_stock
+        FROM optical_stocks
+        WHERE business_id = $1 AND godown_id IS NULL
+      `;
+    } else if (filters.godownId && filters.godownId !== 'ALL' && filters.godownId !== '') {
+      stockAggregateSql = `
+        SELECT
+          batch_id,
+          business_id,
+          physical_stock,
+          reserved_stock,
+          (physical_stock - reserved_stock) AS available_stock
+        FROM optical_stocks
+        WHERE business_id = $1 AND godown_id = $${idx}
+      `;
+      params.push(filters.godownId);
+      idx++;
+    } else {
+      stockAggregateSql = `
+        SELECT
+          batch_id,
+          business_id,
+          SUM(physical_stock) AS physical_stock,
+          SUM(reserved_stock) AS reserved_stock,
+          SUM(physical_stock - reserved_stock) AS available_stock
+        FROM optical_stocks
+        WHERE business_id = $1
+        GROUP BY batch_id, business_id
+      `;
+    }
+
     let sql = `
+      WITH aggregated_stock AS (${stockAggregateSql})
       SELECT
         b.barcode AS "Barcode",
         u.name AS "Product Name",
@@ -354,12 +429,10 @@ export class ExportService {
       FROM optical_batches b
       JOIN categories c ON b.category_id = c.id
       JOIN unique_items u ON b.unique_item_id = u.id
-      JOIN primary_items p ON u.primary_item_id = p.id
-      LEFT JOIN optical_stocks s ON (s.batch_id = b.id AND s.business_id = b.business_id)
+      LEFT JOIN primary_items p ON u.primary_item_id = p.id
+      LEFT JOIN aggregated_stock s ON (s.batch_id = b.id AND s.business_id = b.business_id)
       WHERE b.business_id = $1
     `;
-    const params: any[] = [businessId];
-    let idx = 2;
 
     if (filters.stockStatus === 'IN_STOCK') {
       sql += ` AND COALESCE(s.physical_stock, 0) > 0`;
@@ -868,16 +941,16 @@ export class ExportService {
       SELECT
         u.name AS "Product Name",
         u.code AS "SKU",
-        c.name AS "Category",
-        p.name AS "Brand",
+        COALESCE(c.name, 'General') AS "Category",
+        COALESCE(p.name, 'Direct Item') AS "Brand",
         COUNT(DISTINCT si.id) AS "Total Invoices",
         COALESCE(SUM(sil.quantity), 0) AS "Total Qty Sold",
         COALESCE(SUM(sil.line_total), 0) AS "Total Sales Amount"
       FROM sales_invoice_lines sil
       JOIN sales_invoices si ON sil.sales_invoice_id = si.id
       JOIN unique_items u ON sil.unique_item_id = u.id
-      JOIN primary_items p ON u.primary_item_id = p.id
-      JOIN categories c ON p.category_id = c.id
+      LEFT JOIN primary_items p ON u.primary_item_id = p.id
+      LEFT JOIN categories c ON COALESCE(u.category_id, p.category_id) = c.id
       WHERE si.business_id = $1 AND si.status = 'POSTED'
     `;
     const params: any[] = [businessId];

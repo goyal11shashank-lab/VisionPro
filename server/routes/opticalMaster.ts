@@ -2083,7 +2083,8 @@ router.delete(['/unique-items/:id', '/stock-items/:id'], requireAnyPermission(['
         (SELECT COUNT(*)::int FROM optical_batches ob WHERE ob.unique_item_id = $1) AS optical_batches_count,
         (SELECT COUNT(*)::int FROM stock_ledger sl JOIN optical_batches ob ON sl.batch_id = ob.id WHERE ob.unique_item_id = $1) AS stock_ledger_count,
         (SELECT COUNT(*)::int FROM stock_reservations sr JOIN optical_batches ob ON sr.batch_id = ob.id WHERE ob.unique_item_id = $1 AND sr.status = 'ACTIVE') AS stock_reservations_count,
-        (SELECT COALESCE(SUM(ABS(os.physical_stock)), 0)::numeric FROM optical_batches ob JOIN optical_stocks os ON ob.id = os.batch_id WHERE ob.unique_item_id = $1) AS total_physical_stock
+        (SELECT COALESCE(SUM(os.physical_stock), 0)::numeric FROM optical_batches ob JOIN optical_stocks os ON ob.id = os.batch_id WHERE ob.unique_item_id = $1) AS total_physical_stock,
+        (SELECT CASE WHEN EXISTS (SELECT 1 FROM optical_batches ob JOIN optical_stocks os ON ob.id = os.batch_id WHERE ob.unique_item_id = $1 AND (os.physical_stock <> 0 OR os.reserved_stock <> 0)) THEN 1 ELSE 0 END) AS has_non_zero_stock
       `,
       [id]
     );
@@ -2099,6 +2100,7 @@ router.delete(['/unique-items/:id', '/stock-items/:id'], requireAnyPermission(['
       stock_ledger_count,
       stock_reservations_count,
       total_physical_stock,
+      has_non_zero_stock,
     } = checkRes.rows[0];
 
     if (sales_invoice_lines_count > 0 || purchase_invoice_lines_count > 0 || sales_return_lines_count > 0 || purchase_return_lines_count > 0) {
@@ -2129,9 +2131,9 @@ router.delete(['/unique-items/:id', '/stock-items/:id'], requireAnyPermission(['
       return;
     }
 
-    if (Number(total_physical_stock) !== 0) {
+    if (Number(total_physical_stock) !== 0 || Number(has_non_zero_stock) > 0) {
       res.status(400).json({
-        error: `Cannot delete Stock Item "${current.name}" (${current.code}): Item currently holds active inventory stock (${total_physical_stock}). Transfer stock to 0, or mark the item INACTIVE.`
+        error: `Cannot delete Stock Item "${current.name}" (${current.code}): Item currently holds active inventory stock (signed net: ${total_physical_stock}). Transfer stock to 0, or mark the item INACTIVE.`
       });
       return;
     }
@@ -2213,7 +2215,8 @@ router.post(['/unique-items/bulk-delete', '/stock-items/bulk-delete'], requireAn
             (SELECT COUNT(*)::int FROM optical_batches ob WHERE ob.unique_item_id = $1) AS optical_batches_count,
             (SELECT COUNT(*)::int FROM stock_ledger sl JOIN optical_batches ob ON sl.batch_id = ob.id WHERE ob.unique_item_id = $1) AS stock_ledger_count,
             (SELECT COUNT(*)::int FROM stock_reservations sr JOIN optical_batches ob ON sr.batch_id = ob.id WHERE ob.unique_item_id = $1 AND sr.status = 'ACTIVE') AS stock_reservations_count,
-            (SELECT COALESCE(SUM(ABS(os.physical_stock)), 0)::numeric FROM optical_batches ob JOIN optical_stocks os ON ob.id = os.batch_id WHERE ob.unique_item_id = $1) AS total_physical_stock
+            (SELECT COALESCE(SUM(os.physical_stock), 0)::numeric FROM optical_batches ob JOIN optical_stocks os ON ob.id = os.batch_id WHERE ob.unique_item_id = $1) AS total_physical_stock,
+            (SELECT CASE WHEN EXISTS (SELECT 1 FROM optical_batches ob JOIN optical_stocks os ON ob.id = os.batch_id WHERE ob.unique_item_id = $1 AND (os.physical_stock <> 0 OR os.reserved_stock <> 0)) THEN 1 ELSE 0 END) AS has_non_zero_stock
           `,
           [id]
         );
@@ -2229,6 +2232,7 @@ router.post(['/unique-items/bulk-delete', '/stock-items/bulk-delete'], requireAn
           stock_ledger_count,
           stock_reservations_count,
           total_physical_stock,
+          has_non_zero_stock,
         } = checkRes.rows[0];
 
         if (sales_invoice_lines_count > 0 || purchase_invoice_lines_count > 0 || sales_return_lines_count > 0 || purchase_return_lines_count > 0) {
@@ -2241,7 +2245,7 @@ router.post(['/unique-items/bulk-delete', '/stock-items/bulk-delete'], requireAn
           continue;
         }
 
-        if (Number(stock_ledger_count) > 0 || Number(total_physical_stock) !== 0 || Number(stock_reservations_count) > 0 || Number(optical_batches_count) > 0) {
+        if (Number(stock_ledger_count) > 0 || Number(total_physical_stock) !== 0 || Number(has_non_zero_stock) > 0 || Number(stock_reservations_count) > 0 || Number(optical_batches_count) > 0) {
           errors.push(`"${current.name}" (${current.code}) has associated batches, stock, or ledger transactions.`);
           continue;
         }
@@ -2621,7 +2625,7 @@ interface BatchDeletionSafetyResult {
  * Rule E: Posted Sales/Purchase Returns block deletion to preserve financial/inventory history.
  * Rule F: Active stock reservations, active dealer orders, or live trading movements in stock_ledger block deletion.
  */
-async function checkBatchDeletionSafety(batchId: string, queryable: any = pool): Promise<BatchDeletionSafetyResult> {
+async function checkBatchDeletionSafety(batchId: string, bizId: string, queryable: any = pool): Promise<BatchDeletionSafetyResult> {
   const references: BatchReferenceItem[] = [];
 
   // 1. Sales Invoices referencing this batch (Rule B)
@@ -2635,10 +2639,10 @@ async function checkBatchDeletionSafety(batchId: string, queryable: any = pool):
       p.name AS party_name
     FROM sales_invoice_line_batches silb
     JOIN sales_invoice_lines sil ON silb.sales_invoice_line_id = sil.id
-    JOIN sales_invoices si ON sil.sales_invoice_id = si.id
+    JOIN sales_invoices si ON sil.sales_invoice_id = si.id AND si.business_id = $2
     LEFT JOIN parties p ON si.party_id = p.id
     WHERE silb.batch_id = $1`,
-    [batchId]
+    [batchId, bizId]
   );
   for (const r of salesInvRes.rows) {
     references.push({
@@ -2664,10 +2668,10 @@ async function checkBatchDeletionSafety(batchId: string, queryable: any = pool):
       p.name AS party_name
     FROM purchase_invoice_line_batches pilb
     JOIN purchase_invoice_lines pil ON pilb.purchase_invoice_line_id = pil.id
-    JOIN purchase_invoices pi ON pil.purchase_invoice_id = pi.id
+    JOIN purchase_invoices pi ON pil.purchase_invoice_id = pi.id AND pi.business_id = $2
     LEFT JOIN parties p ON pi.supplier_party_id = p.id
     WHERE pilb.batch_id = $1`,
-    [batchId]
+    [batchId, bizId]
   );
   for (const r of purchInvRes.rows) {
     references.push({
@@ -2691,9 +2695,9 @@ async function checkBatchDeletionSafety(batchId: string, queryable: any = pool):
       pl.received_at AS doc_date,
       pl.quantity_received AS quantity
     FROM purchase_lots pl
-    LEFT JOIN purchase_invoices pi ON pl.purchase_invoice_id = pi.id
+    LEFT JOIN purchase_invoices pi ON pl.purchase_invoice_id = pi.id AND pi.business_id = $2
     WHERE pl.batch_id = $1`,
-    [batchId]
+    [batchId, bizId]
   );
   for (const r of lotsRes.rows) {
     references.push({
@@ -2718,10 +2722,10 @@ async function checkBatchDeletionSafety(batchId: string, queryable: any = pool):
       p.name AS party_name
     FROM sales_return_line_batches srlb
     JOIN sales_return_lines srl ON srlb.sales_return_line_id = srl.id
-    JOIN sales_returns sr ON srl.sales_return_id = sr.id
+    JOIN sales_returns sr ON srl.sales_return_id = sr.id AND sr.business_id = $2
     LEFT JOIN parties p ON sr.party_id = p.id
     WHERE srlb.batch_id = $1`,
-    [batchId]
+    [batchId, bizId]
   );
   for (const r of salesRetRes.rows) {
     references.push({
@@ -2747,10 +2751,10 @@ async function checkBatchDeletionSafety(batchId: string, queryable: any = pool):
       p.name AS party_name
     FROM purchase_return_line_batches prlb
     JOIN purchase_return_lines prl ON prlb.purchase_return_line_id = prl.id
-    JOIN purchase_returns pr ON prl.purchase_return_id = pr.id
+    JOIN purchase_returns pr ON prl.purchase_return_id = pr.id AND pr.business_id = $2
     LEFT JOIN parties p ON pr.supplier_party_id = p.id
     WHERE prlb.batch_id = $1`,
-    [batchId]
+    [batchId, bizId]
   );
   for (const r of purchRetRes.rows) {
     references.push({
@@ -2776,10 +2780,10 @@ async function checkBatchDeletionSafety(batchId: string, queryable: any = pool):
       p.name AS party_name
     FROM sales_order_line_batches solb
     JOIN sales_order_lines sol ON solb.sales_order_line_id = sol.id
-    JOIN sales_orders so ON sol.sales_order_id = so.id
+    JOIN sales_orders so ON sol.sales_order_id = so.id AND so.business_id = $2
     LEFT JOIN parties p ON so.party_id = p.id
     WHERE solb.batch_id = $1`,
-    [batchId]
+    [batchId, bizId]
   );
   for (const r of salesOrdRes.rows) {
     references.push({
@@ -2805,10 +2809,10 @@ async function checkBatchDeletionSafety(batchId: string, queryable: any = pool):
       p.name AS party_name
     FROM purchase_order_line_batches polb
     JOIN purchase_order_lines pol ON polb.purchase_order_line_id = pol.id
-    JOIN purchase_orders po ON pol.purchase_order_id = po.id
+    JOIN purchase_orders po ON pol.purchase_order_id = po.id AND po.business_id = $2
     LEFT JOIN parties p ON po.supplier_party_id = p.id
     WHERE polb.batch_id = $1`,
-    [batchId]
+    [batchId, bizId]
   );
   for (const r of purchOrdRes.rows) {
     references.push({
@@ -2832,9 +2836,9 @@ async function checkBatchDeletionSafety(batchId: string, queryable: any = pool):
       ds.dispatch_date AS doc_date,
       dsl.dispatched_quantity AS quantity
     FROM dealer_shipment_lines dsl
-    JOIN dealer_shipments ds ON dsl.dealer_shipment_id = ds.id
+    JOIN dealer_shipments ds ON dsl.dealer_shipment_id = ds.id AND ds.business_id = $2
     WHERE dsl.main_batch_id = $1`,
-    [batchId]
+    [batchId, bizId]
   );
   for (const r of dealerShipRes.rows) {
     references.push({
@@ -2857,9 +2861,9 @@ async function checkBatchDeletionSafety(batchId: string, queryable: any = pool):
       dgr.receipt_date AS doc_date,
       dgrl.received_quantity AS quantity
     FROM dealer_goods_receipt_lines dgrl
-    JOIN dealer_goods_receipts dgr ON dgrl.goods_receipt_id = dgr.id
+    JOIN dealer_goods_receipts dgr ON dgrl.goods_receipt_id = dgr.id AND dgr.business_id = $2
     WHERE dgrl.main_batch_id = $1 OR dgrl.dealer_batch_id = $1`,
-    [batchId]
+    [batchId, bizId]
   );
   for (const r of dealerGrnRes.rows) {
     references.push({
@@ -2882,9 +2886,9 @@ async function checkBatchDeletionSafety(batchId: string, queryable: any = pool):
       dr.created_at AS doc_date,
       drl.sent_quantity AS quantity
     FROM dealer_return_lines drl
-    JOIN dealer_returns dr ON drl.dealer_return_id = dr.id
+    JOIN dealer_returns dr ON drl.dealer_return_id = dr.id AND dr.business_id = $2
     WHERE drl.main_batch_id = $1 OR drl.dealer_batch_id = $1`,
-    [batchId]
+    [batchId, bizId]
   );
   for (const r of dealerRetRes.rows) {
     references.push({
@@ -2903,9 +2907,9 @@ async function checkBatchDeletionSafety(batchId: string, queryable: any = pool):
   const ledgerRowsRes = await queryable.query(
     `SELECT id, transaction_type, reference_type, reference_id, quantity_in, quantity_out, balance, reason, created_at
      FROM stock_ledger 
-     WHERE batch_id = $1 
+     WHERE batch_id = $1 AND business_id = $2
      ORDER BY created_at ASC`,
-    [batchId]
+    [batchId, bizId]
   );
   const ledgerRows = ledgerRowsRes.rows;
   const ledgerCount = ledgerRows.length;
@@ -2939,8 +2943,8 @@ async function checkBatchDeletionSafety(batchId: string, queryable: any = pool):
       COALESCE(reserved_stock, 0) AS reserved_stock,
       COALESCE(available_stock, 0) AS available_stock
     FROM optical_stocks
-    WHERE batch_id = $1`,
-    [batchId]
+    WHERE batch_id = $1 AND business_id = $2`,
+    [batchId, bizId]
   );
   const physicalStock = parseFloat(stockRes.rows[0]?.physical_stock) || 0;
   const reservedStock = parseFloat(stockRes.rows[0]?.reserved_stock) || 0;
@@ -2948,8 +2952,8 @@ async function checkBatchDeletionSafety(batchId: string, queryable: any = pool):
 
   // Check active reservations (only ACTIVE reservations block deletion; RELEASED/CANCELLED do not)
   const activeResCountRes = await queryable.query(
-    `SELECT COUNT(*)::int AS count FROM stock_reservations WHERE batch_id = $1 AND status = 'ACTIVE'`,
-    [batchId]
+    `SELECT COUNT(*)::int AS count FROM stock_reservations WHERE batch_id = $1 AND business_id = $2 AND status = 'ACTIVE'`,
+    [batchId, bizId]
   );
   const activeReservationCount = activeResCountRes.rows[0]?.count || 0;
 
@@ -3197,7 +3201,11 @@ router.get('/batches/:id/dependencies', requireAnyPermission(['master:view', 'in
        WHERE b.id = $1 AND b.business_id = $2`,
       [id, bizId]
     );
-    const safetyCheck = await checkBatchDeletionSafety(id);
+    if (batchRes.rows.length === 0) {
+      res.status(404).json({ error: 'Optical Batch not found or unauthorized' });
+      return;
+    }
+    const safetyCheck = await checkBatchDeletionSafety(id, bizId, pool);
     res.json({
       success: true,
       data: {
@@ -3239,7 +3247,7 @@ router.delete('/batches/:id', requireAnyPermission(['master:delete', 'master.del
     const current = batchRes.rows[0];
 
     // Check safety of batch deletion within the transaction
-    const safetyCheck = await checkBatchDeletionSafety(id, client);
+    const safetyCheck = await checkBatchDeletionSafety(id, bizId, client);
 
     if (!safetyCheck.canDelete) {
       await client.query('ROLLBACK');
@@ -3318,7 +3326,7 @@ router.post('/batches/bulk-delete', requireAnyPermission(['master:delete', 'mast
 
         const current = batchRes.rows[0];
 
-        const safetyCheck = await checkBatchDeletionSafety(id, client);
+        const safetyCheck = await checkBatchDeletionSafety(id, bizId, client);
 
         if (!safetyCheck.canDelete) {
           await client.query('ROLLBACK');

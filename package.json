@@ -19,6 +19,7 @@
     "test:phase5e": "tsx server/tests/phase5eFinancialLedgers.test.ts",
     "test:phase5f": "tsx server/tests/phase5fTransactionIntegrity.test.ts",
     "test:phase7": "tsx server/tests/phase7ImportExport.test.ts",
+    "test:phase1.2": "tsx server/tests/phase1_2RegressionVerification.test.ts",
     "test:phase10": "tsx server/tests/phase10ProductionAcceptance.test.ts",
     "test:purchase-parties": "tsx server/tests/purchaseAndParties.test.ts",
     "test:whatsapp": "tsx server/tests/whatsappIntegration.test.ts",

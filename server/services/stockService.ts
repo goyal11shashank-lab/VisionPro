@@ -807,7 +807,8 @@ export class StockService {
           }
 
           const diff = round2(newQty - oldQty);
-          const stock = await this.lockAndGetStock(client, businessId, reservation.batch_id);
+          const targetGodown = reservation.godown_id || null;
+          const stock = await this.lockAndGetStock(client, businessId, reservation.batch_id, targetGodown);
 
           if (diff > 0 && diff > stock.availableStock) {
             throw new Error(`Cannot increase reservation by ${diff} pairs. Only ${stock.availableStock} pairs are currently available.`);
@@ -826,13 +827,14 @@ export class StockService {
           // Write ledger audit record for reservation change
           await client.query(
             `INSERT INTO stock_ledger (
-              business_id, batch_id, transaction_type, reference_type, reference_id,
+              business_id, batch_id, godown_id, transaction_type, reference_type, reference_id,
               quantity_in, quantity_out, reserved_in, reserved_out, balance,
               reason, created_by, created_at
-            ) VALUES ($1, $2, 'RESERVATION', $3, $4, '0.00', '0.00', $5, $6, $7, $8, $9, NOW())`,
+            ) VALUES ($1, $2, $3, 'RESERVATION', $4, $5, '0.00', '0.00', $6, $7, $8, $9, $10, NOW())`,
             [
               businessId,
               reservation.batch_id,
+              targetGodown,
               updates.referenceType || reservation.reference_type,
               reservationId,
               diff > 0 ? diff.toFixed(2) : '0.00',

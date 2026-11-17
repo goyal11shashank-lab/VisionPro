@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import {
   Receipt,
   Plus,
@@ -139,6 +139,8 @@ export const SalesInvoicesPage: React.FC<{
   const [formLines, setFormLines] = useState<SalesInvoiceLine[]>([]);
   const [previewInvoiceNumber, setPreviewInvoiceNumber] = useState('');
   const [submitting, setSubmitting] = useState(false);
+  const isSavingRef = useRef(false);
+  const idempotencyKeyRef = useRef(crypto.randomUUID());
   const [actionError, setActionError] = useState<string | null>(null);
 
   // Convert Order State
@@ -162,6 +164,34 @@ export const SalesInvoicesPage: React.FC<{
   } | null>(null);
   const [deleteLoading, setDeleteLoading] = useState(false);
   const [deleteError, setDeleteError] = useState<string | null>(null);
+
+  // Context Menu State
+  const [contextMenu, setContextMenu] = useState<{
+    visible: boolean;
+    x: number;
+    y: number;
+    invoice: SalesInvoice | null;
+  }>({ visible: false, x: 0, y: 0, invoice: null });
+
+  useEffect(() => {
+    const handleClickOutside = () => {
+      if (contextMenu.visible) {
+        setContextMenu({ visible: false, x: 0, y: 0, invoice: null });
+      }
+    };
+    window.addEventListener('click', handleClickOutside);
+    return () => window.removeEventListener('click', handleClickOutside);
+  }, [contextMenu.visible]);
+
+  const handleInvoiceContextMenu = (e: React.MouseEvent, inv: SalesInvoice) => {
+    e.preventDefault();
+    setContextMenu({
+      visible: true,
+      x: e.clientX,
+      y: e.clientY,
+      invoice: inv,
+    });
+  };
 
   // Cancel Confirmation Modal State
   const [invoiceToCancel, setInvoiceToCancel] = useState<{
@@ -386,6 +416,8 @@ export const SalesInvoicesPage: React.FC<{
   };
 
   const handleOpenDirectCreate = () => {
+    isSavingRef.current = false;
+    idempotencyKeyRef.current = crypto.randomUUID();
     setSelectedPartyId('');
     setPartyCreditInfo(null);
     setInvoiceDate(new Date().toISOString().split('T')[0]);
@@ -675,11 +707,16 @@ export const SalesInvoicesPage: React.FC<{
 
   // Create Direct Invoice
   const handleSubmitDirectInvoice = async () => {
+    if (submitting || isSavingRef.current) return;
+    isSavingRef.current = true;
+
     if (!selectedPartyId) {
+      isSavingRef.current = false;
       setActionError('Please select a customer party');
       return;
     }
     if (formLines.length === 0) {
+      isSavingRef.current = false;
       setActionError('Please add at least one optical item line');
       return;
     }
@@ -694,6 +731,7 @@ export const SalesInvoicesPage: React.FC<{
         paymentTerms,
         notes: cleanNarrationNotes(invoiceNotes) || undefined,
         status: targetStatus,
+        idempotencyKey: idempotencyKeyRef.current,
         lines: formLines.map(l => ({
           uniqueItemId: l.uniqueItemId,
           quantity: l.quantity,
@@ -728,6 +766,7 @@ export const SalesInvoicesPage: React.FC<{
     } catch (err: any) {
       setActionError(err.message);
     } finally {
+      isSavingRef.current = false;
       setSubmitting(false);
     }
   };
@@ -1115,17 +1154,17 @@ export const SalesInvoicesPage: React.FC<{
                   <th className="py-3.5 px-4">Invoice #</th>
                   <th className="py-3.5 px-4">Date</th>
                   <th className="py-3.5 px-4">Customer</th>
-                  <th className="py-3.5 px-4">Source Order</th>
-                  <th className="py-3.5 px-4">Status</th>
-                  <th className="py-3.5 px-4 text-center">WhatsApp</th>
-                  <th className="py-3.5 px-4 text-right">Taxable</th>
                   <th className="py-3.5 px-4 text-right">Grand Total</th>
-                  <th className="py-3.5 px-4 text-center">Actions</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-100">
                 {invoices.map(inv => (
-                  <tr key={inv.id} className="hover:bg-slate-50 transition">
+                  <tr
+                    key={inv.id}
+                    className="hover:bg-slate-50 transition cursor-pointer"
+                    onContextMenu={(e) => handleInvoiceContextMenu(e, inv)}
+                    onClick={() => handleViewInvoice(inv)}
+                  >
                     <td className="py-3.5 px-4 font-mono font-medium text-emerald-700">
                       {inv.invoiceNumber}
                     </td>
@@ -1136,76 +1175,8 @@ export const SalesInvoicesPage: React.FC<{
                       <div className="font-medium text-slate-900">{inv.partyName}</div>
                       <div className="text-xs text-slate-400 font-mono">{inv.partyGstin || inv.partyState}</div>
                     </td>
-                    <td className="py-3.5 px-4 font-mono text-xs text-slate-500">
-                      {inv.salesOrderNumber ? (
-                        <span className="px-2 py-0.5 bg-blue-50 text-blue-700 rounded border border-blue-200 font-semibold">
-                          {inv.salesOrderNumber}
-                        </span>
-                      ) : (
-                        <span className="text-slate-400 italic">Direct Sale</span>
-                      )}
-                    </td>
-                    <td className="py-3.5 px-4">{getStatusBadge(inv.status)}</td>
-                    <td className="py-3.5 px-4 text-center">
-                      <WhatsAppStatusBadge
-                        status={inv.whatsappStatus}
-                        onClick={() => setWhatsappModalInvoice(inv)}
-                      />
-                    </td>
-                    <td className="py-3.5 px-4 text-right font-mono text-slate-700">
-                      ₹{parseFloat(String(inv.taxableAmount)).toLocaleString('en-IN', { minimumFractionDigits: 2 })}
-                    </td>
                     <td className="py-3.5 px-4 text-right font-mono font-bold text-slate-900">
                       ₹{parseFloat(String(inv.grandTotal)).toLocaleString('en-IN', { minimumFractionDigits: 2 })}
-                    </td>
-                    <td className="py-3.5 px-4 text-center">
-                      <div className="flex items-center justify-center gap-1">
-                        <button
-                          id={`btn-whatsapp-invoice-${inv.id}`}
-                          onClick={() => setWhatsappModalInvoice(inv)}
-                          className="p-1.5 text-slate-500 hover:text-emerald-600 hover:bg-emerald-50 rounded transition"
-                          title="Share on WhatsApp"
-                        >
-                          <MessageSquare className="w-4 h-4" />
-                        </button>
-                        <button
-                          id={`btn-view-invoice-${inv.id}`}
-                          onClick={() => handleViewInvoice(inv)}
-                          className="p-1.5 text-slate-600 hover:text-emerald-600 hover:bg-emerald-50 rounded transition"
-                          title="View Tax Invoice"
-                        >
-                          <Eye className="w-4 h-4" />
-                        </button>
-                        <button
-                          id={`btn-print-preview-invoice-${inv.id}`}
-                          onClick={() => {
-                            const previewBeforePrint = settings?.print?.previewBeforePrint ?? true;
-                            handleOpenPrintPreview(inv, !previewBeforePrint);
-                          }}
-                          className="p-1.5 text-slate-500 hover:text-slate-900 hover:bg-slate-100 rounded transition"
-                          title="Print Tax Invoice"
-                        >
-                          <Printer className="w-4 h-4" />
-                        </button>
-                        {inv.status !== 'CANCELLED' && (
-                          <button
-                            id={`btn-edit-invoice-${inv.id}`}
-                            onClick={() => handleEditInvoice(inv.id)}
-                            className="p-1.5 text-slate-500 hover:text-blue-600 hover:bg-blue-50 rounded transition"
-                            title="Edit Invoice / Voucher"
-                          >
-                            <Pencil className="w-4 h-4" />
-                          </button>
-                        )}
-                        <button
-                          id={`btn-delete-invoice-${inv.id}`}
-                          onClick={() => promptDeleteInvoice(inv)}
-                          className="p-1.5 text-slate-400 hover:text-rose-600 hover:bg-rose-50 rounded transition"
-                          title="Delete Tax Invoice"
-                        >
-                          <Trash2 className="w-4 h-4" />
-                        </button>
-                      </div>
                     </td>
                   </tr>
                 ))}
@@ -1213,6 +1184,74 @@ export const SalesInvoicesPage: React.FC<{
             </table>
           </div>
         )}
+
+      {/* Right-Click Context Menu */}
+      {contextMenu.visible && contextMenu.invoice && (
+        <div
+          className="fixed z-50 bg-white rounded-xl shadow-2xl border border-slate-200 py-2 w-56 text-sm text-slate-700 animate-in fade-in zoom-in-95 duration-100"
+          style={{ top: `${Math.min(contextMenu.y, window.innerHeight - 250)}px`, left: `${Math.min(contextMenu.x, window.innerWidth - 230)}px` }}
+          onClick={(e) => e.stopPropagation()}
+        >
+          <div className="px-4 py-2 border-b border-slate-100 font-mono font-bold text-xs text-slate-900 bg-slate-50 flex items-center justify-between">
+            <span>#{contextMenu.invoice.invoiceNumber}</span>
+            <span className="text-[10px] text-slate-500 font-sans">{contextMenu.invoice.status}</span>
+          </div>
+          <button
+            onClick={() => {
+              setContextMenu({ visible: false, x: 0, y: 0, invoice: null });
+              handleViewInvoice(contextMenu.invoice!);
+            }}
+            className="w-full text-left px-4 py-2 hover:bg-emerald-50 hover:text-emerald-800 flex items-center gap-2.5 transition font-medium"
+          >
+            <Eye className="w-4 h-4 text-slate-500" />
+            View Tax Invoice
+          </button>
+          <button
+            onClick={() => {
+              setContextMenu({ visible: false, x: 0, y: 0, invoice: null });
+              const previewBeforePrint = settings?.print?.previewBeforePrint ?? true;
+              handleOpenPrintPreview(contextMenu.invoice!, !previewBeforePrint);
+            }}
+            className="w-full text-left px-4 py-2 hover:bg-slate-100 hover:text-slate-900 flex items-center gap-2.5 transition font-medium"
+          >
+            <Printer className="w-4 h-4 text-slate-500" />
+            Print Tax Invoice
+          </button>
+          <button
+            onClick={() => {
+              setContextMenu({ visible: false, x: 0, y: 0, invoice: null });
+              setWhatsappModalInvoice(contextMenu.invoice);
+            }}
+            className="w-full text-left px-4 py-2 hover:bg-emerald-50 hover:text-emerald-800 flex items-center gap-2.5 transition font-medium"
+          >
+            <MessageSquare className="w-4 h-4 text-emerald-600" />
+            Share on WhatsApp
+          </button>
+          {contextMenu.invoice.status !== 'CANCELLED' && (
+            <button
+              onClick={() => {
+                setContextMenu({ visible: false, x: 0, y: 0, invoice: null });
+                handleEditInvoice(contextMenu.invoice!.id);
+              }}
+              className="w-full text-left px-4 py-2 hover:bg-blue-50 hover:text-blue-800 flex items-center gap-2.5 transition font-medium"
+            >
+              <Pencil className="w-4 h-4 text-blue-600" />
+              Edit Invoice / Voucher
+            </button>
+          )}
+          <div className="my-1 border-t border-slate-100"></div>
+          <button
+            onClick={() => {
+              setContextMenu({ visible: false, x: 0, y: 0, invoice: null });
+              promptDeleteInvoice(contextMenu.invoice!);
+            }}
+            className="w-full text-left px-4 py-2 hover:bg-rose-50 hover:text-rose-700 flex items-center gap-2.5 transition font-medium text-rose-600"
+          >
+            <Trash2 className="w-4 h-4 text-rose-500" />
+            Delete Tax Invoice
+          </button>
+        </div>
+      )}
       </div>
 
       {/* CREATE DIRECT INVOICE MODAL */}
@@ -1879,32 +1918,38 @@ export const SalesInvoicesPage: React.FC<{
                                 )}
                               </div>
                               {batches.length > 0 ? (
-                                <div className="space-y-1 mt-1 font-mono text-[11px]">
-                                  {batches.map((b: any, bIdx: number) => {
-                                    const sph = b.sph ?? b.batch?.sph ?? '0.00';
-                                    const cyl = b.cyl ?? b.batch?.cyl ?? '0.00';
-                                    const axis = b.axis ?? b.batch?.axis;
-                                    const add = b.add ?? b.batch?.add;
-                                    const side = b.side ?? b.batch?.side;
-                                    return (
-                                      <div key={bIdx} className="flex flex-wrap items-center gap-x-2 bg-slate-50 p-1 rounded border border-slate-200/60 text-slate-700">
-                                        <span className="font-semibold text-slate-900">
-                                          Power: SPH {sph}, CYL {cyl}{axis ? `, AXIS ${axis}` : ''}{add ? `, ADD ${add}` : ''}
-                                        </span>
-                                        {side && side !== 'NONE' && (
-                                          <span className="px-1.5 py-0.2 bg-blue-100 text-blue-800 text-[10px] rounded font-bold uppercase">
-                                            {side}
+                                <details className="group mt-1">
+                                  <summary className="cursor-pointer text-emerald-700 font-semibold text-[11px] hover:underline flex items-center gap-1 select-none font-sans">
+                                    <span>Batches ({batches.length})</span>
+                                    <ChevronRight className="w-3 h-3 transition-transform group-open:rotate-90" />
+                                  </summary>
+                                  <div className="space-y-1 mt-1 pl-2 border-l-2 border-emerald-200 font-mono text-[11px]">
+                                    {batches.map((b: any, bIdx: number) => {
+                                      const sph = b.sph ?? b.batch?.sph ?? '0.00';
+                                      const cyl = b.cyl ?? b.batch?.cyl ?? '0.00';
+                                      const axis = b.axis ?? b.batch?.axis;
+                                      const add = b.add ?? b.batch?.add;
+                                      const side = b.side ?? b.batch?.side;
+                                      return (
+                                        <div key={bIdx} className="flex flex-wrap items-center gap-x-2 bg-slate-50 p-1 rounded border border-slate-200/60 text-slate-700">
+                                          <span className="font-semibold text-slate-900">
+                                            Power: SPH {sph}, CYL {cyl}{axis ? `, AXIS ${axis}` : ''}{add ? `, ADD ${add}` : ''}
                                           </span>
-                                        )}
-                                        {batches.length > 1 && (
-                                          <span className="text-slate-500 font-sans">
-                                            ({b.quantity || 1} {l.unit || 'PRS'})
-                                          </span>
-                                        )}
-                                      </div>
-                                    );
-                                  })}
-                                </div>
+                                          {side && side !== 'NONE' && (
+                                            <span className="px-1.5 py-0.2 bg-blue-100 text-blue-800 text-[10px] rounded font-bold uppercase">
+                                              {side}
+                                            </span>
+                                          )}
+                                          {batches.length > 1 && (
+                                            <span className="text-slate-500 font-sans">
+                                              ({b.quantity || 1} {l.unit || 'PRS'})
+                                            </span>
+                                          )}
+                                        </div>
+                                      );
+                                    })}
+                                  </div>
+                                </details>
                               ) : (
                                 <div className="text-[11px] text-slate-400 mt-0.5 font-sans">
                                   Standard Stock Item

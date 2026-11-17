@@ -613,18 +613,19 @@ export class PurchaseReturnService {
         const batchId = row.batch_id;
         const returnQty = parseFloat(row.quantity);
 
+        const targetGodown = inv.godown_id || null;
         const stockRes = await client.query(
-          `SELECT * FROM optical_stocks WHERE business_id = $1 AND batch_id = $2 FOR UPDATE`,
-          [businessId, batchId]
+          `SELECT * FROM optical_stocks WHERE business_id = $1 AND batch_id = $2 AND ((godown_id IS NULL AND $3::uuid IS NULL) OR godown_id = $3::uuid) FOR UPDATE`,
+          [businessId, batchId, targetGodown]
         );
 
         let stockRow = stockRes.rows[0];
         if (!stockRow) {
           const insStock = await client.query(
-            `INSERT INTO optical_stocks (business_id, batch_id, physical_stock, reserved_stock, available_stock)
-             VALUES ($1, $2, '0.00', '0.00', '0.00')
+            `INSERT INTO optical_stocks (business_id, batch_id, godown_id, physical_stock, reserved_stock, available_stock)
+             VALUES ($1, $2, $3, '0.00', '0.00', '0.00')
              RETURNING *`,
-            [businessId, batchId]
+            [businessId, batchId, targetGodown]
           );
           stockRow = insStock.rows[0];
         }
@@ -644,17 +645,18 @@ export class PurchaseReturnService {
         // Stock Ledger entry: quantity_out = returnQty
         await client.query(
           `INSERT INTO stock_ledger (
-            business_id, batch_id, transaction_type, reference_type, reference_id,
+            business_id, batch_id, godown_id, transaction_type, reference_type, reference_id,
             quantity_in, quantity_out, reserved_in, reserved_out, balance,
             reason, created_by, created_at
           ) VALUES (
-            $1, $2, 'PURCHASE_RETURN', 'PURCHASE_RETURN', $3,
-            '0.00', $4, '0.00', '0.00', $5,
-            $6, $7, NOW()
+            $1, $2, $3, 'PURCHASE_RETURN', 'PURCHASE_RETURN', $4,
+            '0.00', $5, '0.00', '0.00', $6,
+            $7, $8, NOW()
           )`,
           [
             businessId,
             batchId,
+            targetGodown,
             returnId,
             returnQty.toFixed(2),
             newPhys.toFixed(2),
@@ -785,6 +787,12 @@ export class PurchaseReturnService {
 
       // If POSTED, reverse stock, lots, and supplier ledger
       if (pReturn.status === 'POSTED') {
+        const invRes = await client.query(
+          `SELECT godown_id FROM purchase_invoices WHERE id = $1`,
+          [pReturn.purchase_invoice_id]
+        );
+        const targetGodown = invRes.rows[0]?.godown_id || null;
+
         const batchesRes = await client.query(
           `SELECT prlb.batch_id, prlb.purchase_lot_id, prlb.quantity
            FROM purchase_return_line_batches prlb
@@ -798,8 +806,8 @@ export class PurchaseReturnService {
           const qty = parseFloat(row.quantity);
 
           const stockRes = await client.query(
-            `SELECT * FROM optical_stocks WHERE business_id = $1 AND batch_id = $2 FOR UPDATE`,
-            [businessId, batchId]
+            `SELECT * FROM optical_stocks WHERE business_id = $1 AND batch_id = $2 AND ((godown_id IS NULL AND $3::uuid IS NULL) OR godown_id = $3::uuid) FOR UPDATE`,
+            [businessId, batchId, targetGodown]
           );
 
           if (stockRes.rows.length > 0) {
@@ -818,17 +826,18 @@ export class PurchaseReturnService {
 
             await client.query(
               `INSERT INTO stock_ledger (
-                business_id, batch_id, transaction_type, reference_type, reference_id,
+                business_id, batch_id, godown_id, transaction_type, reference_type, reference_id,
                 quantity_in, quantity_out, reserved_in, reserved_out, balance,
                 reason, created_by, created_at
               ) VALUES (
-                $1, $2, 'CANCELLATION_REVERSAL', 'PURCHASE_RETURN_CANCEL', $3,
-                $4, '0.00', '0.00', '0.00', $5,
-                $6, $7, NOW()
+                $1, $2, $3, 'CANCELLATION_REVERSAL', 'PURCHASE_RETURN_CANCEL', $4,
+                $5, '0.00', '0.00', '0.00', $6,
+                $7, $8, NOW()
               )`,
               [
                 businessId,
                 batchId,
+                targetGodown,
                 returnId,
                 qty.toFixed(2),
                 newPhys.toFixed(2),

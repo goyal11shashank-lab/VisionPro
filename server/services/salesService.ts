@@ -1929,12 +1929,13 @@ export class SalesService {
           const batchId = row.batch_id;
           const qty = parseFloat(row.quantity);
 
+          const targetGodown = existingInv.godown_id || null;
           const stockRes = await client.query(
             `SELECT id, physical_stock, reserved_stock, available_stock 
              FROM optical_stocks 
-             WHERE business_id = $1 AND batch_id = $2 
+             WHERE business_id = $1 AND batch_id = $2 AND ((godown_id IS NULL AND $3::uuid IS NULL) OR godown_id = $3::uuid)
              FOR UPDATE`,
-            [businessId, batchId]
+            [businessId, batchId, targetGodown]
           );
 
           if (stockRes.rows.length > 0) {
@@ -2890,12 +2891,13 @@ export class SalesService {
           const batchId = row.batch_id;
           const qty = parseFloat(row.quantity);
 
+          const targetGodown = invoice.godown_id || null;
           const stockRes = await client.query(
             `SELECT id, physical_stock, reserved_stock, available_stock 
              FROM optical_stocks 
-             WHERE business_id = $1 AND batch_id = $2 
+             WHERE business_id = $1 AND batch_id = $2 AND ((godown_id IS NULL AND $3::uuid IS NULL) OR godown_id = $3::uuid)
              FOR UPDATE`,
-            [businessId, batchId]
+            [businessId, batchId, targetGodown]
           );
 
           if (stockRes.rows.length > 0) {
@@ -2913,17 +2915,18 @@ export class SalesService {
             // Stock Ledger entry for reversal
             await client.query(
               `INSERT INTO stock_ledger (
-                business_id, batch_id, transaction_type, reference_type, reference_id,
+                business_id, batch_id, godown_id, transaction_type, reference_type, reference_id,
                 quantity_in, quantity_out, reserved_in, reserved_out,
                 balance, reason, created_by
               ) VALUES (
-                $1, $2, 'CANCELLATION_REVERSAL', 'SALES_INVOICE', $3,
-                $4, 0.00, 0.00, 0.00,
-                $5, $6, $7
+                $1, $2, $3, 'CANCELLATION_REVERSAL', 'SALES_INVOICE', $4,
+                $5, 0.00, 0.00, 0.00,
+                $6, $7, $8
               )`,
               [
                 businessId,
                 batchId,
+                targetGodown,
                 invoiceId,
                 qty.toFixed(2),
                 newPhys.toFixed(2),
@@ -3067,39 +3070,23 @@ export class SalesService {
 
       // If POSTED, restore physical stock and customer ledger
       if (invoice.status === 'POSTED') {
-        const linesRes = await client.query(
-          `SELECT silb.batch_id, silb.quantity 
-           FROM sales_invoice_lines sil
-           JOIN sales_invoice_line_batches silb ON sil.id = silb.sales_invoice_line_id
-           WHERE sil.sales_invoice_id = $1`,
-          [invoiceId]
+        const targetGodown = invoice.godown_id || null;
+        await client.query(
+          `UPDATE optical_stocks os
+           SET physical_stock = os.physical_stock + sub.qty,
+               available_stock = (os.physical_stock + sub.qty) - os.reserved_stock,
+               updated_at = NOW()
+           FROM (
+             SELECT silb.batch_id, SUM(silb.quantity::numeric) as qty
+             FROM sales_invoice_lines sil
+             JOIN sales_invoice_line_batches silb ON sil.id = silb.sales_invoice_line_id
+             WHERE sil.sales_invoice_id = $1
+             GROUP BY silb.batch_id
+           ) sub
+           WHERE os.business_id = $2 AND os.batch_id = sub.batch_id 
+             AND ((os.godown_id IS NULL AND $3::uuid IS NULL) OR os.godown_id = $3::uuid)`,
+          [invoiceId, businessId, targetGodown]
         );
-
-        for (const row of linesRes.rows) {
-          const batchId = row.batch_id;
-          const qty = parseFloat(row.quantity);
-
-          const stockRes = await client.query(
-            `SELECT id, physical_stock, reserved_stock, available_stock 
-             FROM optical_stocks 
-             WHERE business_id = $1 AND batch_id = $2 
-             FOR UPDATE`,
-            [businessId, batchId]
-          );
-
-          if (stockRes.rows.length > 0) {
-            const cur = stockRes.rows[0];
-            const newPhys = round2(parseFloat(cur.physical_stock) + qty);
-            const newAvail = round2(newPhys - parseFloat(cur.reserved_stock));
-
-            await client.query(
-              `UPDATE optical_stocks 
-               SET physical_stock = $1, available_stock = $2, updated_at = NOW() 
-               WHERE id = $3`,
-              [newPhys.toFixed(2), newAvail.toFixed(2), cur.id]
-            );
-          }
-        }
 
         // Delete stock_ledger entries related to this sales invoice
         await client.query(

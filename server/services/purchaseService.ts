@@ -587,12 +587,13 @@ export class PurchaseService {
 
         for (const alloc of oldAllocRes.rows) {
           const qty = parseFloat(alloc.quantity);
+          const targetGodown = existingInv.godown_id || null;
           const stockRes = await client.query(
             `SELECT id, physical_stock, reserved_stock, available_stock 
              FROM optical_stocks 
-             WHERE business_id = $1 AND batch_id = $2 
+             WHERE business_id = $1 AND batch_id = $2 AND ((godown_id IS NULL AND $3::uuid IS NULL) OR godown_id = $3::uuid)
              FOR UPDATE`,
-            [businessId, alloc.batch_id]
+            [businessId, alloc.batch_id, targetGodown]
           );
 
           if (stockRes.rows.length > 0) {
@@ -1543,9 +1544,10 @@ export class PurchaseService {
       for (const alloc of allocationsRes.rows) {
         const qty = parseFloat(alloc.quantity);
 
+        const targetGodown = inv.godown_id || null;
         const stockRes = await client.query(
-          `SELECT * FROM optical_stocks WHERE business_id = $1 AND batch_id = $2 FOR UPDATE`,
-          [businessId, alloc.batch_id]
+          `SELECT * FROM optical_stocks WHERE business_id = $1 AND batch_id = $2 AND ((godown_id IS NULL AND $3::uuid IS NULL) OR godown_id = $3::uuid) FOR UPDATE`,
+          [businessId, alloc.batch_id, targetGodown]
         );
 
         if (stockRes.rows.length > 0) {
@@ -1566,13 +1568,14 @@ export class PurchaseService {
 
           await client.query(
             `INSERT INTO stock_ledger (
-              business_id, batch_id, transaction_type, reference_type, reference_id,
+              business_id, batch_id, godown_id, transaction_type, reference_type, reference_id,
               quantity_in, quantity_out, reserved_in, reserved_out, balance,
               reason, created_by, created_at
-            ) VALUES ($1, $2, 'CANCELLATION_REVERSAL', 'PURCHASE_INVOICE_CANCEL', $3, '0.00', $4, '0.00', '0.00', $5, $6, $7, NOW())`,
+            ) VALUES ($1, $2, $3, 'CANCELLATION_REVERSAL', 'PURCHASE_INVOICE_CANCEL', $4, '0.00', $5, '0.00', '0.00', $6, $7, $8, NOW())`,
             [
               businessId,
               alloc.batch_id,
+              targetGodown,
               inv.id,
               qty.toFixed(2),
               newPhysical.toFixed(2),
@@ -1722,12 +1725,13 @@ export class PurchaseService {
 
         for (const alloc of batchAllocRes.rows) {
           const qty = parseFloat(alloc.quantity);
+          const targetGodown = inv.godown_id || null;
           const stockRes = await client.query(
             `SELECT id, physical_stock, reserved_stock, available_stock 
              FROM optical_stocks 
-             WHERE business_id = $1 AND batch_id = $2 
+             WHERE business_id = $1 AND batch_id = $2 AND ((godown_id IS NULL AND $3::uuid IS NULL) OR godown_id = $3::uuid)
              FOR UPDATE`,
-            [businessId, alloc.batch_id]
+            [businessId, alloc.batch_id, targetGodown]
           );
 
           if (stockRes.rows.length > 0) {

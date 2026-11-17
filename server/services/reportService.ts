@@ -18,6 +18,7 @@ export interface InventoryReportFilters extends PaginationParams {
   axis?: number;
   add?: number;
   side?: string;
+  godownId?: string;
 }
 
 export interface StockLedgerFilters extends PaginationParams {
@@ -53,6 +54,45 @@ export class ReportService {
     const conditions: string[] = ['b.business_id = $1'];
     const params: any[] = [businessId];
     let paramIndex = 2;
+
+    let stockAggregateSql = '';
+    if (filters.godownId === 'MAIN' || filters.godownId === 'null' || filters.godownId === 'MAIN_WAREHOUSE') {
+      stockAggregateSql = `
+        SELECT
+          batch_id,
+          business_id,
+          physical_stock,
+          reserved_stock,
+          (physical_stock - reserved_stock) AS available_stock
+        FROM optical_stocks
+        WHERE business_id = $1 AND godown_id IS NULL
+      `;
+    } else if (filters.godownId && filters.godownId !== 'ALL' && filters.godownId !== '') {
+      stockAggregateSql = `
+        SELECT
+          batch_id,
+          business_id,
+          physical_stock,
+          reserved_stock,
+          (physical_stock - reserved_stock) AS available_stock
+        FROM optical_stocks
+        WHERE business_id = $1 AND godown_id = $${paramIndex}
+      `;
+      params.push(filters.godownId);
+      paramIndex++;
+    } else {
+      stockAggregateSql = `
+        SELECT
+          batch_id,
+          business_id,
+          SUM(physical_stock) AS physical_stock,
+          SUM(reserved_stock) AS reserved_stock,
+          SUM(physical_stock - reserved_stock) AS available_stock
+        FROM optical_stocks
+        WHERE business_id = $1
+        GROUP BY batch_id, business_id
+      `;
+    }
 
     // Stock Status filter
     if (filters.stockStatus === 'IN_STOCK') {
@@ -126,6 +166,7 @@ export class ReportService {
 
     // 1. Get summary totals across the entire filtered dataset
     const summaryQuery = `
+      WITH aggregated_stock AS (${stockAggregateSql})
       SELECT
         COUNT(b.id) AS total_batches,
         COALESCE(SUM(COALESCE(s.physical_stock, 0)), 0) AS total_physical,
@@ -135,7 +176,7 @@ export class ReportService {
       JOIN categories c ON b.category_id = c.id
       JOIN unique_items u ON b.unique_item_id = u.id
       LEFT JOIN primary_items p ON u.primary_item_id = p.id
-      LEFT JOIN optical_stocks s ON (s.batch_id = b.id AND s.business_id = b.business_id)
+      LEFT JOIN aggregated_stock s ON (s.batch_id = b.id AND s.business_id = b.business_id)
       WHERE ${whereClause}
     `;
     const summaryRes = await pool.query(summaryQuery, params);
@@ -148,6 +189,7 @@ export class ReportService {
 
     // 2. Fetch paginated data
     const dataQuery = `
+      WITH aggregated_stock AS (${stockAggregateSql})
       SELECT
         b.id AS batch_id,
         b.barcode,
@@ -173,7 +215,7 @@ export class ReportService {
       JOIN categories c ON b.category_id = c.id
       JOIN unique_items u ON b.unique_item_id = u.id
       LEFT JOIN primary_items p ON u.primary_item_id = p.id
-      LEFT JOIN optical_stocks s ON (s.batch_id = b.id AND s.business_id = b.business_id)
+      LEFT JOIN aggregated_stock s ON (s.batch_id = b.id AND s.business_id = b.business_id)
       WHERE ${whereClause}
       ORDER BY b.barcode ASC
       LIMIT $${paramIndex} OFFSET $${paramIndex + 1}

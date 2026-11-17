@@ -395,8 +395,8 @@ export class DealerDashboardService {
       // 9. LOW / ZERO LOCAL STOCK (Items with <= 0 available stock or negative stock)
       const lowStockRes = await client.query(
         `SELECT 
-           pi.name as primary_item_name,
-           c.name as category_name,
+           COALESCE(pi.name, ui.name, 'Direct Item') as primary_item_name,
+           COALESCE(c.name, 'General') as category_name,
            ob.barcode as batch_number,
            ob.sph,
            ob.cyl,
@@ -409,10 +409,10 @@ export class DealerDashboardService {
          FROM optical_stocks os
          JOIN optical_batches ob ON os.batch_id = ob.id
          JOIN unique_items ui ON ob.unique_item_id = ui.id
-         JOIN primary_items pi ON ui.primary_item_id = pi.id
-         LEFT JOIN categories c ON ob.category_id = c.id
+         LEFT JOIN primary_items pi ON ui.primary_item_id = pi.id
+         LEFT JOIN categories c ON COALESCE(ob.category_id, ui.category_id, pi.category_id) = c.id
          WHERE os.business_id = $1 AND os.available_stock <= 1.00
-         ORDER BY os.available_stock ASC, pi.name ASC
+         ORDER BY os.available_stock ASC, ui.name ASC
          LIMIT 6`,
         [dealerBusinessId]
       );
@@ -510,8 +510,8 @@ export class DealerDashboardService {
         `SELECT 
            ob.id as batch_id,
            ui.id as unique_item_id,
-           pi.name as primary_item_name,
-           c.name as category_name,
+           COALESCE(pi.name, ui.name, 'Direct Item') as primary_item_name,
+           COALESCE(c.name, 'General') as category_name,
            c.code as category_code,
            ob.barcode as batch_number,
            ob.sph,
@@ -523,10 +523,10 @@ export class DealerDashboardService {
          FROM optical_stocks os
          JOIN optical_batches ob ON os.batch_id = ob.id
          JOIN unique_items ui ON ob.unique_item_id = ui.id
-         JOIN primary_items pi ON ui.primary_item_id = pi.id
-         LEFT JOIN categories c ON ob.category_id = c.id
+         LEFT JOIN primary_items pi ON ui.primary_item_id = pi.id
+         LEFT JOIN categories c ON COALESCE(ob.category_id, ui.category_id, pi.category_id) = c.id
          WHERE ${whereClause}
-         ORDER BY pi.name ASC, ob.sph ASC
+         ORDER BY ui.name ASC, ob.sph ASC
          LIMIT $${queryParams.length}`,
         queryParams
       );
