@@ -1,8 +1,9 @@
 import { db, pool } from '../../db/index.js';
 import { whatsappSessions, whatsappMessagesQueue, parties, salesInvoices, businesses } from '../../db/schema.js';
-import { eq, and, desc } from 'drizzle-orm';
+import { eq, and, desc, inArray } from 'drizzle-orm';
 import QRCode from 'qrcode';
 import crypto from 'crypto';
+import { assertWhatsAppSendAllowed } from './sendPolicy.js';
 import { WhatsAppConnectionManager } from './whatsappConnectionManager.js';
 
 export interface PhoneValidationResult {
@@ -234,43 +235,17 @@ export class WhatsAppService {
     businessId: string,
     accountInfo?: { phone?: string; pushname?: string }
   ) {
-    const phone = accountInfo?.phone || '+91 98765 43210';
-    const pushname = accountInfo?.pushname || 'Optical ERP WhatsApp Dispatcher';
-
-    await pool.query(
-      `INSERT INTO whatsapp_sessions (
-         business_id, status, qr_code_data, qr_expires_at,
-         connected_phone, connected_pushname, last_connected_at,
-         last_error, session_metadata, updated_at
-       ) VALUES ($1, 'CONNECTED', NULL, NULL, $2, $3, NOW(), NULL, $4, NOW())
-       ON CONFLICT (business_id) DO UPDATE SET
-         status = 'CONNECTED',
-         qr_code_data = NULL,
-         qr_expires_at = NULL,
-         connected_phone = $2,
-         connected_pushname = $3,
-         last_connected_at = NOW(),
-         last_error = NULL,
-         session_metadata = $4,
-         updated_at = NOW()`,
-      [
-        businessId,
-        phone,
-        pushname,
-        JSON.stringify({
-          authenticatedAt: new Date().toISOString(),
-          transport: 'WHATSAPP_WEB_LINK',
-        }),
-      ]
-    );
-
-    WhatsAppConnectionManager.setConnected(businessId, phone, pushname);
-
+    // Only the real socket's connection event can establish authentication.
+    // Caller-supplied phone/name are not proof of a successful QR handshake.
+    const session = await WhatsAppConnectionManager.getStatus(businessId);
+    if (session.status !== 'CONNECTED') {
+      throw new Error('WhatsApp handshake is not complete. Wait for the real connection event.');
+    }
     return {
-      status: 'CONNECTED',
-      connectedPhone: phone,
-      connectedPushname: pushname,
-      connectedAt: new Date(),
+      status: session.status,
+      connectedPhone: session.connectedPhone,
+      connectedPushname: session.connectedPushname,
+      connectedAt: session.lastConnectedAt,
     };
   }
 
@@ -294,18 +269,12 @@ export class WhatsAppService {
       };
     }
 
-    const startTime = Date.now();
-    // Simulate ping round-trip
-    await new Promise((res) => setTimeout(res, 80));
-    const latencyMs = Date.now() - startTime;
-
     return {
       success: true,
       status: 'CONNECTED',
       connectedPhone: session.connectedPhone,
       connectedPushname: session.connectedPushname,
-      latencyMs,
-      message: `WhatsApp connection active (${session.connectedPhone}). Ready to send invoices.`,
+      message: 'An authenticated WhatsApp socket is active. This status check did not send a message or verify delivery.',
     };
   }
 
@@ -341,6 +310,8 @@ export class WhatsAppService {
       throw new Error(`Cannot enqueue WhatsApp message: ${phoneVal.error}`);
     }
 
+    assertWhatsAppSendAllowed(phoneVal.normalized);
+
     // Check idempotency: if duplicate exists, return existing job
     const [existing] = await db
       .select()
@@ -373,7 +344,7 @@ export class WhatsAppService {
         recipientName: recipientName || null,
         messageType: invoiceId ? 'INVOICE_PDF' : 'TEXT',
         messageText,
-        mediaFileName: mediaFileName || (invoiceId ? `Invoice-${invoiceId}.pdf` : null),
+        mediaFileName: mediaFileName || (invoiceId ? `Invoice-${invoiceId}.png` : null),
         status: 'PENDING',
         idempotencyKey,
         attemptCount: 0,
@@ -381,6 +352,8 @@ export class WhatsAppService {
         metadata: {
           enqueuedAt: new Date().toISOString(),
           originalPhone: recipientPhone,
+          // Keep legacy queue enum for database compatibility, artifact is PNG.
+          artifactMimeType: invoiceId ? 'image/png' : null,
         },
       })
       .returning();
@@ -416,18 +389,24 @@ export class WhatsAppService {
       return { job, isDuplicate: true, message: 'Message was already sent' };
     }
 
+    if ((job.metadata as any)?.deliveryUncertain) {
+      throw new Error('Previous transport outcome is uncertain. Verify the recipient chat before any new send; automatic retry is blocked.');
+    }
+    assertWhatsAppSendAllowed(job.recipientPhone);
     const session = await this.getSession(job.businessId);
 
     // Update attempt count & last attempt
     const newAttemptCount = (job.attemptCount || 0) + 1;
-    await db
+    const claimed = await db
       .update(whatsappMessagesQueue)
       .set({
         attemptCount: newAttemptCount,
         lastAttemptAt: new Date(),
         status: 'PROCESSING',
       })
-      .where(eq(whatsappMessagesQueue.id, jobId));
+      .where(and(eq(whatsappMessagesQueue.id, jobId), inArray(whatsappMessagesQueue.status, ['PENDING', 'FAILED'])))
+      .returning({ id: whatsappMessagesQueue.id });
+    if (claimed.length !== 1) return { job, success: false, error: 'Message is already processing or its state changed. No second send attempted.' };
 
     // If session is NOT connected, mark as failed with clear explanation & fallback instructions
     if (session.status !== 'CONNECTED') {
@@ -452,17 +431,26 @@ export class WhatsAppService {
     }
 
     // Connected session: deliver via WhatsAppConnectionManager
+    let transportAttempted = false;
+    let acknowledgedMessageId: string | null = null;
     try {
+      const image = job.invoiceId
+        ? await (await import('./invoiceImageService.js')).buildInvoiceImageForInvoice(job.businessId, job.invoiceId)
+        : null;
+      transportAttempted = true;
       const sendResult = await WhatsAppConnectionManager.sendMessage(
         job.businessId,
         job.recipientPhone,
         {
           text: job.messageText,
-          fileName: job.mediaFileName || undefined,
+          fileName: image?.fileName || job.mediaFileName || undefined,
+          imageBuffer: image?.buffer,
         }
       );
 
-      const messageId = sendResult?.key?.id || sendResult?.messageId || `msg-${Date.now()}`;
+      const messageId = sendResult?.key?.id;
+      acknowledgedMessageId = messageId || null;
+      if (!messageId) throw new Error('No WhatsApp acknowledgement, send is unconfirmed.');
       const updatedMetadata = {
         ...((job.metadata as any) || {}),
         messageId,
@@ -484,7 +472,7 @@ export class WhatsAppService {
       return {
         job: updatedJob[0],
         success: true,
-        message: `Invoice successfully sent to ${job.recipientPhone} via connected WhatsApp`,
+        message: `WhatsApp acknowledged the message to ${job.recipientPhone}. Delivery/read status is not confirmed.`,
         messageId,
       };
     } catch (err: any) {
@@ -493,8 +481,9 @@ export class WhatsAppService {
       const updatedJob = await db
         .update(whatsappMessagesQueue)
         .set({
-          status: isExhausted ? 'FAILED' : 'PENDING',
-          failedAt: isExhausted ? new Date() : null,
+          status: transportAttempted || isExhausted ? 'FAILED' : 'PENDING',
+          failedAt: transportAttempted || isExhausted ? new Date() : null,
+          metadata: { ...((job.metadata as any) || {}), deliveryUncertain: transportAttempted, messageId: acknowledgedMessageId },
           errorMessage: err.message || 'Dispatch error',
           updatedAt: new Date(),
         })
@@ -629,7 +618,7 @@ export class WhatsAppService {
       recipientPhone: phoneVal.normalized,
       recipientName: party.name,
       messageText,
-      mediaFileName: `${invoiceNumber}.pdf`,
+      mediaFileName: `${invoiceNumber}.png`,
       idempotencyKey,
       forceImmediate: true,
     });
@@ -640,4 +629,4 @@ export class WhatsAppService {
       result: enqueueRes,
     };
   }
-}
+      }
