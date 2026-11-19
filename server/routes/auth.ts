@@ -5,7 +5,6 @@ import { verifyPassword, hashPassword } from '../auth/password.js';
 import { generateAuthToken } from '../auth/jwt.js';
 import { authenticateToken } from '../middleware/auth.js';
 import { recordAuditLog } from '../services/auditService.js';
-import { ensureMigrationsRun } from '../db/migrate.js';
 import { eq, or, and, inArray } from 'drizzle-orm';
 import { z } from 'zod';
 
@@ -71,7 +70,7 @@ router.get('/bootstrap-status', async (req: Request, res: Response): Promise<voi
       return;
     }
 
-    await ensureMigrationsRun();
+    // Schema changes are explicit maintenance, never a side effect of auth.
 
     // Check if any Super Admin exists in the database
     const superAdmins = await db
@@ -114,7 +113,7 @@ router.post('/bootstrap-admin', async (req: Request, res: Response): Promise<voi
       return;
     }
 
-    await ensureMigrationsRun();
+    // Schema changes are explicit maintenance, never a side effect of auth.
 
     // 1. Guard: Check if a Super Admin already exists
     const existingSuperAdmins = await db
