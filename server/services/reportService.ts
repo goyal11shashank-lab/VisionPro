@@ -618,20 +618,26 @@ export class ReportService {
 
     const countRes = await pool.query(
       `SELECT
-         COUNT(pil.id) AS total_lines,
-         COALESCE(SUM(pil.quantity), 0) AS total_quantity,
-         COALESCE(SUM(pil.line_total), 0) AS total_amount
+         COALESCE(SUM(matching.batch_rows), 0) AS total_rows,
+         COUNT(*) AS total_lines,
+         COALESCE(SUM(matching.quantity), 0) AS total_quantity,
+         COALESCE(SUM(matching.line_total), 0) AS total_amount
+       FROM (
+         SELECT pil.id, pil.quantity, pil.line_total, COUNT(*) AS batch_rows
        FROM purchase_invoice_lines pil
        JOIN purchase_invoices pi ON pil.purchase_invoice_id = pi.id
        JOIN parties p ON pi.supplier_party_id = p.id
        JOIN unique_items u ON pil.unique_item_id = u.id
        LEFT JOIN purchase_invoice_line_batches pilb ON pil.id = pilb.purchase_invoice_line_id
        LEFT JOIN optical_batches b ON pilb.batch_id = b.id
-       WHERE ${whereClause}`,
+       WHERE ${whereClause}
+       GROUP BY pil.id, pil.quantity, pil.line_total
+       ) matching`,
       params
     );
 
     const totalLines = parseInt(countRes.rows[0]?.total_lines, 10) || 0;
+    const totalRows = parseInt(countRes.rows[0]?.total_rows, 10) || 0;
     const summary = {
       totalLines,
       totalQuantity: parseFloat(countRes.rows[0]?.total_quantity) || 0,
@@ -712,8 +718,8 @@ export class ReportService {
       pagination: {
         page,
         limit,
-        totalItems: totalLines,
-        totalPages: Math.ceil(totalLines / limit) || 1,
+        totalItems: totalRows,
+        totalPages: Math.ceil(totalRows / limit) || 1,
       },
     };
   }
@@ -1026,20 +1032,26 @@ export class ReportService {
 
     const countRes = await pool.query(
       `SELECT
-         COUNT(sil.id) AS total_lines,
-         COALESCE(SUM(sil.quantity), 0) AS total_quantity,
-         COALESCE(SUM(sil.line_total), 0) AS total_amount
+         COALESCE(SUM(matching.batch_rows), 0) AS total_rows,
+         COUNT(*) AS total_lines,
+         COALESCE(SUM(matching.quantity), 0) AS total_quantity,
+         COALESCE(SUM(matching.line_total), 0) AS total_amount
+       FROM (
+         SELECT sil.id, sil.quantity, sil.line_total, COUNT(*) AS batch_rows
        FROM sales_invoice_lines sil
        JOIN sales_invoices si ON sil.sales_invoice_id = si.id
        JOIN parties p ON si.party_id = p.id
        JOIN unique_items u ON sil.unique_item_id = u.id
        LEFT JOIN sales_invoice_line_batches silb ON sil.id = silb.sales_invoice_line_id
        LEFT JOIN optical_batches b ON silb.batch_id = b.id
-       WHERE ${whereClause}`,
+       WHERE ${whereClause}
+       GROUP BY sil.id, sil.quantity, sil.line_total
+       ) matching`,
       params
     );
 
     const totalLines = parseInt(countRes.rows[0]?.total_lines, 10) || 0;
+    const totalRows = parseInt(countRes.rows[0]?.total_rows, 10) || 0;
     const summary = {
       totalLines,
       totalQuantity: parseFloat(countRes.rows[0]?.total_quantity) || 0,
@@ -1120,8 +1132,8 @@ export class ReportService {
       pagination: {
         page,
         limit,
-        totalItems: totalLines,
-        totalPages: Math.ceil(totalLines / limit) || 1,
+        totalItems: totalRows,
+        totalPages: Math.ceil(totalRows / limit) || 1,
       },
     };
   }
@@ -1843,4 +1855,4 @@ export class ReportService {
       },
     };
   }
-}
+                  }
