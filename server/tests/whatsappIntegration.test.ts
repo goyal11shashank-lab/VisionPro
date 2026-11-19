@@ -5,7 +5,13 @@ import { whatsappSessions, whatsappMessagesQueue, businesses, parties, salesInvo
 import { eq, and } from 'drizzle-orm';
 
 async function runWhatsAppTests() {
-  console.log('🧪 Starting WhatsApp Integration Test Suite...');
+  const database = new URL(process.env.DATABASE_URL || '');
+  if (!['127.0.0.1', 'localhost'].includes(database.hostname) || database.pathname !== '/erp_whatsapp_test') {
+    throw new Error('Use only the disposable local erp_whatsapp_test database. Never production.');
+  }
+  process.env.WHATSAPP_SEND_ENABLED = 'true';
+  process.env.WHATSAPP_TEST_RECIPIENT = '9876543210';
+  console.log('Starting local mocked WhatsApp integration tests...');
   let testsPassed = 0;
   let testsFailed = 0;
 
@@ -123,21 +129,28 @@ async function runWhatsAppTests() {
       'Session persisted in database with QR_REQUIRED/CONNECTING state'
     );
 
-    // Test 3b: Confirm authentication
+    // Caller-provided identity must not authenticate the socket.
+    let rejectedFakeConfirmation = false;
+    try { await WhatsAppService.confirmAuthentication(testBusinessId, { phone: '+91 98450 11223' }); }
+    catch { rejectedFakeConfirmation = true; }
+    assert(rejectedFakeConfirmation, 'Confirmation cannot manufacture a connected session');
+    activeMock.user = { id: '919845011223:1@s.whatsapp.net', name: 'Test Optical Dispatcher' };
+    activeMock.emit('connection.update', { connection: 'open' });
+    // Test 3b: Read confirmed identity from the mocked authenticated event.
     const authRes = await WhatsAppService.confirmAuthentication(testBusinessId, {
       phone: '+91 98450 11223',
       pushname: 'Test Optical Dispatcher',
     });
     assert(
-      authRes.status === 'CONNECTED' && authRes.connectedPhone === '+91 98450 11223',
+      authRes.status === 'CONNECTED' && authRes.connectedPhone === '+919845011223',
       'Session successfully transitioned to CONNECTED'
     );
 
     // Test 3c: Test connection verification
     const testConnRes = await WhatsAppService.testConnection(testBusinessId);
     assert(
-      testConnRes.success && testConnRes.status === 'CONNECTED' && typeof testConnRes.latencyMs === 'number',
-      'testConnection succeeds for connected session with measured latency'
+      testConnRes.success && testConnRes.status === 'CONNECTED',
+      'testConnection reports active socket status without pretending a network ping'
     );
 
     // =========================================================================
