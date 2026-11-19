@@ -813,7 +813,7 @@ export class ExportService {
         p.status AS "Status"
       FROM parties p
       WHERE p.business_id = $1 AND p.party_type IN ('CUSTOMER', 'BOTH')
-      ORDER BY "Outstanding Balance"::numeric DESC, p.name ASC
+      ORDER BY "Outstanding Balance" DESC, p.name ASC
     `;
     const res = await pool.query(sql, [businessId]);
     return res.rows;
@@ -845,7 +845,7 @@ export class ExportService {
         p.status AS "Status"
       FROM parties p
       WHERE p.business_id = $1 AND p.party_type IN ('SUPPLIER', 'BOTH')
-      ORDER BY "Outstanding Balance"::numeric DESC, p.name ASC
+      ORDER BY "Outstanding Balance" DESC, p.name ASC
     `;
     const res = await pool.query(sql, [businessId]);
     return res.rows;
@@ -950,7 +950,7 @@ export class ExportService {
       JOIN sales_invoices si ON sil.sales_invoice_id = si.id
       JOIN unique_items u ON sil.unique_item_id = u.id
       LEFT JOIN primary_items p ON u.primary_item_id = p.id
-      LEFT JOIN categories c ON COALESCE(u.category_id, p.category_id) = c.id
+      LEFT JOIN categories c ON p.category_id = c.id
       WHERE si.business_id = $1 AND si.status = 'POSTED'
     `;
     const params: any[] = [businessId];
