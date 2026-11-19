@@ -24,11 +24,11 @@ export const WhatsAppStatusBadge: React.FC<Props> = ({
           className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-semibold bg-emerald-50 text-emerald-700 border border-emerald-200 ${
             onClick ? 'cursor-pointer hover:bg-emerald-100' : ''
           } ${className}`}
-          title="Invoice sent via WhatsApp"
+          title="WhatsApp transport acknowledged this attempt. Recipient delivery and image availability are not confirmed."
           onClick={onClick}
         >
           <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600" />
-          {!showIconOnly && <span>Sent</span>}
+          {!showIconOnly && <span>Acknowledged</span>}
         </span>
       );
       break;
@@ -55,7 +55,7 @@ export const WhatsAppStatusBadge: React.FC<Props> = ({
           className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-semibold bg-rose-50 text-rose-700 border border-rose-200 ${
             onClick ? 'cursor-pointer hover:bg-rose-100' : ''
           } ${className}`}
-          title="Failed to deliver. Click to retry or open WhatsApp."
+          title="Send attempt failed or is unconfirmed. Check the recipient chat before retrying."
           onClick={onClick}
         >
           <AlertCircle className="w-3.5 h-3.5 text-rose-600" />
