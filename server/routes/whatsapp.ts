@@ -279,7 +279,7 @@ router.post('/send-invoice', async (req: Request, res: Response) => {
       recipientPhone: phoneVal.normalized,
       recipientName: recipientName || inv.party_name,
       messageText,
-      mediaFileName: `${inv.invoice_number}.pdf`,
+      mediaFileName: `${inv.invoice_number}.png`,
       idempotencyKey: key,
       forceImmediate: true,
     });

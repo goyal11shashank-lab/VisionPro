@@ -350,6 +350,24 @@ router.get(
   }
 );
 
+/** Read-only image export with the same access checks as invoice viewing. */
+router.get(
+  '/invoices/:id/image',
+  requireAnyPermission(['sales:view', 'sales.view', 'sales.invoice.view', 'sales:invoice:view']),
+  async (req: Request, res: Response) => {
+    try {
+      const { buildInvoiceImageForInvoice } = await import('../services/whatsapp/invoiceImageService.js');
+      const image = await buildInvoiceImageForInvoice(req.user!.currentBusinessId, req.params.id);
+      res.setHeader('Content-Type', 'image/png');
+      res.setHeader('Cache-Control', 'private, no-store');
+      res.setHeader('Content-Disposition', `attachment; filename="${image.fileName}"`);
+      res.send(image.buffer);
+    } catch (err: any) {
+      res.status(400).json({ error: 'INVOICE_IMAGE_FAILED', message: err.message });
+    }
+  }
+);
+
 /**
  * PUT /api/sales/invoices/:id
  * Update an existing active sales invoice

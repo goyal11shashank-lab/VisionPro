@@ -1,0 +1,31 @@
+import assert from 'node:assert/strict';
+import { WhatsAppConnectionManager as Manager } from '../services/whatsapp/whatsappConnectionManager.js';
+import { pool } from '../db/index.js';
+process.env.WHATSAPP_SEND_ENABLED = 'true';
+process.env.WHATSAPP_TEST_RECIPIENT = '7011865602';
+const clients: Map<string, any> = (Manager as any).clients;
+const id = 'local-unit-only';
+const state = (socket: any, status = 'CONNECTED') => ({ businessId:id, socket, status, qrCodeData:null, rawQr:null, qrExpiresAt:null, reconnectAttempts:0, reconnectTimer:null, connectedPhone:null, connectedPushname:null, lastConnectedAt:null, lastDisconnectedAt:null, lastError:null, isInitializing:false });
+try {
+  process.env.WHATSAPP_SEND_ENABLED = 'false';
+  await assert.rejects(Manager.sendMessage(id,'7011865602',{text:'disabled mock'}),/disabled/);
+  process.env.WHATSAPP_SEND_ENABLED = 'true';
+  await assert.rejects(Manager.sendMessage(id,'9876543210',{text:'blocked mock'}),/only the approved test/);
+  clients.set(id,state(null));
+  assert.equal((await Manager.getStatus(id)).status,'DISCONNECTED');
+  await assert.rejects(Manager.sendMessage(id,'7011865602',{text:'mock only'}),/not connected/);
+  clients.set(id,state({}));
+  await assert.rejects(Manager.sendMessage(id,'7011865602',{text:'mock only'}),/not connected/);
+  let calls=0;
+  clients.set(id,state({sendMessage:async()=>{calls++;return undefined;}}));
+  await assert.rejects(Manager.sendMessage(id,'7011865602',{text:'mock only'}),/unconfirmed/);
+  assert.equal(calls,1);
+  clients.set(id,state({sendMessage:async(jid:string,payload:any)=>{assert.equal(jid,'917011865602@s.whatsapp.net');assert.equal(payload.text,'mock only');return {key:{id:'mock-ack'}};}}));
+  assert.equal((await Manager.sendMessage(id,'7011865602',{text:'mock only'})).key.id,'mock-ack');
+  const image = Buffer.from('synthetic-image-bytes');
+  clients.set(id,state({sendMessage:async(jid:string,payload:any)=>{assert.equal(jid,'917011865602@s.whatsapp.net');assert.equal(payload.image,image);assert.equal(payload.caption,'mock image');assert.equal(payload.mimetype,'image/png');assert.equal(payload.text,undefined);return {key:{id:'mock-image-ack'}};}}));
+  assert.equal((await Manager.sendMessage(id,'7011865602',{text:'mock image',imageBuffer:image})).key.id,'mock-image-ack');
+  clients.set(id,state({sendMessage:async()=>{throw new Error('mock socket failure');}}));
+  await assert.rejects(Manager.sendMessage(id,'7011865602',{text:'mock only'}),/mock socket failure/);
+  console.log('WhatsApp fail-closed tests passed: stale status, missing socket, missing method, missing acknowledgement, acknowledged mock send and socket failure. No network transports or DB reads/writes.');
+} finally {clients.delete(id);await pool.end();}
