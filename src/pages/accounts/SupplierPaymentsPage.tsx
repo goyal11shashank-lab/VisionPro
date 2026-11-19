@@ -1,3 +1,5 @@
+import { localDateInput } from '../../utils/localDateInput.js';
+import { normalizePaymentVoucher, normalizeUnpaidInvoices } from '../../utils/paymentResponse.js';
 import React, { useState, useEffect, useMemo } from 'react';
 import {
   TallyContextualPanel,
@@ -98,7 +100,7 @@ export const SupplierPaymentsPage: React.FC = () => {
 
   // Form Fields
   const [partyId, setPartyId] = useState('');
-  const [paymentDate, setPaymentDate] = useState<string>(new Date().toISOString().split('T')[0]);
+  const [paymentDate, setPaymentDate] = useState<string>(localDateInput());
   const [paymentMode, setPaymentMode] = useState<'CASH' | 'BANK_TRANSFER' | 'UPI' | 'CHEQUE' | 'CARD'>('BANK_TRANSFER');
   const [amount, setAmount] = useState<string>('');
   const [referenceNumber, setReferenceNumber] = useState('');
@@ -226,7 +228,7 @@ export const SupplierPaymentsPage: React.FC = () => {
 
       if (!res.ok) throw new Error('Failed to load supplier payments');
       const data = await res.json();
-      setVouchers(data.payments || []);
+      setVouchers((data.payments || []).map(normalizePaymentVoucher));
     } catch (err: any) {
       console.error(err);
     } finally {
@@ -292,7 +294,7 @@ export const SupplierPaymentsPage: React.FC = () => {
 
         if (invRes.ok) {
           const data = await invRes.json();
-          setUnpaidInvoices(data.unpaidInvoices || []);
+          setUnpaidInvoices(normalizeUnpaidInvoices(data));
           setAllocationsMap({});
         }
 
@@ -446,7 +448,7 @@ export const SupplierPaymentsPage: React.FC = () => {
 
   const resetForm = () => {
     setPartyId('');
-    setPaymentDate(new Date().toISOString().split('T')[0]);
+    setPaymentDate(localDateInput());
     setPaymentMode('BANK_TRANSFER');
     setAmount('');
     setReferenceNumber('');
@@ -472,7 +474,7 @@ export const SupplierPaymentsPage: React.FC = () => {
         },
       });
       if (res.ok) {
-        const full = await res.json();
+        const full = normalizePaymentVoucher(await res.json());
         setViewVoucher(full);
       }
     } catch (err) {

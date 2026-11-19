@@ -1,3 +1,5 @@
+import { localDateInput } from '../../utils/localDateInput.js';
+import { normalizePaymentVoucher, normalizeUnpaidInvoices } from '../../utils/paymentResponse.js';
 import React, { useState, useEffect, useMemo, useRef } from 'react';
 import {
   TallyContextualPanel,
@@ -105,7 +107,7 @@ export const CustomerReceiptsPage: React.FC = () => {
 
   // Form Fields
   const [partyId, setPartyId] = useState('');
-  const [paymentDate, setPaymentDate] = useState<string>(new Date().toISOString().split('T')[0]);
+  const [paymentDate, setPaymentDate] = useState<string>(localDateInput());
   const [paymentMode, setPaymentMode] = useState<'CASH' | 'BANK_TRANSFER' | 'UPI' | 'CHEQUE' | 'CARD'>('CASH');
   const [amount, setAmount] = useState<string>('');
   const [referenceNumber, setReferenceNumber] = useState('');
@@ -236,7 +238,7 @@ export const CustomerReceiptsPage: React.FC = () => {
 
       if (!res.ok) throw new Error('Failed to load customer receipts');
       const data = await res.json();
-      setVouchers(data.payments || []);
+      setVouchers((data.payments || []).map(normalizePaymentVoucher));
     } catch (err: any) {
       console.error(err);
     } finally {
@@ -307,7 +309,7 @@ export const CustomerReceiptsPage: React.FC = () => {
 
         if (invRes.ok) {
           const data = await invRes.json();
-          setUnpaidInvoices(data.unpaidInvoices || []);
+          setUnpaidInvoices(normalizeUnpaidInvoices(data));
           setAllocationsMap({});
         }
 
@@ -401,13 +403,13 @@ export const CustomerReceiptsPage: React.FC = () => {
         },
       });
       if (!res.ok) throw new Error('Failed to load receipt details for editing');
-      const full = await res.json();
+      const full = normalizePaymentVoucher(await res.json());
 
       skipNextPartyEffect.current = true;
       setEditingVoucherId(full.id);
       setEditingVoucherNumber(full.paymentNumber || voucher.paymentNumber);
       setPartyId(full.partyId);
-      setPaymentDate(full.paymentDate ? full.paymentDate.split('T')[0] : new Date().toISOString().split('T')[0]);
+      setPaymentDate(full.paymentDate ? full.paymentDate.split('T')[0] : localDateInput());
       setPaymentMode(full.paymentMode || 'CASH');
       setAmount(String(full.amount || ''));
       setReferenceNumber(full.referenceNumber || '');
@@ -428,7 +430,7 @@ export const CustomerReceiptsPage: React.FC = () => {
       let currentUnpaid: UnpaidInvoice[] = [];
       if (invRes.ok) {
         const invData = await invRes.json();
-        currentUnpaid = invData.unpaidInvoices || [];
+        currentUnpaid = normalizeUnpaidInvoices(invData);
       }
 
       // Merge existing allocations into unpaid invoices list
@@ -579,7 +581,7 @@ export const CustomerReceiptsPage: React.FC = () => {
     setEditingVoucherId(null);
     setEditingVoucherNumber('');
     setPartyId('');
-    setPaymentDate(new Date().toISOString().split('T')[0]);
+    setPaymentDate(localDateInput());
     setPaymentMode('CASH');
     setAmount('');
     setReferenceNumber('');
@@ -605,7 +607,7 @@ export const CustomerReceiptsPage: React.FC = () => {
         },
       });
       if (res.ok) {
-        const full = await res.json();
+        const full = normalizePaymentVoucher(await res.json());
         setViewVoucher(full);
       }
     } catch (err) {

@@ -3,6 +3,9 @@
   publish = "dist"
   functions = "netlify/functions"
 
+[functions]
+  external_node_modules = ["@resvg/resvg-js"]
+
 [build.environment]
   NODE_VERSION = "20"
 

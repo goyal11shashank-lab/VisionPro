@@ -1542,12 +1542,12 @@ export class ReportService {
     const params: any[] = [businessId];
     let paramIndex = 2;
 
-    if (filters.paymentType) {
+    if (filters.paymentType && filters.paymentType !== 'ALL') {
       conditions.push(`pm.payment_type = $${paramIndex}`);
       params.push(filters.paymentType);
       paramIndex++;
     }
-    if (filters.paymentMode) {
+    if (filters.paymentMode && filters.paymentMode !== 'ALL') {
       conditions.push(`pm.payment_mode = $${paramIndex}`);
       params.push(filters.paymentMode);
       paramIndex++;
@@ -1589,7 +1589,7 @@ export class ReportService {
          COALESCE(SUM(pm.amount - pm.unallocated_amount), 0) AS total_allocated,
          COALESCE(SUM(pm.unallocated_amount), 0) AS total_unallocated,
          COALESCE(SUM(pm.amount) FILTER (WHERE pm.payment_type = 'RECEIPT'), 0) AS total_receipts,
-         COALESCE(SUM(pm.amount) FILTER (WHERE pm.payment_type = 'SUPPLIER_PAYMENT'), 0) AS total_supplier_payments
+         COALESCE(SUM(pm.amount) FILTER (WHERE pm.payment_type = 'PAYMENT'), 0) AS total_supplier_payments
        FROM payments pm
        JOIN parties p ON pm.party_id = p.id
        WHERE ${whereClause}`,
@@ -1603,6 +1603,7 @@ export class ReportService {
          COUNT(pm.id) AS count,
          COALESCE(SUM(pm.amount), 0) AS total_amount
        FROM payments pm
+       JOIN parties p ON pm.party_id = p.id
        WHERE ${whereClause}
        GROUP BY pm.payment_mode
        ORDER BY total_amount DESC`,
@@ -1853,4 +1854,4 @@ export class ReportService {
       },
     };
   }
-}
+        }
