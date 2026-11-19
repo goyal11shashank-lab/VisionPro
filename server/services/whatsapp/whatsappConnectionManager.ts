@@ -1,3 +1,4 @@
+import './sessionLogRedaction.js';
 import fs from 'fs';
 import { assertWhatsAppSendAllowed } from './sendPolicy.js';
 import path from 'path';
@@ -736,4 +737,4 @@ export class WhatsAppConnectionManager {
     }
     this.clients.clear();
   }
-  }
+        }
