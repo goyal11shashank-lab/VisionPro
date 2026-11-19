@@ -1,4 +1,5 @@
 import fs from 'fs';
+import { assertWhatsAppSendAllowed } from './sendPolicy.js';
 import path from 'path';
 import QRCode from 'qrcode';
 import pino from 'pino';
@@ -46,7 +47,7 @@ export type WhatsAppTransportFactory = (params: {
   saveCreds: () => Promise<void>;
 }) => Promise<IWhatsAppSocketTransport>;
 
-const SESSIONS_BASE_DIR = path.join(process.cwd(), '.whatsapp-sessions');
+const SESSIONS_BASE_DIR = process.env.WHATSAPP_AUTH_DIR || path.join(process.cwd(), '.whatsapp-sessions');
 const MAX_RECONNECT_ATTEMPTS = 5;
 const QR_EXPIRY_SECONDS = 90;
 
@@ -503,7 +504,7 @@ export class WhatsAppConnectionManager {
     }
 
     if (typeof client.socket.requestPairingCode !== 'function') {
-      return '1234-5678';
+      throw new Error('This WhatsApp transport does not support phone pairing. Use QR linking instead.');
     }
 
     try {
@@ -512,20 +513,6 @@ export class WhatsAppConnectionManager {
     } catch (err: any) {
       throw new Error(`Failed to request pairing code: ${err.message || 'WhatsApp error'}`);
     }
-  }
-
-  /**
-   * Sets session to connected directly (used by auth confirmation & testing)
-   */
-  static setConnected(businessId: string, phone: string, pushname: string) {
-    const client = this.getOrCreateClient(businessId);
-    client.status = 'CONNECTED';
-    client.connectedPhone = phone;
-    client.connectedPushname = pushname;
-    client.qrCodeData = null;
-    client.qrExpiresAt = null;
-    client.lastError = null;
-    client.lastConnectedAt = new Date();
   }
 
   /**
@@ -583,7 +570,8 @@ export class WhatsAppConnectionManager {
       if (dbRow) {
         // Map database status
         let mappedStatus: WhatsAppConnectionStatus = 'DISCONNECTED';
-        if (dbRow.status === 'CONNECTED') mappedStatus = 'CONNECTED';
+        // A persisted status is history, not an active authenticated socket.
+        if (dbRow.status === 'CONNECTED') mappedStatus = 'DISCONNECTED';
         else if (dbRow.status === 'QR_REQUIRED' || dbRow.status === 'CONNECTING') mappedStatus = 'QR_REQUIRED';
         else if (dbRow.status === 'INITIALIZING') mappedStatus = 'INITIALIZING';
         else if (dbRow.status === 'RECONNECTING') mappedStatus = 'RECONNECTING';
@@ -609,6 +597,11 @@ export class WhatsAppConnectionManager {
       } else {
         client = this.getOrCreateClient(businessId);
       }
+    }
+
+    if (client.status === 'CONNECTED' && (!client.socket || typeof client.socket.sendMessage !== 'function')) {
+      client.status = 'DISCONNECTED';
+      client.lastError = 'No active WhatsApp connection. Reconnect explicitly in Settings.';
     }
 
     const isQrExpired = !!(client.qrExpiresAt && client.qrExpiresAt.getTime() < Date.now());
@@ -660,35 +653,17 @@ export class WhatsAppConnectionManager {
     content: {
       text: string;
       documentBuffer?: Buffer;
+      imageBuffer?: Buffer;
       fileName?: string;
       mimetype?: string;
     }
   ): Promise<any> {
-    let client = this.clients.get(businessId);
+    assertWhatsAppSendAllowed(recipientPhone);
+    const client = this.clients.get(businessId);
 
-    // If socket is not connected in memory but saved credentials exist on disk, attempt automatic session restore
-    if ((!client || !client.socket || client.status !== 'CONNECTED') && this.hasStoredCredentials(businessId)) {
-      console.log(`[WhatsApp] Auto-restoring WhatsApp session for business ${businessId} prior to dispatch...`);
-      try {
-        await this.connect(businessId, false);
-        // Wait up to 3 seconds for Baileys handshake if creds exist
-        for (let i = 0; i < 30; i++) {
-          await new Promise((r) => setTimeout(r, 100));
-          client = this.clients.get(businessId);
-          if (client?.status === 'CONNECTED' && client?.socket) break;
-        }
-      } catch (err: any) {
-        console.error(`[WhatsApp] Auto-restore attempt failed for ${businessId}:`, err.message);
-      }
-    }
-
-    client = this.clients.get(businessId);
-    const dbStatus = await this.getStatus(businessId);
-
-    if (dbStatus.status !== 'CONNECTED') {
-      throw new Error(
-        `WhatsApp session is not connected (current status: ${dbStatus.status}). Please link your phone under Settings → Transaction Message or use the 1-Click WhatsApp Web link.`
-      );
+    // Sending must never reconnect silently or trust an old persisted CONNECTED value.
+    if (!client || client.status !== 'CONNECTED' || !client.socket || typeof client.socket.sendMessage !== 'function') {
+      throw new Error('WhatsApp session is not connected to an active socket. Reconnect explicitly in Settings.');
     }
 
     // Prepare recipient JID
@@ -698,7 +673,9 @@ export class WhatsAppConnectionManager {
 
     // Construct message payload
     let messagePayload: any;
-    if (content.documentBuffer) {
+    if (content.imageBuffer) {
+      messagePayload = { image: content.imageBuffer, mimetype: 'image/png', caption: content.text };
+    } else if (content.documentBuffer) {
       messagePayload = {
         document: content.documentBuffer,
         mimetype: content.mimetype || 'application/pdf',
@@ -711,21 +688,11 @@ export class WhatsAppConnectionManager {
       };
     }
 
-    // If active client has socket with sendMessage, execute it
-    if (client?.socket && typeof client.socket.sendMessage === 'function') {
-      try {
-        const sendResponse = await client.socket.sendMessage(jid, messagePayload);
-        console.log(`[WhatsApp] Successfully transmitted message to ${jid} (msgId: ${sendResponse?.key?.id || 'ok'})`);
-        return sendResponse || { key: { id: `baileys-${Date.now()}` } };
-      } catch (err: any) {
-        console.error(`[WhatsApp] Baileys socket error sending to ${jid}:`, err);
-        throw new Error(`WhatsApp transmission error: ${err.message || 'Failed to send message via socket'}`);
-      }
+    const sendResponse = await client.socket.sendMessage(jid, messagePayload);
+    if (!sendResponse?.key?.id) {
+      throw new Error('WhatsApp did not acknowledge the message. Delivery is unconfirmed; do not retry blindly.');
     }
-
-    // Fallback if socket is in simulated/mock state (e.g., test suite or simulated pairing)
-    console.log(`[WhatsApp] Dispatched message to ${jid} via active session`);
-    return { key: { id: `msg-${Date.now()}` } };
+    return sendResponse;
   }
 
   /**
@@ -738,7 +705,7 @@ export class WhatsAppConnectionManager {
 
       for (const row of rows) {
         const hasCreds = this.hasStoredCredentials(row.businessId);
-        if (row.status === 'CONNECTED' || hasCreds) {
+        if (hasCreds) {
           console.log(`[WhatsApp Startup] Restoring session for business ${row.businessId}...`);
           try {
             await this.connect(row.businessId, false);
@@ -769,4 +736,4 @@ export class WhatsAppConnectionManager {
     }
     this.clients.clear();
   }
-}
+  }
