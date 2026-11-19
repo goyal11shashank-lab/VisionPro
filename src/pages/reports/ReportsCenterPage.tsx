@@ -1,3 +1,5 @@
+import { localDateInput } from '../../utils/localDateInput.js';
+import { normalizeReportResponse, isCurrencySummaryKey } from '../../utils/reportResponse.js';
 import React, { useState, useEffect } from 'react';
 import {
   BarChart3,
@@ -57,9 +59,9 @@ export const ReportsCenterPage: React.FC<{ initialTab?: ReportTab; initialStockS
   const [startDate, setStartDate] = useState(() => {
     const d = new Date();
     d.setDate(d.getDate() - 30);
-    return d.toISOString().split('T')[0];
+    return localDateInput(d);
   });
-  const [endDate, setEndDate] = useState(() => new Date().toISOString().split('T')[0]);
+  const [endDate, setEndDate] = useState(() => localDateInput());
   const [searchQuery, setSearchQuery] = useState('');
   const [page, setPage] = useState(1);
 
@@ -104,7 +106,7 @@ export const ReportsCenterPage: React.FC<{ initialTab?: ReportTab; initialStockS
   // Load Parties for party statement selector
   useEffect(() => {
     apiRequest('/api/parties')
-      .then(res => setPartiesList(Array.isArray(res) ? res : res.data || []))
+      .then(res => setPartiesList(Array.isArray(res) ? res : res.parties || res.data || []))
       .catch(() => {});
   }, [currentBusiness?.id]);
 
@@ -179,7 +181,7 @@ export const ReportsCenterPage: React.FC<{ initialTab?: ReportTab; initialStockS
 
       if (endpoint) {
         const res = await apiRequest(endpoint);
-        setReportData(res);
+        setReportData(normalizeReportResponse(res, activeTab));
       }
     } catch (err: any) {
       setError(err.message || 'Failed to generate report');
@@ -197,6 +199,7 @@ export const ReportsCenterPage: React.FC<{ initialTab?: ReportTab; initialStockS
     purchaseSubTab,
     outstandingType,
     selectedPartyId,
+    partiesList,
     inventoryStatus,
     paymentType,
     paymentMode,
@@ -479,7 +482,7 @@ export const ReportsCenterPage: React.FC<{ initialTab?: ReportTab; initialStockS
   const handleExportCsv = () => {
     const config = getReportPrintConfig();
     exportToCsv({
-      filename: `${activeTab}_report_${new Date().toISOString().split('T')[0]}`,
+      filename: `${activeTab}_report_${localDateInput()}`,
       reportTitle: config.title,
       businessName: currentBusiness?.name,
       filtersSummary: config.filtersSummary,
@@ -494,6 +497,7 @@ export const ReportsCenterPage: React.FC<{ initialTab?: ReportTab; initialStockS
   // Check whether report data has records
   const hasReportRecords = () => {
     if (!reportData) return false;
+    if (activeTab === 'party-statement' && reportData.party) return true;
     if (Array.isArray(reportData)) return reportData.length > 0;
     if (Array.isArray(reportData.data) && reportData.data.length > 0) return true;
     if (Array.isArray(reportData.parties) && reportData.parties.length > 0) return true;
@@ -800,7 +804,7 @@ export const ReportsCenterPage: React.FC<{ initialTab?: ReportTab; initialStockS
                   {String(key || '').replace(/([A-Z])/g, ' $1').trim()}
                 </div>
                 <div className="text-lg md:text-xl font-bold text-slate-900 mt-1">
-                  {typeof val === 'number' && (key.toLowerCase().includes('amount') || key.toLowerCase().includes('total') || key.toLowerCase().includes('balance'))
+                  {typeof val === 'number' && isCurrencySummaryKey(key)
                     ? `₹${Number(val).toLocaleString()}`
                     : String(val)}
                 </div>
