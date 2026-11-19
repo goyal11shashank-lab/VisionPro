@@ -888,6 +888,12 @@ export const ReportsCenterPage: React.FC<{ initialTab?: ReportTab; initialStockS
         </div>
       </div>
 
+      {((activeTab === 'sales' && salesSubTab === 'DETAILS') || (activeTab === 'purchases' && purchaseSubTab === 'DETAILS')) && (
+        <div className="p-3 rounded-xl border border-amber-200 bg-amber-50 text-amber-900 text-xs">
+          Summary totals count each commercial line once. Batch rows can repeat that line's quantity, tax and total, so do not add those row values together. No batch tax or discount allocation is implied.
+        </div>
+      )}
+
       {/* Summary KPI Cards if provided by report */}
       {reportData?.summary && typeof reportData.summary === 'object' && (
         <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
@@ -1132,11 +1138,11 @@ export const ReportsCenterPage: React.FC<{ initialTab?: ReportTab; initialStockS
                     <th className="py-3 px-4">Customer</th>
                     <th className="py-3 px-4">Item / SKU</th>
                     <th className="py-3 px-4">Barcode / Power</th>
-                    <th className="py-3 px-4 text-right">Qty</th>
+                    <th className="py-3 px-4 text-right">Line Qty</th>
                     <th className="py-3 px-4 text-right">Unit Price</th>
                     <th className="py-3 px-4 text-right">Disc %</th>
                     <th className="py-3 px-4 text-right">Tax Rate</th>
-                    <th className="py-3 px-4 text-right">Tax Amt</th>
+                    <th className="py-3 px-4 text-right">Line Tax</th>
                     <th className="py-3 px-4 text-right">Line Total</th>
                   </tr>
                 </thead>
@@ -1256,11 +1262,11 @@ export const ReportsCenterPage: React.FC<{ initialTab?: ReportTab; initialStockS
                     <th className="py-3 px-4">Supplier</th>
                     <th className="py-3 px-4">Item / SKU</th>
                     <th className="py-3 px-4">Barcode / Power</th>
-                    <th className="py-3 px-4 text-right">Qty</th>
+                    <th className="py-3 px-4 text-right">Line Qty</th>
                     <th className="py-3 px-4 text-right">Unit Cost</th>
                     <th className="py-3 px-4 text-right">Disc %</th>
                     <th className="py-3 px-4 text-right">Tax Rate</th>
-                    <th className="py-3 px-4 text-right">Tax Amt</th>
+                    <th className="py-3 px-4 text-right">Line Tax</th>
                     <th className="py-3 px-4 text-right">Line Total</th>
                   </tr>
                 </thead>
