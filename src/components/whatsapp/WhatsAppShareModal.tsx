@@ -74,6 +74,59 @@ export const WhatsAppShareModal: React.FC<Props> = ({
   const [history, setHistory] = useState<any[]>([]);
   const [currentQueueStatus, setCurrentQueueStatus] = useState<string>('NONE');
 
+  const [imageFile, setImageFile] = useState<File | null>(null);
+  const [imagePreview, setImagePreview] = useState<string | null>(null);
+  const [imageError, setImageError] = useState<string | null>(null);
+
+  useEffect(() => {
+    let active = true;
+    let objectUrl: string | null = null;
+    setImageFile(null);
+    setImagePreview(null);
+    setImageError(null);
+    if (currentBusiness?.id) {
+      fetch(`/api/sales/invoices/${invoice.id}/image`, { headers: getAuthHeaders(currentBusiness.id) })
+        .then(async response => {
+          if (!response.ok) {
+            const error = await response.json().catch(() => ({}));
+            throw new Error(error.message || 'Invoice image could not be created.');
+          }
+          const blob = await response.blob();
+          if (!active) return;
+          const fileName = `${invoice.invoiceNumber.replace(/[^\w-]+/g, '_')}.png`;
+          setImageFile(new File([blob], fileName, { type: 'image/png' }));
+          objectUrl = URL.createObjectURL(blob);
+          setImagePreview(objectUrl);
+        })
+        .catch(error => { if (active) setImageError(error.message); });
+    }
+    return () => { active = false; if (objectUrl) URL.revokeObjectURL(objectUrl); };
+  }, [invoice.id, currentBusiness?.id]);
+
+  const downloadInvoiceImage = () => {
+    if (!imageFile || !imagePreview) return;
+    const link = document.createElement('a');
+    link.href = imagePreview;
+    link.download = imageFile.name;
+    link.click();
+    setActionSuccess('Invoice PNG downloaded. Attach this image in the intended WhatsApp chat. No message has been sent.');
+  };
+
+  const shareInvoiceImage = async () => {
+    if (!imageFile) return;
+    setActionError(null);
+    if (!navigator.canShare?.({ files: [imageFile] }) || !navigator.share) {
+      downloadInvoiceImage();
+      return;
+    }
+    try {
+      await navigator.share({ files: [imageFile], title: `Invoice ${invoice.invoiceNumber}`, text: messageText });
+      setActionSuccess('Image handed to your device share sheet. Choose WhatsApp and verify the recipient. Delivery is not confirmed here.');
+    } catch (error: any) {
+      if (error.name !== 'AbortError') setActionError('Image sharing is unavailable. Download the PNG and attach it in WhatsApp.');
+    }
+  };
+
   // Load session and invoice WhatsApp status
   const fetchStatusAndHistory = async () => {
     if (!currentBusiness?.id) return;
@@ -187,7 +240,7 @@ export const WhatsAppShareModal: React.FC<Props> = ({
 
       setActionSuccess(
         data.result?.message ||
-        `Invoice successfully sent to ${recipientPhone} via connected WhatsApp!`
+        `WhatsApp acknowledged the invoice message to ${recipientPhone}. Delivery/read status is not confirmed.`
       );
       fetchStatusAndHistory();
       if (onSuccess) onSuccess();
@@ -209,9 +262,9 @@ export const WhatsAppShareModal: React.FC<Props> = ({
         headers: getAuthHeaders(currentBusiness?.id),
       });
       const data = await res.json().catch(() => ({}));
-      if (!res.ok) throw new Error(data.error || 'Retry failed');
+      if (!res.ok || data.result?.success === false) throw new Error(data.error || data.result?.error || 'Retry failed');
 
-      setActionSuccess('Message retry triggered.');
+      setActionSuccess(data.result?.message || 'Retry request processed. Check the message status below.');
       fetchStatusAndHistory();
     } catch (err: any) {
       setActionError(err.message || 'Retry failed');
@@ -267,7 +320,7 @@ export const WhatsAppShareModal: React.FC<Props> = ({
                   className="shrink-0 underline font-semibold text-rose-800 hover:text-rose-950 flex items-center gap-1"
                 >
                   <ExternalLink className="w-3.5 h-3.5" />
-                  <span>Use 1-Click Link</span>
+                  <span>Open text-only chat</span>
                 </a>
               )}
             </div>
@@ -342,6 +395,18 @@ export const WhatsAppShareModal: React.FC<Props> = ({
             />
           </div>
 
+          <div className="border border-slate-200 rounded-xl p-3 space-y-3">
+            <p className="text-xs font-semibold text-slate-700">Actual invoice image attachment</p>
+            {imagePreview && <img src={imagePreview} alt={`Invoice ${invoice.invoiceNumber} image preview`} className="w-full max-h-72 object-contain bg-white" />}
+            {imageError && <p className="text-xs text-rose-700">{imageError}</p>}
+            {!imageFile && !imageError && <p className="text-xs text-slate-500">Preparing invoice PNG...</p>}
+            <div className="flex flex-wrap gap-2">
+              <button type="button" onClick={shareInvoiceImage} disabled={!imageFile} className="px-4 py-2 bg-emerald-600 text-white rounded-lg text-sm font-semibold disabled:opacity-50">Share image</button>
+              <button type="button" onClick={downloadInvoiceImage} disabled={!imageFile} className="px-4 py-2 bg-slate-100 text-slate-800 border rounded-lg text-sm font-semibold disabled:opacity-50">Download image</button>
+            </div>
+            <p className="text-xs text-slate-500">Share image opens your device's share sheet where supported. Choose WhatsApp and the intended recipient. On desktop, download and attach the PNG manually. This does not mark the invoice as sent.</p>
+          </div>
+
           {/* Connected Session Status Banner */}
           <div className="p-3.5 rounded-xl border border-slate-200 bg-slate-50 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
             <div className="flex items-center gap-2.5">
@@ -360,8 +425,8 @@ export const WhatsAppShareModal: React.FC<Props> = ({
                 </span>
                 <p className="text-[11px] text-slate-500">
                   {sessionStatus === 'CONNECTED'
-                    ? 'Direct automated sending is enabled.'
-                    : 'Use the 1-Click WhatsApp Web link or link your device in Settings.'}
+                    ? 'Authenticated socket active. Server send safety settings still apply.'
+                    : 'Share or download the actual invoice image above, or manage the session in Settings.'}
                 </p>
               </div>
             </div>
@@ -415,7 +480,7 @@ export const WhatsAppShareModal: React.FC<Props> = ({
                 }`}
               >
                 <ExternalLink className="w-4 h-4" />
-                <span>1-Click WhatsApp Web</span>
+                <span>Open WhatsApp chat (text only)</span>
               </a>
 
               {/* Download PDF button so user can attach in WhatsApp */}
@@ -433,7 +498,7 @@ export const WhatsAppShareModal: React.FC<Props> = ({
             </div>
 
             <p className="text-[11px] text-slate-400 text-center">
-              1-Click WhatsApp Web works instantly on mobile, tablet, or desktop without any server browser requirement.
+              The chat link opens text only. It cannot attach files. Use Share image on supported devices, or Download image and attach the PNG yourself.
             </p>
           </div>
 
@@ -465,7 +530,7 @@ export const WhatsAppShareModal: React.FC<Props> = ({
                           {item.errorMessage}
                         </span>
                       )}
-                      {item.status === 'FAILED' && (
+                      {item.status === 'FAILED' && !item.metadata?.deliveryUncertain && (
                         <button
                           type="button"
                           onClick={() => handleRetryJob(item.id)}
