@@ -69,8 +69,8 @@ export const PrintableReport: React.FC<PrintableReportProps> = ({
       id={id}
       className={`print-document-container relative bg-white text-slate-900 mx-auto border border-slate-300 p-6 md:p-8 font-sans text-xs leading-normal shadow-sm ${
         isLandscape ? 'max-w-[297mm]' : 'max-w-[210mm]'
-      } min-h-[297mm]`}
-      style={{ boxSizing: 'border-box' }}
+      }`}
+      style={{ boxSizing: 'border-box', width: isLandscape ? '297mm' : '210mm', minHeight: isLandscape ? '210mm' : '297mm' }}
     >
       {/* Top Header: Business Branding & Report Name */}
       <div className="border-b-2 border-slate-800 pb-3 mb-3">

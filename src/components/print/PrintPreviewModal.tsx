@@ -121,9 +121,9 @@ export const PrintPreviewModal: React.FC<PrintPreviewModalProps> = ({
       className="print-preview-dialog fixed inset-0 z-50 flex flex-col bg-slate-900/80 backdrop-blur-xs overflow-hidden"
     >
       {/* Top Floating Print Toolbar (Hidden on System Print) */}
-      <div className="print-toolbar no-print bg-slate-900 text-white px-4 py-2.5 flex items-center justify-between border-b border-slate-700 shadow-md">
+      <div className="print-toolbar no-print bg-slate-900 text-white px-4 py-2.5 flex flex-wrap gap-3 items-center justify-between border-b border-slate-700 shadow-md">
         {/* Left: Title & Orientation */}
-        <div className="flex items-center gap-3">
+        <div className="flex flex-wrap items-center gap-3">
           <div className="flex items-center gap-2">
             <LayoutTemplate className="w-4 h-4 text-emerald-400" />
             <span className="font-bold text-sm tracking-tight">{title}</span>
@@ -141,7 +141,7 @@ export const PrintPreviewModal: React.FC<PrintPreviewModalProps> = ({
         </div>
 
         {/* Center: Zoom Controls */}
-        <div className="hidden md:flex items-center gap-1.5 bg-slate-800 px-2 py-1 rounded border border-slate-700 text-xs">
+        <div className="flex items-center gap-1.5 bg-slate-800 px-2 py-1 rounded border border-slate-700 text-xs">
           <button
             onClick={() => setZoom(z => Math.max(50, z - 10))}
             className="p-1 hover:text-emerald-400 text-slate-300"
@@ -273,14 +273,14 @@ export const PrintPreviewModal: React.FC<PrintPreviewModalProps> = ({
       )}
 
       {/* Main Preview Canvas Area */}
-      <div className="flex-1 overflow-auto p-4 md:p-8 bg-slate-800/90 flex justify-center items-start">
+      <div className="flex-1 overflow-auto p-4 md:p-8 bg-slate-800/90 block">
         <div
           style={{
             transform: `scale(${zoom / 100})`,
-            transformOrigin: 'top center',
+            transformOrigin: 'top left',
             transition: 'transform 0.15s ease',
           }}
-          className="print-content-wrapper"
+          className="print-content-wrapper w-max mx-auto"
         >
           {children({ orientation, documentId })}
         </div>

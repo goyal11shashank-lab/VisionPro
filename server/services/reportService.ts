@@ -1279,8 +1279,7 @@ export class ReportService {
     );
     const totalParties = parseInt(countRes.rows[0]?.total_parties, 10) || 0;
 
-    const dataRes = await pool.query(
-      `SELECT
+    const filteredRowsSql = `SELECT
          p.id AS party_id,
          p.name AS party_name,
          p.party_code,
@@ -1320,24 +1319,19 @@ export class ReportService {
            WHERE inv.${invPartyCol} = p.id AND inv.business_id = $1 AND inv.status = 'POSTED' AND (inv.grand_total - COALESCE(pa_sub.paid_amount, 0)) > 0
          ), 0) AS overdue_balance
        FROM parties p
-       WHERE ${whereClause}
-       ORDER BY current_balance DESC, p.name ASC
+       WHERE ${whereClause}`;
+    const dataRes = await pool.query(
+      `${filteredRowsSql} ORDER BY current_balance DESC, party_name ASC
        LIMIT $${paramIndex} OFFSET $${paramIndex + 1}`,
       [...params, limit, offset]
     );
 
-    // Calculate summary of total outstanding
+    // Same filtered population as the rows, across every page. Preserve positive-only outstanding.
     const sumRes = await pool.query(
-      `SELECT
-         COALESCE(SUM(sub.balance), 0) AS total_outstanding
-       FROM (
-         SELECT DISTINCT ON (party_id) balance
-         FROM ${ledgerTable}
-         WHERE business_id = $1
-         ORDER BY party_id, created_at DESC
-       ) sub
-       WHERE sub.balance > 0`,
-      [businessId]
+      `SELECT COALESCE(SUM(GREATEST(current_balance, 0)), 0) AS total_outstanding,
+              COALESCE(SUM(overdue_balance), 0) AS total_overdue
+       FROM (${filteredRowsSql}) matching_parties`,
+      params
     );
 
     const mappedParties = dataRes.rows.map(r => ({
@@ -1362,18 +1356,13 @@ export class ReportService {
       overdueBalance: parseFloat(r.overdue_balance) || 0,
     }));
 
-    const totalOverdue = dataRes.rows.reduce(
-      (sum, r) => sum + (parseFloat(r.overdue_balance) || 0),
-      0
-    );
-
     return {
       data: mappedParties,
       parties: mappedParties,
       summary: {
         totalParties,
         totalOutstanding: parseFloat(sumRes.rows[0]?.total_outstanding) || 0,
-        totalOverdue,
+        totalOverdue: parseFloat(sumRes.rows[0]?.total_overdue) || 0,
       },
       pagination: {
         page,
@@ -1854,4 +1843,4 @@ export class ReportService {
       },
     };
   }
-        }
+}

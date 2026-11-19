@@ -150,7 +150,7 @@ export const PrintableVoucher: React.FC<PrintableVoucherProps> = ({
         <div className="flex justify-between items-start gap-4">
           {/* Left: Business Info */}
           <div className="flex-1">
-            {showLogo && (business as any)?.logo && (
+            {effectiveShowLogo && (business as any)?.logo && (
               <img
                 src={(business as any).logo}
                 alt="Logo"
@@ -339,7 +339,7 @@ export const PrintableVoucher: React.FC<PrintableVoucherProps> = ({
                     </tr>
 
                     {/* Multi-Batch Optical Allocations Nested Row */}
-                    {showBatches && batches.length > 0 && (
+                    {effectiveShowBatches && batches.length > 0 && (
                       <tr className="bg-slate-50/70 text-[10px]">
                         <td className="border-r border-slate-200"></td>
                         <td colSpan={7} className="py-1 px-3">

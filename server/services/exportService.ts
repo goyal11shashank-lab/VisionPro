@@ -1,4 +1,5 @@
 import * as XLSX from 'xlsx';
+import { createExportSheet } from '../utils/exportSheet.js';
 import { pool } from '../db/index.js';
 import { BusinessSettingsService } from './businessSettingsService.js';
 import { formatOpticalBatchName } from '../utils/searchNormalization.js';
@@ -23,6 +24,8 @@ export type ExportDatasetType =
   | 'POWER_SALES';
 
 export interface ExportFilterOptions {
+  search?: string;
+  barcode?: string;
   startDate?: string;
   endDate?: string;
   partyId?: string;
@@ -165,15 +168,7 @@ export class ExportService {
     const fileName = `${filePrefix}_${timestamp}.xlsx`;
 
     const wb = XLSX.utils.book_new();
-    const ws = XLSX.utils.json_to_sheet(rows.length > 0 ? rows : [{ Status: 'No records found matching criteria' }]);
-
-    // Auto-calculate column widths
-    if (rows.length > 0) {
-      const colKeys = Object.keys(rows[0]);
-      ws['!cols'] = colKeys.map(k => ({
-        wch: Math.max(k.length + 3, 14),
-      }));
-    }
+    const ws = createExportSheet(rows);
 
     XLSX.utils.book_append_sheet(wb, ws, sheetName);
 
@@ -186,6 +181,9 @@ export class ExportService {
       { Parameter: 'Filter: Start Date', Value: filters.startDate || 'All' },
       { Parameter: 'Filter: End Date', Value: filters.endDate || 'All' },
       { Parameter: 'Filter: Status', Value: filters.status || 'All' },
+      { Parameter: 'Filter: Search', Value: filters.search || filters.barcode || 'All' },
+      { Parameter: 'Filter: SPH', Value: filters.sph ?? 'All' },
+      { Parameter: 'Filter: CYL', Value: filters.cyl ?? 'All' },
     ];
     const wsMeta = XLSX.utils.json_to_sheet(metaData);
     wsMeta['!cols'] = [{ wch: 25 }, { wch: 40 }];
@@ -455,6 +453,16 @@ export class ExportService {
       params.push(filters.uniqueItemId);
     }
 
+    for (const key of ['sph', 'cyl'] as const) {
+      if (filters[key] !== undefined && Number.isFinite(Number(filters[key]))) {
+        sql += ` AND b.${key} = $${idx++}`;
+        params.push(Number(filters[key]));
+      }
+    }
+    if (filters.search) {
+      sql += ` AND (b.barcode ILIKE $${idx} OR u.name ILIKE $${idx} OR u.code ILIKE $${idx} OR COALESCE(p.name, '') ILIKE $${idx})`;
+      params.push(`%${filters.search.trim()}%`); idx++;
+    }
     sql += ` ORDER BY b.barcode ASC`;
     const res = await pool.query(sql, params);
     return res.rows;
@@ -497,6 +505,10 @@ export class ExportService {
       params.push(filters.endDate);
     }
 
+    if (filters.barcode) {
+      sql += ` AND b.barcode ILIKE $${idx++}`;
+      params.push(`%${filters.barcode.trim()}%`);
+    }
     sql += ` ORDER BY sl.created_at DESC`;
     const res = await pool.query(sql, params);
     return res.rows;
@@ -550,6 +562,10 @@ export class ExportService {
       params.push(filters.status);
     }
 
+    if (filters.search) {
+      sql += ` AND (pi.invoice_number ILIKE $${idx} OR p.name ILIKE $${idx} OR pi.supplier_invoice_number ILIKE $${idx})`;
+      params.push(`%${filters.search.trim()}%`); idx++;
+    }
     sql += ` ORDER BY pi.invoice_date DESC`;
     const res = await pool.query(sql, params);
     return res.rows;
@@ -592,6 +608,10 @@ export class ExportService {
       params.push(filters.endDate);
     }
 
+    if (filters.search) {
+      sql += ` AND (pi.invoice_number ILIKE $${idx} OR p.name ILIKE $${idx} OR u.name ILIKE $${idx} OR b.barcode ILIKE $${idx})`;
+      params.push(`%${filters.search.trim()}%`); idx++;
+    }
     sql += ` ORDER BY pi.invoice_date DESC, pil.id ASC`;
     const res = await pool.query(sql, params);
     return res.rows;
@@ -707,6 +727,10 @@ export class ExportService {
       params.push(filters.status);
     }
 
+    if (filters.search) {
+      sql += ` AND (si.invoice_number ILIKE $${idx} OR p.name ILIKE $${idx} OR p.mobile ILIKE $${idx})`;
+      params.push(`%${filters.search.trim()}%`); idx++;
+    }
     sql += ` ORDER BY si.invoice_date DESC`;
     const res = await pool.query(sql, params);
     return res.rows;
@@ -749,6 +773,10 @@ export class ExportService {
       params.push(filters.endDate);
     }
 
+    if (filters.search) {
+      sql += ` AND (si.invoice_number ILIKE $${idx} OR p.name ILIKE $${idx} OR u.name ILIKE $${idx} OR b.barcode ILIKE $${idx})`;
+      params.push(`%${filters.search.trim()}%`); idx++;
+    }
     sql += ` ORDER BY si.invoice_date DESC, sil.id ASC`;
     const res = await pool.query(sql, params);
     return res.rows;
@@ -786,8 +814,8 @@ export class ExportService {
     return res.rows;
   }
 
-  private static async queryCustomerOutstanding(businessId: string, _filters: ExportFilterOptions): Promise<any[]> {
-    const sql = `
+  private static async queryCustomerOutstanding(businessId: string, filters: ExportFilterOptions): Promise<any[]> {
+    let sql = `
       SELECT
         p.party_code AS "Customer Code",
         p.name AS "Customer Name",
@@ -813,14 +841,19 @@ export class ExportService {
         p.status AS "Status"
       FROM parties p
       WHERE p.business_id = $1 AND p.party_type IN ('CUSTOMER', 'BOTH')
-      ORDER BY "Outstanding Balance" DESC, p.name ASC
     `;
-    const res = await pool.query(sql, [businessId]);
+    const params: any[] = [businessId];
+    if (filters.search) {
+      sql += ' AND (p.name ILIKE $2 OR p.party_code ILIKE $2 OR p.mobile ILIKE $2)';
+      params.push(`%${filters.search.trim()}%`);
+    }
+    sql += ' ORDER BY "Outstanding Balance" DESC, p.name ASC';
+    const res = await pool.query(sql, params);
     return res.rows;
   }
 
-  private static async querySupplierOutstanding(businessId: string, _filters: ExportFilterOptions): Promise<any[]> {
-    const sql = `
+  private static async querySupplierOutstanding(businessId: string, filters: ExportFilterOptions): Promise<any[]> {
+    let sql = `
       SELECT
         p.party_code AS "Supplier Code",
         p.name AS "Supplier Name",
@@ -845,9 +878,14 @@ export class ExportService {
         p.status AS "Status"
       FROM parties p
       WHERE p.business_id = $1 AND p.party_type IN ('SUPPLIER', 'BOTH')
-      ORDER BY "Outstanding Balance" DESC, p.name ASC
     `;
-    const res = await pool.query(sql, [businessId]);
+    const params: any[] = [businessId];
+    if (filters.search) {
+      sql += ' AND (p.name ILIKE $2 OR p.party_code ILIKE $2 OR p.mobile ILIKE $2)';
+      params.push(`%${filters.search.trim()}%`);
+    }
+    sql += ' ORDER BY "Outstanding Balance" DESC, p.name ASC';
+    const res = await pool.query(sql, params);
     return res.rows;
   }
 
@@ -931,6 +969,10 @@ export class ExportService {
       params.push(filters.paymentType);
     }
 
+    if (filters.search) {
+      sql += ` AND (pm.payment_number ILIKE $${idx} OR p.name ILIKE $${idx} OR pm.reference_number ILIKE $${idx})`;
+      params.push(`%${filters.search.trim()}%`); idx++;
+    }
     sql += ` ORDER BY pm.payment_date DESC`;
     const res = await pool.query(sql, params);
     return res.rows;

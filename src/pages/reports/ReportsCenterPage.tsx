@@ -174,7 +174,7 @@ export const ReportsCenterPage: React.FC<{ initialTab?: ReportTab; initialStockS
           break;
         }
         case 'analytics': {
-          endpoint = `/api/reports/analytics/product-sales?startDate=${startDate}&endDate=${endDate}`;
+          endpoint = `/api/reports/analytics/product-sales?startDate=${startDate}&endDate=${endDate}&page=${page}&limit=50`;
           break;
         }
       }
@@ -206,6 +206,11 @@ export const ReportsCenterPage: React.FC<{ initialTab?: ReportTab; initialStockS
     page,
     currentBusiness?.id,
   ]);
+
+  const applyReportFilters = () => {
+    if (page === 1) fetchReport();
+    else setPage(1);
+  };
 
   // Export to Excel handler
   const handleExportExcel = async () => {
@@ -259,6 +264,13 @@ export const ReportsCenterPage: React.FC<{ initialTab?: ReportTab; initialStockS
       }
 
       if (exportUrl) {
+        const exportQuery = new URL(exportUrl, window.location.origin);
+        if (searchQuery) exportQuery.searchParams.set(activeTab === 'stock-ledger' ? 'barcode' : 'search', searchQuery);
+        if (activeTab === 'inventory') {
+          if (sphFilter !== '') exportQuery.searchParams.set('sph', sphFilter);
+          if (cylFilter !== '') exportQuery.searchParams.set('cyl', cylFilter);
+        }
+        exportUrl = exportQuery.pathname + exportQuery.search;
         const response = await fetch(exportUrl, {
           headers: getAuthHeaders(),
         });
@@ -588,9 +600,11 @@ export const ReportsCenterPage: React.FC<{ initialTab?: ReportTab; initialStockS
             <button
               key={tab.id}
               onClick={() => {
-                setActiveTab(tab.id as ReportTab);
-                setReportData(null);
-                setPage(1);
+                if (activeTab !== tab.id) {
+                  setActiveTab(tab.id as ReportTab);
+                  setReportData(null);
+                  setPage(1);
+                }
               }}
               className={`px-4 py-2.5 rounded-xl font-semibold text-xs transition-all flex items-center gap-2 whitespace-nowrap ${
                 isActive
@@ -673,7 +687,7 @@ export const ReportsCenterPage: React.FC<{ initialTab?: ReportTab; initialStockS
           {activeTab === 'sales' && (
             <div className="flex items-center gap-1 bg-slate-100 p-1 rounded-xl">
               <button
-                onClick={() => { setSalesSubTab('SUMMARY'); setReportData(null); setPage(1); }}
+                onClick={() => { if (salesSubTab !== 'SUMMARY') { setSalesSubTab('SUMMARY'); setReportData(null); setPage(1); } }}
                 className={`px-3 py-1 rounded-lg text-xs font-semibold transition-all ${
                   salesSubTab === 'SUMMARY' ? 'bg-white text-blue-600 shadow-xs' : 'text-slate-600'
                 }`}
@@ -681,7 +695,7 @@ export const ReportsCenterPage: React.FC<{ initialTab?: ReportTab; initialStockS
                 Invoices Summary
               </button>
               <button
-                onClick={() => { setSalesSubTab('DETAILS'); setReportData(null); setPage(1); }}
+                onClick={() => { if (salesSubTab !== 'DETAILS') { setSalesSubTab('DETAILS'); setReportData(null); setPage(1); } }}
                 className={`px-3 py-1 rounded-lg text-xs font-semibold transition-all ${
                   salesSubTab === 'DETAILS' ? 'bg-white text-blue-600 shadow-xs' : 'text-slate-600'
                 }`}
@@ -689,7 +703,7 @@ export const ReportsCenterPage: React.FC<{ initialTab?: ReportTab; initialStockS
                 Line-Item Drilldown
               </button>
               <button
-                onClick={() => { setSalesSubTab('RETURNS'); setReportData(null); setPage(1); }}
+                onClick={() => { if (salesSubTab !== 'RETURNS') { setSalesSubTab('RETURNS'); setReportData(null); setPage(1); } }}
                 className={`px-3 py-1 rounded-lg text-xs font-semibold transition-all ${
                   salesSubTab === 'RETURNS' ? 'bg-white text-blue-600 shadow-xs' : 'text-slate-600'
                 }`}
@@ -703,7 +717,7 @@ export const ReportsCenterPage: React.FC<{ initialTab?: ReportTab; initialStockS
           {activeTab === 'purchases' && (
             <div className="flex items-center gap-1 bg-slate-100 p-1 rounded-xl">
               <button
-                onClick={() => { setPurchaseSubTab('SUMMARY'); setReportData(null); setPage(1); }}
+                onClick={() => { if (purchaseSubTab !== 'SUMMARY') { setPurchaseSubTab('SUMMARY'); setReportData(null); setPage(1); } }}
                 className={`px-3 py-1 rounded-lg text-xs font-semibold transition-all ${
                   purchaseSubTab === 'SUMMARY' ? 'bg-white text-blue-600 shadow-xs' : 'text-slate-600'
                 }`}
@@ -711,7 +725,7 @@ export const ReportsCenterPage: React.FC<{ initialTab?: ReportTab; initialStockS
                 Purchase Invoices
               </button>
               <button
-                onClick={() => { setPurchaseSubTab('DETAILS'); setReportData(null); setPage(1); }}
+                onClick={() => { if (purchaseSubTab !== 'DETAILS') { setPurchaseSubTab('DETAILS'); setReportData(null); setPage(1); } }}
                 className={`px-3 py-1 rounded-lg text-xs font-semibold transition-all ${
                   purchaseSubTab === 'DETAILS' ? 'bg-white text-blue-600 shadow-xs' : 'text-slate-600'
                 }`}
@@ -719,7 +733,7 @@ export const ReportsCenterPage: React.FC<{ initialTab?: ReportTab; initialStockS
                 Line-Item Drilldown
               </button>
               <button
-                onClick={() => { setPurchaseSubTab('RETURNS'); setReportData(null); setPage(1); }}
+                onClick={() => { if (purchaseSubTab !== 'RETURNS') { setPurchaseSubTab('RETURNS'); setReportData(null); setPage(1); } }}
                 className={`px-3 py-1 rounded-lg text-xs font-semibold transition-all ${
                   purchaseSubTab === 'RETURNS' ? 'bg-white text-blue-600 shadow-xs' : 'text-slate-600'
                 }`}
@@ -733,7 +747,7 @@ export const ReportsCenterPage: React.FC<{ initialTab?: ReportTab; initialStockS
           {activeTab === 'outstanding' && (
             <div className="flex items-center gap-1 bg-slate-100 p-1 rounded-xl">
               <button
-                onClick={() => { setOutstandingType('CUSTOMER'); setReportData(null); setPage(1); }}
+                onClick={() => { if (outstandingType !== 'CUSTOMER') { setOutstandingType('CUSTOMER'); setReportData(null); setPage(1); } }}
                 className={`px-3 py-1 rounded-lg text-xs font-semibold transition-all ${
                   outstandingType === 'CUSTOMER' ? 'bg-white text-blue-600 shadow-xs' : 'text-slate-600'
                 }`}
@@ -741,7 +755,7 @@ export const ReportsCenterPage: React.FC<{ initialTab?: ReportTab; initialStockS
                 Customer Receivables
               </button>
               <button
-                onClick={() => { setOutstandingType('SUPPLIER'); setReportData(null); setPage(1); }}
+                onClick={() => { if (outstandingType !== 'SUPPLIER') { setOutstandingType('SUPPLIER'); setReportData(null); setPage(1); } }}
                 className={`px-3 py-1 rounded-lg text-xs font-semibold transition-all ${
                   outstandingType === 'SUPPLIER' ? 'bg-white text-blue-600 shadow-xs' : 'text-slate-600'
                 }`}
@@ -770,7 +784,7 @@ export const ReportsCenterPage: React.FC<{ initialTab?: ReportTab; initialStockS
           )}
 
           {/* Search bar */}
-          {activeTab !== 'party-statement' && (
+          {!['party-statement', 'analytics'].includes(activeTab) && !(activeTab === 'sales' && salesSubTab === 'RETURNS') && !(activeTab === 'purchases' && purchaseSubTab === 'RETURNS') && (
             <div className="flex-1 min-w-[180px] max-w-xs relative">
               <Search className="w-3.5 h-3.5 text-slate-400 absolute left-3 top-2.5" />
               <input
@@ -778,14 +792,14 @@ export const ReportsCenterPage: React.FC<{ initialTab?: ReportTab; initialStockS
                 placeholder="Search..."
                 value={searchQuery}
                 onChange={e => setSearchQuery(e.target.value)}
-                onKeyDown={e => e.key === 'Enter' && fetchReport()}
+                onKeyDown={e => e.key === 'Enter' && applyReportFilters()}
                 className="w-full pl-8 pr-3 py-1.5 rounded-xl border border-slate-200 bg-slate-50 text-xs focus:outline-hidden focus:border-blue-500"
               />
             </div>
           )}
 
           <button
-            onClick={fetchReport}
+            onClick={applyReportFilters}
             className="px-3.5 py-1.5 rounded-xl bg-blue-600 hover:bg-blue-500 text-white text-xs font-semibold transition-colors"
           >
             Apply Filter
@@ -1411,7 +1425,7 @@ export const ReportsCenterPage: React.FC<{ initialTab?: ReportTab; initialStockS
         {reportData?.pagination && reportData.pagination.totalPages > 1 && (
           <div className="p-3 border-t border-slate-100 bg-slate-50 flex items-center justify-between text-xs text-slate-500">
             <div>
-              Showing page {reportData.pagination.page} of {reportData.pagination.totalPages} ({reportData.pagination.totalRecords} total records)
+              Showing page {reportData.pagination.page} of {reportData.pagination.totalPages} ({(reportData.pagination.totalRecords ?? reportData.pagination.totalItems ?? reportData.pagination.total)} total records)
             </div>
             <div className="flex items-center gap-2">
               <button
@@ -1451,7 +1465,7 @@ export const ReportsCenterPage: React.FC<{ initialTab?: ReportTab; initialStockS
           filename={`${activeTab}_report_${new Date().toISOString().slice(0, 10)}`}
           defaultOrientation={getReportPrintConfig().orientation}
         >
-          {({ documentId }) => {
+          {({ documentId, orientation }) => {
             const config = getReportPrintConfig();
             return (
               <PrintableReport
@@ -1463,7 +1477,7 @@ export const ReportsCenterPage: React.FC<{ initialTab?: ReportTab; initialStockS
                 columns={config.columns}
                 data={config.data}
                 totals={config.totalsRow}
-                orientation={config.orientation}
+                orientation={orientation}
               />
             );
           }}

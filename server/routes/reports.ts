@@ -42,6 +42,9 @@ router.get(
           'INVENTORY',
           {
             stockStatus: req.query.stockStatus as string,
+            search: req.query.search as string,
+            sph: req.query.sph !== undefined ? Number(req.query.sph) : undefined,
+            cyl: req.query.cyl !== undefined ? Number(req.query.cyl) : undefined,
             categoryId: req.query.categoryId as string,
             uniqueItemId: req.query.uniqueItemId as string,
             godownId: req.query.godownId as string,
@@ -100,6 +103,8 @@ router.get(
           businessId,
           'STOCK_LEDGER',
           {
+            search: req.query.search as string,
+            barcode: req.query.barcode as string,
             startDate: req.query.startDate as string,
             endDate: req.query.endDate as string,
           }
@@ -150,6 +155,8 @@ router.get(
           businessId,
           'PURCHASE_INVOICES',
           {
+            search: req.query.search as string,
+            barcode: req.query.barcode as string,
             startDate: req.query.startDate as string,
             endDate: req.query.endDate as string,
             status: req.query.status as string,
@@ -201,6 +208,8 @@ router.get(
           businessId,
           'PURCHASE_DETAILS',
           {
+            search: req.query.search as string,
+            barcode: req.query.barcode as string,
             startDate: req.query.startDate as string,
             endDate: req.query.endDate as string,
           }
@@ -251,6 +260,8 @@ router.get(
           businessId,
           'PURCHASE_RETURNS',
           {
+            search: req.query.search as string,
+            barcode: req.query.barcode as string,
             startDate: req.query.startDate as string,
             endDate: req.query.endDate as string,
           }
@@ -302,6 +313,8 @@ router.get(
           businessId,
           'SALES_INVOICES',
           {
+            search: req.query.search as string,
+            barcode: req.query.barcode as string,
             startDate: req.query.startDate as string,
             endDate: req.query.endDate as string,
             status: req.query.status as string,
@@ -356,6 +369,8 @@ router.get(
           businessId,
           'SALES_DETAILS',
           {
+            search: req.query.search as string,
+            barcode: req.query.barcode as string,
             startDate: req.query.startDate as string,
             endDate: req.query.endDate as string,
           }
@@ -406,6 +421,8 @@ router.get(
           businessId,
           'SALES_RETURNS',
           {
+            search: req.query.search as string,
+            barcode: req.query.barcode as string,
             startDate: req.query.startDate as string,
             endDate: req.query.endDate as string,
           }
@@ -452,7 +469,8 @@ router.get(
       if (isExport) {
         const { fileName, buffer } = await ExportService.exportDataset(
           businessId,
-          'CUSTOMER_OUTSTANDING'
+          'CUSTOMER_OUTSTANDING',
+          { search: req.query.search as string }
         );
         sendXlsx(res, fileName, buffer);
         return;
@@ -497,7 +515,8 @@ router.get(
       if (isExport) {
         const { fileName, buffer } = await ExportService.exportDataset(
           businessId,
-          'SUPPLIER_OUTSTANDING'
+          'SUPPLIER_OUTSTANDING',
+          { search: req.query.search as string }
         );
         sendXlsx(res, fileName, buffer);
         return;
@@ -549,6 +568,8 @@ router.get(
           {
             partyId,
             partyType,
+            search: req.query.search as string,
+            barcode: req.query.barcode as string,
             startDate: req.query.startDate as string,
             endDate: req.query.endDate as string,
           }
@@ -602,6 +623,8 @@ router.get(
           {
             paymentType: req.query.paymentType as string,
             paymentMode: req.query.paymentMode as string,
+            search: req.query.search as string,
+            barcode: req.query.barcode as string,
             startDate: req.query.startDate as string,
             endDate: req.query.endDate as string,
           }
@@ -653,6 +676,8 @@ router.get(
           businessId,
           'PRODUCT_SALES',
           {
+            search: req.query.search as string,
+            barcode: req.query.barcode as string,
             startDate: req.query.startDate as string,
             endDate: req.query.endDate as string,
           }
@@ -700,6 +725,8 @@ router.get(
           businessId,
           'POWER_SALES',
           {
+            search: req.query.search as string,
+            barcode: req.query.barcode as string,
             startDate: req.query.startDate as string,
             endDate: req.query.endDate as string,
           }
