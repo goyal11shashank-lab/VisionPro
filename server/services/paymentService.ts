@@ -1450,27 +1450,27 @@ export class PaymentService {
         [businessId, paymentId]
       );
 
-      // 3. Delete ledger entries created for this payment
-      if (wasPosted) {
-        if (paymentType === 'RECEIPT') {
-          await client.query(
-            `DELETE FROM customer_ledgers 
-             WHERE business_id = $1 AND reference_type IN ('PAYMENT', 'PAYMENT_CANCEL') AND reference_id = $2`,
-            [businessId, paymentId]
-          );
-
-          // Recalculate sales invoice statuses
+      // Remove both posting and cancellation rows, including a cancelled voucher.
+      // Cancellation has already restored invoice status, so only a posted
+      // deletion needs invoice resync. Never resync old invoices unnecessarily.
+      if (paymentType === 'RECEIPT') {
+        await client.query(
+          `DELETE FROM customer_ledgers
+           WHERE business_id = $1 AND reference_type IN ('PAYMENT', 'PAYMENT_CANCEL') AND reference_id = $2`,
+          [businessId, paymentId]
+        );
+        if (wasPosted) {
           for (const alloc of allocsRes.rows) {
             await this.syncSalesInvoicePaymentStatus(client, businessId, alloc.document_id);
           }
-        } else {
-          await client.query(
-            `DELETE FROM supplier_ledgers 
-             WHERE business_id = $1 AND reference_type IN ('PAYMENT', 'PAYMENT_CANCEL') AND reference_id = $2`,
-            [businessId, paymentId]
-          );
-
-          // Recalculate purchase invoice statuses
+        }
+      } else {
+        await client.query(
+          `DELETE FROM supplier_ledgers
+           WHERE business_id = $1 AND reference_type IN ('PAYMENT', 'PAYMENT_CANCEL') AND reference_id = $2`,
+          [businessId, paymentId]
+        );
+        if (wasPosted) {
           for (const alloc of allocsRes.rows) {
             await this.syncPurchaseInvoicePaymentStatus(client, businessId, alloc.document_id);
           }
@@ -2916,4 +2916,4 @@ export class PaymentService {
       await this.syncPurchaseInvoicePaymentStatus(null, businessId, row.id);
     }
   }
-}
+                                                       }
