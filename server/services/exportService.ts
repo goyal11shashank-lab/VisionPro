@@ -185,6 +185,9 @@ export class ExportService {
       { Parameter: 'Filter: SPH', Value: filters.sph ?? 'All' },
       { Parameter: 'Filter: CYL', Value: filters.cyl ?? 'All' },
     ];
+    if (datasetType === 'SALES_DETAILS' || datasetType === 'PURCHASE_DETAILS') {
+      metaData.push({ Parameter: 'Amount Scope', Value: 'Commercial line values repeat for each allocated batch. Do not sum detail rows. No batch tax or discount allocation is implied.' });
+    }
     const wsMeta = XLSX.utils.json_to_sheet(metaData);
     wsMeta['!cols'] = [{ wch: 25 }, { wch: 40 }];
     XLSX.utils.book_append_sheet(wb, wsMeta, 'Export Metadata');
@@ -1053,4 +1056,4 @@ export class ExportService {
     const res = await pool.query(sql, params);
     return res.rows;
   }
-}
+        }

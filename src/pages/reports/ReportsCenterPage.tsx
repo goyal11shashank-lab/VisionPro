@@ -300,7 +300,7 @@ export const ReportsCenterPage: React.FC<{ initialTab?: ReportTab; initialStockS
     totalsRow?: Record<string, any>;
     orientation: 'portrait' | 'landscape';
   } => {
-    const filtersSummary = `Date: ${startDate} to ${endDate}${searchQuery ? ` | Search: "${searchQuery}"` : ''}`;
+    const filtersSummary = `Date: ${startDate} to ${endDate}${searchQuery ? ` | Search: "${searchQuery}"` : ''}${reportData?.pagination ? ` | Current page ${reportData.pagination.page} of ${reportData.pagination.totalPages}, ${reportData.data?.length || 0} of ${reportData.pagination.totalItems ?? reportData.pagination.total ?? 0} records` : ''}`;
 
     switch (activeTab) {
       case 'inventory': {
@@ -350,6 +350,39 @@ export const ReportsCenterPage: React.FC<{ initialTab?: ReportTab; initialStockS
       }
       case 'sales': {
         const rows = Array.isArray(reportData?.data) ? reportData.data : [];
+        if (salesSubTab === 'DETAILS') {
+          return {
+            title: 'Sales Line-Item Drilldown', filtersSummary, orientation: 'landscape', data: rows,
+            columns: [
+              { header: 'Invoice #', key: 'invoice_number' },
+              { header: 'Date', key: 'invoice_date', format: (v: any) => v ? new Date(v).toLocaleDateString('en-IN') : '-' },
+              { header: 'Customer', key: 'customer_name' },
+              { header: 'Product', key: 'unique_item_name' },
+              { header: 'SKU', key: 'sku' },
+              { header: 'Barcode', key: 'barcode' },
+              { header: 'Power', key: 'power' },
+              { header: 'Line Qty', key: 'quantity', align: 'right' },
+              { header: 'Line Tax (₹)', key: 'tax_amount', align: 'right' },
+              { header: 'Line Total (₹)', key: 'total_amount', align: 'right' },
+            ],
+            subtitle: 'Batch rows can repeat a commercial line. Do not sum line totals across batch rows.',
+          };
+        }
+        if (salesSubTab === 'RETURNS') {
+          return {
+            title: 'Sales Returns Register', filtersSummary, orientation: 'landscape', data: rows,
+            columns: [
+              { header: 'Return #', key: 'return_number' },
+              { header: 'Date', key: 'return_date', format: (v: any) => v ? new Date(v).toLocaleDateString('en-IN') : '-' },
+              { header: 'Customer', key: 'party_name' },
+              { header: 'Subtotal (₹)', key: 'subtotal', align: 'right' },
+              { header: 'Tax (₹)', key: 'tax_amount', align: 'right' },
+              { header: 'Grand Total (₹)', key: 'grand_total', align: 'right' },
+              { header: 'Reason', key: 'reason' },
+              { header: 'Status', key: 'status' },
+            ],
+          };
+        }
         const totTaxable = rows.reduce((acc: number, r: any) => acc + (Number(r.taxable_amount) || 0), 0);
         const totGrand = rows.reduce((acc: number, r: any) => acc + (Number(r.grand_total) || 0), 0);
         const totPaid = rows.reduce((acc: number, r: any) => acc + (Number(r.paid_amount) || 0), 0);
@@ -379,6 +412,39 @@ export const ReportsCenterPage: React.FC<{ initialTab?: ReportTab; initialStockS
       }
       case 'purchases': {
         const rows = Array.isArray(reportData?.data) ? reportData.data : [];
+        if (purchaseSubTab === 'DETAILS') {
+          return {
+            title: 'Purchase Line-Item Drilldown', filtersSummary, orientation: 'landscape', data: rows,
+            columns: [
+              { header: 'Invoice #', key: 'invoice_number' },
+              { header: 'Date', key: 'invoice_date', format: (v: any) => v ? new Date(v).toLocaleDateString('en-IN') : '-' },
+              { header: 'Supplier', key: 'supplier_name' },
+              { header: 'Product', key: 'unique_item_name' },
+              { header: 'SKU', key: 'sku' },
+              { header: 'Barcode', key: 'barcode' },
+              { header: 'Power', key: 'power' },
+              { header: 'Line Qty', key: 'quantity', align: 'right' },
+              { header: 'Line Tax (₹)', key: 'tax_amount', align: 'right' },
+              { header: 'Line Total (₹)', key: 'total_amount', align: 'right' },
+            ],
+            subtitle: 'Batch rows can repeat a commercial line. Do not sum line totals across batch rows.',
+          };
+        }
+        if (purchaseSubTab === 'RETURNS') {
+          return {
+            title: 'Purchase Returns Register', filtersSummary, orientation: 'landscape', data: rows,
+            columns: [
+              { header: 'Return #', key: 'return_number' },
+              { header: 'Date', key: 'return_date', format: (v: any) => v ? new Date(v).toLocaleDateString('en-IN') : '-' },
+              { header: 'Supplier', key: 'party_name' },
+              { header: 'Subtotal (₹)', key: 'subtotal', align: 'right' },
+              { header: 'Tax (₹)', key: 'tax_amount', align: 'right' },
+              { header: 'Grand Total (₹)', key: 'grand_total', align: 'right' },
+              { header: 'Reason', key: 'reason' },
+              { header: 'Status', key: 'status' },
+            ],
+          };
+        }
         const totTaxable = rows.reduce((acc: number, r: any) => acc + (Number(r.taxable_amount) || 0), 0);
         const totGrand = rows.reduce((acc: number, r: any) => acc + (Number(r.grand_total) || 0), 0);
         const totPaid = rows.reduce((acc: number, r: any) => acc + (Number(r.paid_amount) || 0), 0);
@@ -479,6 +545,21 @@ export const ReportsCenterPage: React.FC<{ initialTab?: ReportTab; initialStockS
           },
         };
       }
+      case 'analytics': {
+        return {
+          title: 'Product Sales Analytics', filtersSummary, orientation: 'landscape',
+          data: Array.isArray(reportData?.data) ? reportData.data : [],
+          columns: [
+            { header: 'Product', key: 'unique_item_name' },
+            { header: 'SKU', key: 'sku' },
+            { header: 'Category', key: 'category_name' },
+            { header: 'Brand', key: 'brand_name' },
+            { header: 'Invoices', key: 'invoice_count', align: 'right' },
+            { header: 'Quantity Sold', key: 'total_quantity', align: 'right' },
+            { header: 'Sales Amount (₹)', key: 'total_amount', align: 'right' },
+          ],
+        };
+      }
       default: {
         return {
           title: 'Business Report',
@@ -554,7 +635,7 @@ export const ReportsCenterPage: React.FC<{ initialTab?: ReportTab; initialStockS
             onClick={() => setIsPrintPreviewOpen(true)}
             disabled={loading || !hasReportRecords()}
             className="px-3.5 py-2 rounded-xl bg-blue-50 hover:bg-blue-100 text-blue-700 text-xs font-semibold border border-blue-200 transition-colors flex items-center gap-1.5 disabled:opacity-50"
-            title="Open printable formatted preview with direct PDF and printer output"
+            title="Print the currently loaded report page or export it to PDF"
           >
             <Printer className="w-3.5 h-3.5" />
             <span>Print Preview</span>
@@ -564,7 +645,7 @@ export const ReportsCenterPage: React.FC<{ initialTab?: ReportTab; initialStockS
             onClick={handleExportCsv}
             disabled={loading || !hasReportRecords()}
             className="px-3.5 py-2 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs font-semibold border border-slate-300 transition-colors flex items-center gap-1.5 disabled:opacity-50"
-            title="Export filtered records to standard CSV"
+            title="Export the currently loaded report page to CSV"
           >
             <Download className="w-3.5 h-3.5" />
             <span>CSV</span>
@@ -806,6 +887,12 @@ export const ReportsCenterPage: React.FC<{ initialTab?: ReportTab; initialStockS
           </button>
         </div>
       </div>
+
+      {((activeTab === 'sales' && salesSubTab === 'DETAILS') || (activeTab === 'purchases' && purchaseSubTab === 'DETAILS')) && (
+        <div className="p-3 rounded-xl border border-amber-200 bg-amber-50 text-amber-900 text-xs">
+          Summary totals count each commercial line once. Batch rows can repeat that line's quantity, tax and total, so do not add those row values together. No batch tax or discount allocation is implied.
+        </div>
+      )}
 
       {/* Summary KPI Cards if provided by report */}
       {reportData?.summary && typeof reportData.summary === 'object' && (
@@ -1051,11 +1138,11 @@ export const ReportsCenterPage: React.FC<{ initialTab?: ReportTab; initialStockS
                     <th className="py-3 px-4">Customer</th>
                     <th className="py-3 px-4">Item / SKU</th>
                     <th className="py-3 px-4">Barcode / Power</th>
-                    <th className="py-3 px-4 text-right">Qty</th>
+                    <th className="py-3 px-4 text-right">Line Qty</th>
                     <th className="py-3 px-4 text-right">Unit Price</th>
                     <th className="py-3 px-4 text-right">Disc %</th>
                     <th className="py-3 px-4 text-right">Tax Rate</th>
-                    <th className="py-3 px-4 text-right">Tax Amt</th>
+                    <th className="py-3 px-4 text-right">Line Tax</th>
                     <th className="py-3 px-4 text-right">Line Total</th>
                   </tr>
                 </thead>
@@ -1175,11 +1262,11 @@ export const ReportsCenterPage: React.FC<{ initialTab?: ReportTab; initialStockS
                     <th className="py-3 px-4">Supplier</th>
                     <th className="py-3 px-4">Item / SKU</th>
                     <th className="py-3 px-4">Barcode / Power</th>
-                    <th className="py-3 px-4 text-right">Qty</th>
+                    <th className="py-3 px-4 text-right">Line Qty</th>
                     <th className="py-3 px-4 text-right">Unit Cost</th>
                     <th className="py-3 px-4 text-right">Disc %</th>
                     <th className="py-3 px-4 text-right">Tax Rate</th>
-                    <th className="py-3 px-4 text-right">Tax Amt</th>
+                    <th className="py-3 px-4 text-right">Line Tax</th>
                     <th className="py-3 px-4 text-right">Line Total</th>
                   </tr>
                 </thead>
