@@ -581,11 +581,20 @@ router.post(
       ? req.body.codes.filter((c: any) => typeof c === 'string').slice(0, 50)
       : [];
     const unique = Array.from(new Set(codes));
-    const results: Record<string, { data?: any; error?: string }> = {};
+    const partyId = typeof req.body?.partyId === 'string' && req.body.partyId ? req.body.partyId : null;
+    const results: Record<string, { data?: any; error?: string; lastSalePrice?: number | null }> = {};
     await Promise.all(
       unique.map(async code => {
         try {
-          results[code] = { data: await SalesService.getBarcodeDetailsForSale(businessId, code) };
+          const data = await SalesService.getBarcodeDetailsForSale(businessId, code);
+          results[code] = { data };
+          if (partyId && data?.uniqueItem?.id) {
+            try {
+              results[code].lastSalePrice = await SalesService.getPartyItemPrice(businessId, partyId, data.uniqueItem.id);
+            } catch {
+              // price is optional; the client keeps the item's default rate
+            }
+          }
         } catch (err: any) {
           results[code] = { error: err.message || 'Barcode not found' };
         }
