@@ -1,4 +1,4 @@
-import { staffOwnBusinessId, STAFF_SINGLE_BUSINESS_BODY } from '../services/staffBusinessPolicy.js';
+import { staffOwnBusinessId, staffAccessAmbiguous, STAFF_ACCOUNT_CONFIGURATION_BODY, STAFF_SINGLE_BUSINESS_BODY } from '../services/staffBusinessPolicy.js';
 import {hiddenFromSuperAdmin} from '../services/businessVisibilityService.js';
 import { canonicalBusinessFor, restrictBusinessChoices } from '../services/canonicalLoginService.js';
 import { Router, Request, Response } from 'express';
@@ -543,6 +543,10 @@ router.post('/login', async (req: Request, res: Response): Promise<void> => {
         accessibleBiz=restrictBusinessChoices(accessibleBiz,canonicalBusinessId);
         // Owner rule (Nov 20, 2026): one staff member, one business. Multi-access staff sign in to
         // the business flagged as their default only; picking another one at login is refused.
+        if (!userRecord.isSuperAdmin && staffAccessAmbiguous(accessibleBiz)) {
+          res.status(403).json(STAFF_ACCOUNT_CONFIGURATION_BODY);
+          return;
+        }
         const ownBizId = userRecord.isSuperAdmin ? null : staffOwnBusinessId(accessibleBiz);
         if (ownBizId && businessId && businessId !== ownBizId) {
           res.status(403).json(STAFF_SINGLE_BUSINESS_BODY);
