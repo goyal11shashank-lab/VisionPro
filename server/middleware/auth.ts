@@ -1,5 +1,5 @@
 import { legacyScopeRouteAllowed } from '../services/legacyScopeSafetyService.js';
-import { staffOwnBusinessId } from '../services/staffBusinessPolicy.js';
+import { staffOwnBusinessId, staffAccessAmbiguous, STAFF_ACCOUNT_CONFIGURATION_BODY } from '../services/staffBusinessPolicy.js';
 import { canonicalBusinessFor, restrictBusinessChoices } from '../services/canonicalLoginService.js';
 import { Request, Response, NextFunction } from 'express';
 import { verifyAuthToken, AuthJwtPayload } from '../auth/jwt.js';
@@ -175,6 +175,10 @@ export async function authenticateToken(req: Request, res: Response, next: NextF
 
       accessibleBusinesses=restrictBusinessChoices(accessibleBusinesses,canonicalBusinessId);
       // One staff login, one business: a legacy login with several access rows is held to its default business. No row is changed.
+      if (!userRecord.isSuperAdmin && staffAccessAmbiguous(accessibleBusinesses)) {
+        res.status(403).json(STAFF_ACCOUNT_CONFIGURATION_BODY);
+        return;
+      }
       if (!userRecord.isSuperAdmin) {
         const ownBizId = staffOwnBusinessId(accessibleBusinesses);
         if (ownBizId) accessibleBusinesses = accessibleBusinesses.filter(b => b.businessId === ownBizId);
@@ -343,4 +347,4 @@ export async function authenticateToken(req: Request, res: Response, next: NextF
       message: error.message || 'Invalid or expired session. Please log in again.',
     });
   }
-}
+                      }
