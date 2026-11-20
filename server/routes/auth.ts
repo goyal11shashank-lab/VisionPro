@@ -540,6 +540,20 @@ router.post('/login', async (req: Request, res: Response): Promise<void> => {
           .where(eq(userBusinessAccess.userId, userRecord.id));
 
         accessibleBiz=restrictBusinessChoices(accessibleBiz,canonicalBusinessId);
+        // Owner rule (Nov 20, 2026): one staff member, one business. Staff who still hold several
+        // access rows sign in to their default business only; picking another one at login is refused.
+        // Access rows are not changed here; the multi-access accounts need an owner decision.
+        if (!userRecord.isSuperAdmin && businessId && accessibleBiz.length > 1) {
+          const own = accessibleBiz.find(b => b.isDefault) || accessibleBiz[0];
+          if (own && own.businessId !== businessId) {
+            res.status(403).json({
+              success: false,
+              error: 'STAFF_SINGLE_BUSINESS',
+              message: 'This login belongs to one business only. Sign in without choosing another business.',
+            });
+            return;
+          }
+        }
         selectedBusiness = accessibleBiz.find(b => b.businessId === businessId)?.business;
 
         if (!selectedBusiness) {
