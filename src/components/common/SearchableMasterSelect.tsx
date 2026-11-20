@@ -135,10 +135,14 @@ export const SearchableMasterSelect = forwardRef<SearchableMasterSelectRef, Sear
 
     const isFocusedRef = useRef(false);
     const prevValueRef = useRef(value);
+    const hasSyncedRef = useRef(false);
 
     // Find currently selected option from value and options list
     useEffect(() => {
-      const valueChanged = value !== prevValueRef.current;
+      // First run counts as a change: a row that mounts already holding a value (for example a scanned
+      // line that replaces the empty row) must still show its name.
+      const valueChanged = !hasSyncedRef.current || value !== prevValueRef.current;
+      hasSyncedRef.current = true;
       prevValueRef.current = value;
 
       if (!value) {
