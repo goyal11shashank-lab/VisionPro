@@ -17,6 +17,7 @@ export const CashBookPage: React.FC = () => {
   const [truncated, setTruncated] = useState(false);
   const [openingConfigured, setOpeningConfigured] = useState(false);
   const [cashOpeningDate, setCashOpeningDate] = useState<string | null>(null);
+  const [effectiveFrom, setEffectiveFrom] = useState<string | null>(null);
   const [openingBalance, setOpeningBalance] = useState<number | null>(null);
   const [closingBalance, setClosingBalance] = useState<number | null>(null);
   const [loading, setLoading] = useState(false);
@@ -34,6 +35,7 @@ export const CashBookPage: React.FC = () => {
         setTruncated(Boolean(res.truncated));
         setOpeningConfigured(Boolean(res.openingBalanceConfigured));
         setCashOpeningDate(res.cashOpeningDate || null);
+        setEffectiveFrom(res.effectiveFrom || null);
         setOpeningBalance(typeof res.openingBalance === 'number' ? res.openingBalance : null);
         setClosingBalance(typeof res.closingBalance === 'number' ? res.closingBalance : null);
       })
@@ -60,6 +62,9 @@ export const CashBookPage: React.FC = () => {
       {openingConfigured ? (
         <div className="rounded-lg border border-emerald-300 bg-emerald-50 px-3 py-2 text-xs text-emerald-900">
           <b>Opening balance configured{cashOpeningDate ? ` from ${cashOpeningDate}` : ''}.</b> Opening and closing balances below are for the CASH tab only. Other modes are recorded movement, not balances.
+          {effectiveFrom && from < effectiveFrom && (
+            <span className="block mt-1">Entries before the opening date are already inside the opening balance, so this period is shown from {effectiveFrom}.</span>
+          )}
         </div>
       ) : (
         <div className="rounded-lg border border-amber-300 bg-amber-50 px-3 py-2 text-xs text-amber-900">
