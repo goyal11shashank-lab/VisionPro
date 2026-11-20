@@ -68,6 +68,19 @@ try {
   const upd = await call('/api/users/' + (await pool.query('SELECT id FROM users WHERE username=$1',[uname])).rows[0].id + '/business-access', saTok(A), A, 'PUT', { assignments: [{ businessId: A, roleId: role.id }, { businessId: B, roleId: role.id }], defaultBusinessId: A });
   assert.equal(upd.status, 400);
   assert.equal(JSON.stringify((await pool.query('SELECT * FROM user_business_access ORDER BY user_id,business_id')).rows), accBefore, 'rejected update changes no access row');
+  // Legacy login that already holds two access rows (written directly, as old data would be): only its default business is offered
+  const lname = 'syn_legacy_' + Date.now();
+  const { rows: [lu] } = await pool.query(`INSERT INTO users(username,full_name,password_hash,status) VALUES($1,'Synthetic Legacy',$2,'ACTIVE') RETURNING id`, [lname, await hashPassword('Syn#Single123')]);
+  await pool.query(`INSERT INTO user_business_access(user_id,business_id,is_default) VALUES($1,$2,true),($1,$3,false)`, [lu.id, A, B]);
+  await pool.query(`INSERT INTO user_roles(user_id,role_id,business_id) VALUES($1,$2,$3),($1,$2,$4)`, [lu.id, role.id, A, B]);
+  const legacyRows = JSON.stringify((await pool.query('SELECT * FROM user_business_access WHERE user_id=$1 ORDER BY business_id', [lu.id])).rows);
+  const lLogin = async (bid: string) => { const r = await fetch(base + '/api/auth/login', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ username: lname, password: 'Syn#Single123', businessId: bid }) }); return { status: r.status, data: await r.json() as any }; };
+  const l1 = await lLogin(A); assert.equal(l1.status, 200, JSON.stringify(l1.data)); assert.deepEqual(l1.data.accessibleBusinesses.map((b: any) => b.id), [A]);
+  assert.equal((await lLogin(B)).status, 403);
+  assert.deepEqual((await call('/api/auth/me', l1.data.token, A)).data.accessibleBusinesses.map((b: any) => b.id), [A]);
+  assert.equal((await call('/api/inventory', l1.data.token, B)).status, 403);
+  assert.equal(JSON.stringify((await pool.query('SELECT * FROM user_business_access WHERE user_id=$1 ORDER BY business_id', [lu.id])).rows), legacyRows, 'legacy access rows unchanged');
+  note('PASS legacy two-row login: login dropdown [A], other business 403, /me [A], X-Business-Id B 403, rows unchanged');
   const saTwo = await call('/api/users', saTok(A), A, 'POST', { username: 'syn_sa2_' + Date.now(), fullName: 'Synthetic SA2', password: 'Syn#Single123', isSuperAdmin: true });
   note(`RESULT Super Admin account creation still allowed: HTTP ${saTwo.status}`);
   if (false) {
@@ -79,4 +92,4 @@ try {
 } finally {
   await new Promise<void>(r => server.close(() => r()));
   await pool.end();
-}
+                                                                }
