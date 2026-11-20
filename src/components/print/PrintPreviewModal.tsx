@@ -25,6 +25,7 @@ export interface PrintPreviewModalProps {
   onClose: () => void;
   title: string;
   filename: string;
+  paperSize?: 'A4' | 'A5';
   defaultOrientation?: 'portrait' | 'landscape';
   onExportExcel?: () => void;
   onExportCsv?: () => void;
@@ -40,6 +41,7 @@ export const PrintPreviewModal: React.FC<PrintPreviewModalProps> = ({
   onClose,
   title,
   filename,
+  paperSize = 'A4',
   defaultOrientation = 'portrait',
   onExportExcel,
   onExportCsv,
@@ -129,7 +131,7 @@ export const PrintPreviewModal: React.FC<PrintPreviewModalProps> = ({
             <span className="font-bold text-sm tracking-tight">{title}</span>
           </div>
           <span className="text-xs px-2 py-0.5 rounded bg-slate-800 text-slate-300 font-mono">
-            A4 {orientation === 'portrait' ? 'Portrait' : 'Landscape'}
+            {paperSize} {orientation === 'portrait' ? 'Portrait' : 'Landscape'}
           </span>
           <button
             onClick={() => setOrientation(prev => (prev === 'portrait' ? 'landscape' : 'portrait'))}
@@ -244,6 +246,7 @@ export const PrintPreviewModal: React.FC<PrintPreviewModalProps> = ({
         </div>
       </div>
 
+      {paperSize === 'A5' && <div className="no-print bg-slate-100 text-slate-700 px-4 py-2 text-xs">Half-A4 / A5 sheets, with safe margins. Select the matching orientation above. Physical feed direction and clipping still need one printer test.</div>}
       {/* Informational / Status banner */}
       {statusMessage && (
         <div className="no-print bg-emerald-600 text-white px-4 py-2 text-xs font-medium flex justify-between items-center shadow-xs">
