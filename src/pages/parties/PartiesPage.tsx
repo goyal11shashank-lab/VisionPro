@@ -74,6 +74,8 @@ export const PartiesPage: React.FC<{ initialType?: 'ALL' | 'SUPPLIER' | 'CUSTOME
     pan: '',
     creditLimit: '0',
     creditDays: '0',
+    openingBalance: '0',
+    openingBalanceType: 'Dr' as 'Dr' | 'Cr',
     status: 'ACTIVE' as 'ACTIVE' | 'INACTIVE',
     whatsappOptIn: true,
     notes: '',
@@ -133,6 +135,8 @@ export const PartiesPage: React.FC<{ initialType?: 'ALL' | 'SUPPLIER' | 'CUSTOME
       pan: '',
       creditLimit: typeFilter === 'CUSTOMER' ? String(settings.party.defaultCreditLimit ?? 0) : '0',
       creditDays: '30',
+      openingBalance: '0',
+      openingBalanceType: typeFilter === 'CUSTOMER' ? 'Dr' : 'Cr',
       status: 'ACTIVE',
       whatsappOptIn: true,
       notes: '',
@@ -141,8 +145,18 @@ export const PartiesPage: React.FC<{ initialType?: 'ALL' | 'SUPPLIER' | 'CUSTOME
     setIsModalOpen(true);
   };
 
-  const handleOpenEditModal = (party: Party) => {
+  const handleOpenEditModal = async (party: Party) => {
     setSelectedParty(party);
+    // Prefill the current opening balance from the party's ledger (best effort).
+    let openingBalance = '0';
+    let openingBalanceType: 'Dr' | 'Cr' = party.partyType === 'SUPPLIER' ? 'Cr' : 'Dr';
+    try {
+      const full = await apiRequest<any>(`/api/parties/${party.id}`);
+      if (full && full.openingBalance !== undefined) {
+        openingBalance = String(Number(full.openingBalance) || 0);
+        openingBalanceType = full.openingBalanceType === 'Cr' ? 'Cr' : 'Dr';
+      }
+    } catch { /* keep defaults */ }
     setFormData({
       name: party.name,
       displayName: party.displayName || party.name,
@@ -160,6 +174,8 @@ export const PartiesPage: React.FC<{ initialType?: 'ALL' | 'SUPPLIER' | 'CUSTOME
       pan: party.pan || '',
       creditLimit: String(party.creditLimit || '0'),
       creditDays: String(party.creditDays || '0'),
+      openingBalance,
+      openingBalanceType,
       status: party.status,
       whatsappOptIn: party.whatsappOptIn ?? true,
       notes: party.notes || '',
@@ -182,16 +198,21 @@ export const PartiesPage: React.FC<{ initialType?: 'ALL' | 'SUPPLIER' | 'CUSTOME
         throw new Error('GSTIN must be exactly 15 characters');
       }
 
+      const payload = {
+        ...formData,
+        openingBalance: Number(formData.openingBalance) || 0,
+        openingBalanceType: formData.openingBalanceType,
+      };
       if (selectedParty) {
         await apiRequest(`/api/parties/${selectedParty.id}`, {
           method: 'PUT',
-          body: JSON.stringify(formData),
+          body: JSON.stringify(payload),
         });
         setSuccessMsg(`Party ${formData.name} updated successfully.`);
       } else {
         await apiRequest('/api/parties', {
           method: 'POST',
-          body: JSON.stringify(formData),
+          body: JSON.stringify(payload),
         });
         setSuccessMsg(`Party ${formData.name} created successfully.`);
       }
@@ -827,6 +848,42 @@ export const PartiesPage: React.FC<{ initialType?: 'ALL' | 'SUPPLIER' | 'CUSTOME
                       />
                     </div>
                   </div>
+                </div>
+
+                {/* Opening Balance */}
+                <div className="space-y-3 pt-2 border-t border-slate-100">
+                  <h4 className="text-xs font-semibold text-slate-400 uppercase tracking-wider">Opening Balance</h4>
+                  <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                    <div>
+                      <label className="block text-xs font-semibold text-slate-700 mb-1">Opening Balance (₹)</label>
+                      <input
+                        type="number"
+                        min="0"
+                        id="input-party-opening-balance"
+                        value={formData.openingBalance}
+                        onChange={e => setFormData({ ...formData, openingBalance: e.target.value })}
+                        className="w-full px-3.5 py-2 text-sm bg-slate-50 border border-slate-200 rounded-xl focus:bg-white focus:ring-2 focus:ring-purple-500/20 focus:border-purple-600"
+                      />
+                    </div>
+
+                    <div>
+                      <label className="block text-xs font-semibold text-slate-700 mb-1">Balance Type</label>
+                      <select
+                        id="input-party-opening-type"
+                        value={formData.openingBalanceType}
+                        onChange={e => setFormData({ ...formData, openingBalanceType: e.target.value as 'Dr' | 'Cr' })}
+                        className="w-full px-3.5 py-2 text-sm bg-slate-50 border border-slate-200 rounded-xl focus:bg-white focus:ring-2 focus:ring-purple-500/20 focus:border-purple-600"
+                      >
+                        <option value="Dr">Dr - they owe you</option>
+                        <option value="Cr">Cr - you owe them</option>
+                      </select>
+                    </div>
+                  </div>
+                  <p className="text-[11px] text-slate-500">
+                    {selectedParty
+                      ? 'Dues carried in from before this system. Saving replaces the single opening entry, it never duplicates; set 0 to remove it. Recorded activity keeps its own amounts.'
+                      : 'Dues carried in from before this system, recorded when the party is created.'}
+                  </p>
                 </div>
 
                 {/* Commercial Terms */}
