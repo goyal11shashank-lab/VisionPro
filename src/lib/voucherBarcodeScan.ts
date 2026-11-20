@@ -26,6 +26,8 @@ export interface ScanResult {
   ok: boolean;
   lines: VoucherLineItem[];
   message: string;
+  /** True when the scan was applied but takes the power below zero stock (allowed by the business setting). */
+  negativeStock?: boolean;
 }
 
 export function formatBatchPower(b: any): string {
@@ -44,11 +46,14 @@ const availableOf = (d: ScanLookup): number => {
   return Number.isFinite(num) ? num : 0;
 };
 
+const negativeNote = (limit: number, qty: number) =>
+  `. Warning: recorded stock is ${limit}, this sale takes it to ${limit - qty}. Check the stock.`;
+
 export function applyScannedBatch(
   lines: VoucherLineItem[],
   data: ScanLookup,
   rate: number,
-  opts: { purchase?: boolean; originalQty?: (batchId: string) => number; categoryCode?: string } = {}
+  opts: { purchase?: boolean; originalQty?: (batchId: string) => number; categoryCode?: string; allowNegative?: boolean } = {}
 ): ScanResult {
   const batch = data?.batch;
   const item = data?.uniqueItem;
@@ -63,7 +68,8 @@ export function applyScannedBatch(
     idx >= 0 ? (lines[idx].batches || []).find(b => b.batchId === batch.id)?.quantity || 0 : 0;
 
   const limit = available + (opts.originalQty ? opts.originalQty(batch.id) || 0 : 0);
-  if (!opts.purchase && currentQty + 1 > limit) {
+  const goesNegative = !opts.purchase && currentQty + 1 > limit;
+  if (goesNegative && !opts.allowNegative) {
     return {
       ok: false,
       lines,
@@ -95,7 +101,8 @@ export function applyScannedBatch(
     return {
       ok: true,
       lines: next,
-      message: `${item.name} ${power}: now ${currentQty + 1}`,
+      message: `${item.name} ${power}: now ${currentQty + 1}` + (goesNegative ? negativeNote(limit, currentQty + 1) : ''),
+      ...(goesNegative ? { negativeStock: true } : {}),
     };
   }
 
@@ -122,6 +129,7 @@ export function applyScannedBatch(
   return {
     ok: true,
     lines: ensureTrailingBlankRow(base, 'row'),
-    message: `${item.name} ${power}: added`,
+    message: `${item.name} ${power}: added` + (goesNegative ? negativeNote(limit, 1) : ''),
+    ...(goesNegative ? { negativeStock: true } : {}),
   };
 }
