@@ -44,6 +44,7 @@ import { PurchaseReturnsPage } from './pages/purchases/PurchaseReturnsPage.js';
 import { CustomerReceiptsPage } from './pages/accounts/CustomerReceiptsPage.js';
 import { SupplierPaymentsPage } from './pages/accounts/SupplierPaymentsPage.js';
 import { OutstandingAgingPage } from './pages/accounts/OutstandingAgingPage.js';
+import { CashBookPage } from './pages/accounts/CashBookPage.js';
 import { ReportsCenterPage } from './pages/reports/ReportsCenterPage.js';
 import { StockReservationsPage } from './pages/sales/StockReservationsPage.js';
 import { OpeningStockPage } from './pages/inventory/OpeningStockPage.js';
@@ -223,6 +224,8 @@ const AppContent: React.FC = () => {
         return 'Supplier Payments & Advances';
       case '/accounts/outstanding':
         return 'Outstanding Aging & Party Statements';
+      case '/accounts/cash-book':
+        return 'Cash Book (recorded movement)';
       case '/accounts/ledgers':
         return 'Accounting & Financial Ledgers';
       case '/reports':
@@ -514,6 +517,8 @@ const AppContent: React.FC = () => {
         return <SupplierPaymentsPage />;
       case '/accounts/outstanding':
         return <OutstandingAgingPage onNavigate={navigate} />;
+      case '/accounts/cash-book':
+        return <CashBookPage />;
       case '/accounts/ledgers':
         return <ReportsCenterPage initialTab="party-statement" />;
 
