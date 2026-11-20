@@ -2,6 +2,7 @@ import { pool, db } from '../db/index.js';
 import { businessSettings } from '../db/schema.js';
 import { eq } from 'drizzle-orm';
 import { recordAuditLog } from './auditService.js';
+import { resolveOrderReservationSettings } from './orderReservationSettings.js';
 
 export interface AppSettings {
   general: {
@@ -48,6 +49,7 @@ export interface AppSettings {
     reserveStockOnSalesOrder?: boolean;
     allowOrderBeyondAvailable?: boolean;
     autoReleaseExpiredReservations?: boolean;
+    reservationControlsVersion?: 1;
   };
   sales: {
     defaultPaymentMode: 'Credit' | 'Cash';
@@ -458,7 +460,11 @@ export class BusinessSettingsService {
 
       if (existing) {
         const rawConfig = (existing.config as Record<string, any>) || {};
-        const mergedSettings = deepMerge(DEFAULT_APP_SETTINGS, rawConfig.settings || rawConfig);
+        const rawSettings = rawConfig.settings || rawConfig;
+        const mergedSettings = deepMerge(DEFAULT_APP_SETTINGS, rawSettings);
+        const reservation = resolveOrderReservationSettings(rawSettings);
+        mergedSettings.inventory.reserveStockOnSalesOrder = reservation.reserveStock;
+        mergedSettings.inventory.allowOrderBeyondAvailable = reservation.allowBeyondAvailable;
         const threshold = parseFloat(existing.lowStockThreshold || '1.00');
         mergedSettings.inventory.lowStockThreshold = threshold;
 
@@ -610,7 +616,8 @@ export class BusinessSettingsService {
    */
   static async isOrderReservationEnabled(businessId: string): Promise<boolean> {
     const res = await this.getSettings(businessId);
-    return res.settings.orders?.enableSalesOrders ?? res.settings.salesOrder?.reserveStockOnSalesOrder ?? true;
+    const policy = resolveOrderReservationSettings(res.config.settings || res.config);
+    return policy.salesOrdersEnabled && policy.reserveStock;
   }
 
   /**
@@ -618,7 +625,7 @@ export class BusinessSettingsService {
    */
   static async isAllowOrderBeyondAvailable(businessId: string): Promise<boolean> {
     const res = await this.getSettings(businessId);
-    return res.settings.salesOrder?.allowOrderBeyondAvailable ?? true;
+    return resolveOrderReservationSettings(res.config.settings || res.config).allowBeyondAvailable;
   }
 
   /**
@@ -653,4 +660,4 @@ export class BusinessSettingsService {
     };
     return fallbacks[voucherType] || { prefix: 'VCH-', startNumber: 1, method: 'AUTOMATIC' };
   }
-}
+                                       }
