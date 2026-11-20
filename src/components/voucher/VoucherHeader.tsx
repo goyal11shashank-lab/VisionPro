@@ -172,6 +172,10 @@ export const VoucherHeader: React.FC<VoucherHeaderProps> = ({
         dateInputRef.current?.focus();
         dateInputRef.current?.select();
       } else if (e.altKey && e.key.toLowerCase() === 'c') {
+        // Context-sensitive Alt+C: when focus is inside an item field, the item
+        // grid handles the shortcut (create stock item) - never open party creation.
+        const altCTarget = e.target as HTMLElement | null;
+        if (altCTarget?.closest?.('[data-contextual-owner^="stock-item-"]')) return;
         // Alt+C triggers inline creation
         e.preventDefault();
         if (onRequestCreateParty) {

@@ -285,6 +285,18 @@ export const SearchableMasterSelect = forwardRef<SearchableMasterSelectRef, Sear
     const handleKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
       if (disabled) return;
 
+      // Alt+C: inline-create the record for THIS focused master field
+      // (keeps Alt+C context-sensitive with the voucher header's party shortcut).
+      if (e.altKey && e.key.toLowerCase() === 'c') {
+        if (canCreate && onCreate) {
+          e.preventDefault();
+          e.stopPropagation();
+          setIsOpen(false);
+          onCreate(searchQuery.trim());
+        }
+        return;
+      }
+
       if (disableDropdown) {
         if (e.key === 'Tab') {
           return;

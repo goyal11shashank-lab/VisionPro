@@ -35,8 +35,8 @@ export function estimateSummary(voucher: any): Summary[] {
   // Display a supplied historical snapshot only. Never substitute today's party balance.
   const walkIn = /^(cash|cash sale|walk[ -]?in)$/i.test(String(voucher.partyName || voucher.party?.name || '').trim());
   if (voucher.printBalanceSnapshot?.previousBalance != null && !walkIn) {
-    rows.push({ label: 'Ledger before bill', amount: num(voucher.printBalanceSnapshot.previousBalance) });
-    rows.push({ label: 'Ledger after bill', amount: num(voucher.printBalanceSnapshot.balanceAfterBill) });
+    rows.push({ label: 'Previous Balance', amount: num(voucher.printBalanceSnapshot.previousBalance) });
+    rows.push({ label: 'Current Balance', amount: num(voucher.printBalanceSnapshot.balanceAfterBill) });
   }
   return rows;
 }
@@ -49,7 +49,7 @@ export function renderEstimatePages(voucher: any, options: { orientation?: 'port
   const rows: Row[] = [];
   (voucher.lines || []).forEach((l: any, i: number) => {
     let description = String(l.uniqueItemName || l.uniqueItem?.name || l.itemName || l.description || 'Item');
-    if (options.showBatches !== false) for (const b of (l.batches || [])) {
+    if (options.showBatches === true) for (const b of (l.batches || [])) {
       const p = b.batch || b;
       description += ` | SPH ${p.sph ?? b.sph ?? '0.00'} CYL ${p.cyl ?? b.cyl ?? '0.00'}`;
       if (num(p.axis ?? b.axis)) description += ` AX ${p.axis ?? b.axis}`;
@@ -111,11 +111,11 @@ export function renderEstimatePages(voucher: any, options: { orientation?: 'port
     const partyY = landscape ? 181 : 198;
     text(28, partyY, party, 17, true); if (city) text(28, partyY + 19, city, 11);
     if (voucher.status === 'CANCELLED' || voucher.status === 'VOID') text(W - 30, 175, 'CANCELLED', 18, true, 'end', '#b91c1c');
-    const tableTop = start - 35;
+    const tableTop = start - 40;
     out.push(`<rect x="18" y="${tableTop}" width="${W - 36}" height="25" fill="${NAVY}"/>`);
     text(25, tableTop + 17, 'Sl', 12, true, 'start', 'white'); text(65, tableTop + 17, 'Description of Goods', 12, true, 'start', 'white');
     text(qtyX, tableTop + 17, 'Quantity', 12, true, 'end', 'white'); text(rateX, tableTop + 17, 'Rate', 12, true, 'end', 'white'); text(amountX, tableTop + 17, 'Amount', 12, true, 'end', 'white');
-    let rowY = start;
+    let rowY = start + 10;
     for (const row of page) {
       text(25, rowY, row.seq, 13);
       row.text.forEach((part, i) => text(65, rowY + i * 18, part, 14));
@@ -139,4 +139,4 @@ export function renderEstimatePages(voucher: any, options: { orientation?: 'port
     text(28, H - 25, `${invoiceNo}  page ${index + 1}/${pages.length}`, 10, false, 'start', '#6b7280');
     out.push('</svg>'); return out.join('');
   });
-        }
+}

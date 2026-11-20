@@ -323,7 +323,7 @@ export const DEFAULT_APP_SETTINGS: AppSettings = {
     showBusinessLogo: true,
     showTermsAndConditions: true,
     showAuthorizedSignatory: true,
-    showBatchDetails: true,
+    showBatchDetails: false,
     showHsnSac: true,
     showDiscountColumn: true,
     previewBeforePrint: true,

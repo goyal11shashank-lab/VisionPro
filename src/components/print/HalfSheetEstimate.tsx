@@ -5,10 +5,10 @@ export function HalfSheetEstimate({ voucher, settings, id, orientation = 'portra
   voucher: any; settings: any; id: string; orientation?: 'portrait' | 'landscape'; showBatches?: boolean; showNarration?: boolean; showSignatures?: boolean;
 }) {
   const pages = renderEstimatePages(voucher, {
-    orientation, showBatches: showBatches && (settings?.print?.showBatchDetails ?? true),
+    orientation, showBatches: showBatches && (settings?.print?.showBatchDetails ?? false),
     showHsn: settings?.print?.showHsnSac ?? true,
     showDiscount: settings?.print?.showDiscountColumn ?? true,
-    showNarration, showSignatory: showSignatures && (settings?.print?.showAuthorizedSignatory ?? true),
+    showNarration: false, showSignatory: showSignatures && (settings?.print?.showAuthorizedSignatory ?? true),
     signatoryLabel: settings?.print?.signatoryLabel,
   });
   const width = orientation === 'portrait' ? '148mm' : '210mm';
