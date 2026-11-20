@@ -4,22 +4,6 @@ import { useBusinessSettings } from '../../context/BusinessSettingsContext.js';
 
 /**
  * Interface & Printing settings.
-  * Super Admin only (route guard in App.tsx and requireSuperAdmin on the server).
-   * Controls the owner-requested UI behaviours; all are display/behaviour toggles,
-    * never data changes.
-     */
-export const InterfaceSettingsPage: React.FC = () => {
-    const { settings, updateSettings, saving, error, refreshSettings } = useBusinessSettings();
-    const [savedNote, setSavedNote] = useState<string | null>(null);
-  
-    const rightClickRowActions = settings?.ui?.rightClickRowActions ?? true;
-    const hideStockItemMasterColumns = settings?.ui?.hideStockItemMasterColumns ?? true;
-    const a5Orientation = (settings?.print?.defaultOrientation ?? 'PORTRAIT').toUpperCase() === import React, { useState } from 'react';
-import { MousePointerClick, Columns3, Printer, ShieldCheck, RefreshCw } from 'lucide-react';
-import { useBusinessSettings } from '../../context/BusinessSettingsContext.js';
-
-/**
- * Interface & Printing settings.
  * Super Admin only (route guard in App.tsx and requireSuperAdmin on the server).
  * Controls the owner-requested UI behaviours; all are display/behaviour toggles,
  * never data changes.
@@ -63,8 +47,9 @@ export const InterfaceSettingsPage: React.FC = () => {
             <div>
               <p className="text-sm font-semibold text-slate-800">Right-click row actions</p>
               <p className="text-xs text-slate-500 mt-0.5">
-                On every list page (stock items, parties, sales, purchases and more), the Actions column is hidden and
-                right-clicking a row shows its actions instead. Turn off to bring back the always-visible Actions column.
+                On every list page (stock items, parties, sales, purchases and more), the Actions column collapses to a
+                compact per-row button, and right-clicking a row shows its actions menu. The row button stays available
+                on touch devices and keyboards. Turn off to bring back the always-visible Actions column.
               </p>
             </div>
           </div>
