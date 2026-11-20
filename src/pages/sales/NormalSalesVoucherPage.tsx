@@ -37,6 +37,7 @@ import {
   ensureTrailingBlankRow,
 } from '../../components/voucher/VoucherTypes';
 import { PrintPreviewModal } from '../../components/print/PrintPreviewModal';
+import { usesOpticalPrintBrand } from '../../utils/printBranding.js';
 import { PrintableVoucher } from '../../components/print/PrintableVoucher';
 import { cleanNarrationNotes } from '../../utils/narrationHelper';
 import { validateQuantity } from '../../utils/quantityValidator';
@@ -2366,11 +2367,13 @@ export const NormalSalesVoucherPage: React.FC<Props> = ({ onNavigate, onSuccess,
           onClose={() => setIsPrintPreviewOpen(false)}
           title={`Tax Invoice - ${(createdInvoice || getPrintableInvoice()).invoiceNumber || ''}`}
           filename={`Invoice_${(createdInvoice || getPrintableInvoice()).invoiceNumber || 'INV'}`}
+          paperSize={usesOpticalPrintBrand(currentBusiness) ? 'A5' : 'A4'}
           defaultOrientation="portrait"
           autoInvokePrint={autoInvokePrint}
         >
-          {({ documentId }) => (
+          {({ documentId, orientation }) => (
             <PrintableVoucher
+              orientation={orientation}
               id={documentId}
               business={currentBusiness}
               voucher={createdInvoice || getPrintableInvoice()}
