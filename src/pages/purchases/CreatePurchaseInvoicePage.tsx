@@ -753,6 +753,7 @@ export const CreatePurchaseInvoicePage: React.FC<Props> = ({
             updateDueDate(parsedDate, paymentTerms);
           }
           setSupplierInvoiceNumber(inv.supplierInvoiceNumber || '');
+          if (inv.settlementMode) setPaymentMode(inv.settlementMode);
           if (inv.supplierInvoiceDate) {
             setSupplierInvoiceDate(
               new Date(inv.supplierInvoiceDate).toISOString().split('T')[0]
@@ -1664,6 +1665,7 @@ export const CreatePurchaseInvoicePage: React.FC<Props> = ({
         courierCharges: courierCharges || 0,
         notes: notes.trim() || undefined,
         status: 'POSTED',
+        paymentMode: paymentMode === 'CASH' || paymentMode === 'BANK' ? paymentMode : 'CREDIT',
         lines: nonBlankLines.map(l => ({
           uniqueItemId: l.uniqueItemId,
           quantity: l.quantity,
@@ -2259,6 +2261,8 @@ export const CreatePurchaseInvoicePage: React.FC<Props> = ({
             onPartyCreated={handlePartyCreated}
             onRequestCreateParty={handleOpenPartyModal}
             onPartyFocus={openContextualParty}
+            paymentMode={paymentMode}
+            onPaymentModeChange={isOrder || convertingOrderId ? undefined : setPaymentMode}
             onPartyQueryChange={setContextualSearch}
             partyBalance={partyBalance || undefined}
             gstMode={gstMode}
