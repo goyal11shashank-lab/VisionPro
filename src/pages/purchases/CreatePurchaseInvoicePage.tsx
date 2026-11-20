@@ -1791,13 +1791,16 @@ export const CreatePurchaseInvoicePage: React.FC<Props> = ({
     // Save & Print: save first (a new voucher, or an edited one with unsaved changes); print only
     // after the save succeeded. An already saved, unchanged voucher just prints.
     if ((!createdInvoice && !editInvoiceId && !editOrderId) || ((editInvoiceId || editOrderId) && isDirty)) {
-      const saved = await handleSaveInvoice(true, false);
+      const saved = await handleSaveInvoice(true, !(editInvoiceId || editOrderId));
       if (!saved) return;
     }
+    // New vouchers: once the print preview/dialog is closed, open a fresh voucher page.
+    resetAfterPrintRef.current = !(editInvoiceId || editOrderId);
     setAutoInvokePrint(false);
     setIsPrintPreviewOpen(true);
   };
 
+  const resetAfterPrintRef = useRef(false);
   const saveAndNewRef = useRef(handleSaveAndNew);
   saveAndNewRef.current = handleSaveAndNew;
   const printShortcutRef = useRef(handlePrintShortcut);
@@ -2149,7 +2152,9 @@ export const CreatePurchaseInvoicePage: React.FC<Props> = ({
       // Hotkeys for voucher actions
       if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 's') {
         e.preventDefault();
-        handleSaveInvoice(true, false);
+        // New voucher: Ctrl+S is Save & New. Editing a saved voucher keeps a plain update.
+        if (editInvoiceId || editOrderId) handleSaveInvoice(true, false);
+        else saveAndNewRef.current();
       } else if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'a') {
         e.preventDefault();
         saveAndNewRef.current();
@@ -2363,7 +2368,7 @@ export const CreatePurchaseInvoicePage: React.FC<Props> = ({
             canDelete={canDelete}
             canCancel={canCancel}
             submitting={submitting}
-            onSave={() => handleSaveInvoice(true, false)}
+            onSave={editInvoiceId || editOrderId ? () => handleSaveInvoice(true, false) : undefined}
             onSaveAndNew={handleSaveAndNew}
             onDelete={() => setShowDeleteConfirm(true)}
             onCancelVoucher={() => setShowCancelConfirm(true)}
@@ -2626,7 +2631,13 @@ export const CreatePurchaseInvoicePage: React.FC<Props> = ({
       {isPrintPreviewOpen && (
         <PrintPreviewModal
           isOpen={isPrintPreviewOpen}
-          onClose={() => setIsPrintPreviewOpen(false)}
+          onClose={() => {
+            setIsPrintPreviewOpen(false);
+            if (resetAfterPrintRef.current) {
+              resetAfterPrintRef.current = false;
+              handleResetForm();
+            }
+          }}
           title={`${isOrder ? 'Purchase Order' : 'Purchase Invoice'} - ${(createdInvoice || getPrintableVoucher()).orderNumber || (createdInvoice || getPrintableVoucher()).invoiceNumber || existingInvoiceNumber || ''}`}
           filename={`${isOrder ? 'PO' : 'PI'}_${(createdInvoice || getPrintableVoucher()).orderNumber || (createdInvoice || getPrintableVoucher()).invoiceNumber || 'VOUCHER'}`}
           defaultOrientation="portrait"
