@@ -49,6 +49,9 @@ export interface UpdatePartyDTO {
   status?: 'ACTIVE' | 'INACTIVE';
   whatsappOptIn?: boolean;
   notes?: string;
+  /** When present (even 0), the party's opening balance is replaced/cleared. Omit to leave it unchanged. */
+  openingBalance?: number | string | null;
+  openingBalanceType?: 'Dr' | 'Cr';
 }
 
 export class PartyService {
@@ -460,7 +463,122 @@ export class PartyService {
     }
 
     const [enriched] = await this.enrichPartiesWithLedgerBalances(businessId, [party]);
-    return enriched || party;
+
+    // Current opening balance (from the party's OPENING_BALANCE ledger row), for edit forms.
+    const openingRes = await pool.query(
+      `SELECT side, debit::float AS debit, credit::float AS credit FROM (
+         SELECT 'customer' AS side, debit, credit FROM customer_ledgers
+          WHERE business_id = $1 AND party_id = $2 AND transaction_type = 'OPENING_BALANCE'
+         UNION ALL
+         SELECT 'supplier' AS side, debit, credit FROM supplier_ledgers
+          WHERE business_id = $1 AND party_id = $2 AND transaction_type = 'OPENING_BALANCE'
+       ) o ORDER BY side = 'customer' DESC LIMIT 1`,
+      [businessId, partyId]
+    );
+    const o = openingRes.rows[0];
+    const openingBalance = o ? Math.abs(o.debit > 0 ? o.debit : o.credit) : 0;
+    const openingBalanceType = o ? (o.debit > 0 ? 'Dr' : 'Cr') : (party.partyType === 'SUPPLIER' ? 'Cr' : 'Dr');
+    return { ...(enriched || party), openingBalance, openingBalanceType };
+  }
+
+  /**
+   * Replaces (or clears) a party's opening balance on edit, safely for parties
+   * that already have ledger history:
+   *  - the existing OPENING_BALANCE row is deleted, never duplicated; and
+   *  - every other stored running balance is shifted by the signed delta of the
+   *    change, so outstanding and statements stay consistent without rewriting
+   *    history (rows keep their original debit/credit amounts).
+   * The new opening row is dated one day before the party's first entry so the
+   * opening always precedes recorded activity, exactly as if it had been entered
+   * before the books began.
+   */
+  private static async applyOpeningBalance(
+    businessId: string,
+    partyId: string,
+    partyType: string,
+    rawAmount: number | string | null | undefined,
+    rawType: 'Dr' | 'Cr' | undefined,
+    userId?: string
+  ) {
+    const opening = Math.abs(Number(rawAmount) || 0);
+    const drCr = rawType === 'Cr' ? 'Cr' : 'Dr';
+    const useCustomerLedger =
+      partyType === 'CUSTOMER' || (partyType === 'BOTH' && drCr === 'Dr');
+    const target = useCustomerLedger ? 'customer_ledgers' : 'supplier_ledgers';
+    const other = useCustomerLedger ? 'supplier_ledgers' : 'customer_ledgers';
+    const signed = (table: string, debit: number, credit: number) =>
+      table === 'customer_ledgers' ? debit - credit : credit - debit;
+
+    const client = await pool.connect();
+    try {
+      await client.query('BEGIN');
+
+      const oldSigned: Record<string, number> = {};
+      for (const t of [target, other]) {
+        const existing = await client.query(
+          `SELECT debit::float AS debit, credit::float AS credit FROM ${t}
+            WHERE business_id = $1 AND party_id = $2 AND transaction_type = 'OPENING_BALANCE'
+            FOR UPDATE`,
+          [businessId, partyId]
+        );
+        oldSigned[t] = existing.rows.reduce((s, r) => s + signed(t, r.debit, r.credit), 0);
+        await client.query(
+          `DELETE FROM ${t} WHERE business_id = $1 AND party_id = $2 AND transaction_type = 'OPENING_BALANCE'`,
+          [businessId, partyId]
+        );
+      }
+
+      let newSigned = 0;
+      if (opening > 0) {
+        const debit = drCr === 'Dr' ? opening : 0;
+        const credit = drCr === 'Cr' ? opening : 0;
+        newSigned = signed(target, debit, credit);
+        const minRes = await client.query(
+          `SELECT MIN(transaction_date) AS min_date FROM ${target} WHERE business_id = $1 AND party_id = $2`,
+          [businessId, partyId]
+        );
+        const minDate = minRes.rows[0]?.min_date ? new Date(minRes.rows[0].min_date) : null;
+        const txDate = minDate ? new Date(minDate.getTime() - 24 * 3600 * 1000) : new Date();
+        await client.query(
+          `INSERT INTO ${target} (
+             business_id, party_id, transaction_type, reference_type, reference_id,
+             debit, credit, balance, transaction_date, notes, created_by, created_at
+           ) VALUES (
+             $1, $2, 'OPENING_BALANCE', 'OPENING_BALANCE', NULL,
+             $3, $4, $5, $6, $7, $8, NOW()
+           )`,
+          [
+            businessId,
+            partyId,
+            debit.toFixed(2),
+            credit.toFixed(2),
+            newSigned.toFixed(2),
+            txDate,
+            `Opening balance brought forward (${drCr})`,
+            userId || null,
+          ]
+        );
+      }
+
+      // Shift the stored running balances of all non-opening rows by the delta.
+      for (const t of [target, other]) {
+        const delta = (t === target ? newSigned : 0) - oldSigned[t];
+        if (delta !== 0) {
+          await client.query(
+            `UPDATE ${t} SET balance = (balance::numeric + $1::numeric)::numeric(12,2)
+              WHERE business_id = $2 AND party_id = $3 AND transaction_type <> 'OPENING_BALANCE'`,
+            [delta.toFixed(2), businessId, partyId]
+          );
+        }
+      }
+
+      await client.query('COMMIT');
+    } catch (err) {
+      await client.query('ROLLBACK');
+      throw err;
+    } finally {
+      client.release();
+    }
   }
 
   /**
@@ -502,6 +620,18 @@ export class PartyService {
       .where(and(eq(parties.businessId, businessId), eq(parties.id, partyId)))
       .returning();
 
+    // Opening balance replacement/clearing happens only when the field is sent.
+    if (data.openingBalance !== undefined) {
+      await this.applyOpeningBalance(
+        businessId,
+        partyId,
+        updated.partyType,
+        data.openingBalance,
+        data.openingBalanceType,
+        userId
+      );
+    }
+
     await AuditService.log({
       businessId,
       userId,
@@ -510,7 +640,15 @@ export class PartyService {
       entityType: 'party',
       entityId: partyId,
       previousValue: existing,
-      newValue: updated,
+      newValue: {
+        ...(updated as any),
+        ...(data.openingBalance !== undefined
+          ? {
+              openingBalance: Math.abs(Number(data.openingBalance) || 0),
+              openingBalanceType: data.openingBalanceType === 'Cr' ? 'Cr' : 'Dr',
+            }
+          : {}),
+      },
     });
 
     return updated;
