@@ -35,7 +35,8 @@
  * every data change, and un-marks everything when the toggle is turned off.
  */
 
-const ACTIONS_HEADER = 'actions';
+// Exact header texts treated as row-action columns (both spellings appear in the app).
+const ACTIONS_HEADERS = new Set(['actions', 'action']);
 
 interface UiToggles {
   rightClickRowActions: boolean;
@@ -248,7 +249,7 @@ function applyTableRules(): void {
     unmark(table);
     ownHeaderCells(table).forEach((th) => {
       const text = headerText(th);
-      if (text === ACTIONS_HEADER && toggles.rightClickRowActions) {
+      if (ACTIONS_HEADERS.has(text) && toggles.rightClickRowActions) {
         collapseActionsColumn(table, th);
       } else if (onStockItems && STOCK_ITEM_HIDDEN_HEADERS.has(text)) {
         hideColumn(table, th);
