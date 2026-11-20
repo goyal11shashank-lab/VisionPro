@@ -2836,7 +2836,7 @@ async function checkBatchDeletionSafety(batchId: string, bizId: string, queryabl
       ds.dispatch_date AS doc_date,
       dsl.dispatched_quantity AS quantity
     FROM dealer_shipment_lines dsl
-    JOIN dealer_shipments ds ON dsl.dealer_shipment_id = ds.id AND ds.business_id = $2
+    JOIN dealer_shipments ds ON dsl.dealer_shipment_id = ds.id AND (ds.main_business_id = $2 OR ds.dealer_business_id = $2)
     WHERE dsl.main_batch_id = $1`,
     [batchId, bizId]
   );
@@ -2861,7 +2861,7 @@ async function checkBatchDeletionSafety(batchId: string, bizId: string, queryabl
       dgr.receipt_date AS doc_date,
       dgrl.received_quantity AS quantity
     FROM dealer_goods_receipt_lines dgrl
-    JOIN dealer_goods_receipts dgr ON dgrl.goods_receipt_id = dgr.id AND dgr.business_id = $2
+    JOIN dealer_goods_receipts dgr ON dgrl.goods_receipt_id = dgr.id AND (dgr.main_business_id = $2 OR dgr.dealer_business_id = $2)
     WHERE dgrl.main_batch_id = $1 OR dgrl.dealer_batch_id = $1`,
     [batchId, bizId]
   );
@@ -2886,7 +2886,7 @@ async function checkBatchDeletionSafety(batchId: string, bizId: string, queryabl
       dr.created_at AS doc_date,
       drl.sent_quantity AS quantity
     FROM dealer_return_lines drl
-    JOIN dealer_returns dr ON drl.dealer_return_id = dr.id AND dr.business_id = $2
+    JOIN dealer_returns dr ON drl.dealer_return_id = dr.id AND (dr.main_business_id = $2 OR dr.dealer_business_id = $2)
     WHERE drl.main_batch_id = $1 OR drl.dealer_batch_id = $1`,
     [batchId, bizId]
   );

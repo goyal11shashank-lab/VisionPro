@@ -1167,6 +1167,16 @@ export const StockItemBatchesView: React.FC<StockItemBatchesViewProps> = ({
                       </div>
                     </div>
 
+                    {/* Failures that did not produce a protected-batch entry: show the real reason instead of a bare count */}
+                    {(!bulkDeleteResult.blockedBatches || bulkDeleteResult.blockedBatches.length === 0) && bulkDeleteResult.errors && bulkDeleteResult.errors.length > 0 && (
+                      <div className="border border-rose-200 bg-rose-50/60 rounded-xl p-3 text-xs space-y-1">
+                        <p className="font-bold text-rose-900">Could not delete</p>
+                        {bulkDeleteResult.errors.map((msg: string, idx: number) => (
+                          <p key={idx} className="text-[11px] text-rose-700 break-words">{msg}</p>
+                        ))}
+                      </div>
+                    )}
+
                     {/* Blocked Batches List */}
                     {bulkDeleteResult.blockedBatches && bulkDeleteResult.blockedBatches.length > 0 && (
                       <div className="border border-amber-200 bg-amber-50/50 rounded-xl p-3 text-xs space-y-2">
