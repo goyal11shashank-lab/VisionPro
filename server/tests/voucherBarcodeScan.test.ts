@@ -60,3 +60,26 @@ for (let i = 0; i < 500; i++) { const it = { id: 'I' + (i % 40), name: 'Item' + 
 const ms = Date.now() - t0;
 assert.ok(ms < 1000, `500 scans took ${ms}ms`);
 console.log(`voucherBarcodeScan PASS (500 scans applied in ${ms}ms)`);
+
+// Negative stock allowed by the business setting (owner request: recorded stock can be wrong).
+{
+  let nl = [createEmptyVoucherLine('row')];
+  const zero = applyScannedBatch(nl, hit({ id: 'N', name: 'Zero Lens' }, b('n1', '-3.00', 'N1'), 0), 90, { allowNegative: true });
+  assert.ok(zero.ok); assert.equal(zero.negativeStock, true); assert.match(zero.message, /Warning: recorded stock is 0, this sale takes it to -1/);
+  assert.equal(zero.lines[0].quantity, 1); assert.equal(zero.lines[0].batches?.[0].batchId, 'n1');
+  const again = applyScannedBatch(zero.lines, hit({ id: 'N', name: 'Zero Lens' }, b('n1', '-3.00', 'N1'), 0), 90, { allowNegative: true });
+  assert.ok(again.ok); assert.equal(again.lines[0].quantity, 2); assert.match(again.message, /takes it to -2/);
+  // Stock available: no warning flag even when allowed.
+  const fine = applyScannedBatch([createEmptyVoucherLine('row')], hit({ id: 'M', name: 'M' }, b('m1', '1.00', 'M1'), 4), 10, { allowNegative: true });
+  assert.ok(fine.ok); assert.equal(fine.negativeStock, undefined); assert.doesNotMatch(fine.message, /Warning/);
+  // Setting off (default option): still refused, nothing added.
+  const off = applyScannedBatch([createEmptyVoucherLine('row')], hit({ id: 'N', name: 'Zero Lens' }, b('n1', '-3.00', 'N1'), 0), 90, { allowNegative: false });
+  assert.equal(off.ok, false);
+  // Editing a saved voucher: the voucher's own original qty is still counted before any warning.
+  const edit = applyScannedBatch([createEmptyVoucherLine('row')], hit({ id: 'E', name: 'E' }, b('e1', '1.00', 'E1'), 0), 10, { allowNegative: true, originalQty: () => 2 });
+  assert.equal(edit.negativeStock, undefined);
+  // Purchase never warns.
+  const pur = applyScannedBatch([createEmptyVoucherLine('row')], hit({ id: 'P', name: 'P' }, b('p1', '1.00', 'P1'), 0), 10, { purchase: true });
+  assert.ok(pur.ok); assert.equal(pur.negativeStock, undefined);
+}
+console.log('PASS negative stock scan cases');
