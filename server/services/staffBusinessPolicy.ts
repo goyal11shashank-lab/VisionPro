@@ -12,6 +12,17 @@ export function staffOwnBusinessId(rows: StaffAccessRow[]): string | null {
   return defaults.length === 1 ? defaults[0].businessId : null;
 }
 
+/** More than one access row without exactly one default: which business the login belongs to is unknown, so it is blocked until an administrator fixes the assignment. */
+export function staffAccessAmbiguous(rows: StaffAccessRow[]): boolean {
+  return rows.length > 1 && rows.filter(r => r.isDefault).length !== 1;
+}
+
+export const STAFF_ACCOUNT_CONFIGURATION_BODY = {
+  success: false,
+  error: 'ACCOUNT_CONFIGURATION',
+  message: 'This login is not set up correctly. Please contact your administrator.',
+};
+
 export const STAFF_SINGLE_BUSINESS_BODY = {
   success: false,
   error: 'STAFF_SINGLE_BUSINESS',

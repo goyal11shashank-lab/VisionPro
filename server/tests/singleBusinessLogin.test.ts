@@ -81,6 +81,30 @@ try {
   assert.equal((await call('/api/inventory', l1.data.token, B)).status, 403);
   assert.equal(JSON.stringify((await pool.query('SELECT * FROM user_business_access WHERE user_id=$1 ORDER BY business_id', [lu.id])).rows), legacyRows, 'legacy access rows unchanged');
   note('PASS legacy two-row login: login dropdown [A], other business 403, /me [A], X-Business-Id B 403, rows unchanged');
+  // Ambiguous legacy logins fail closed: 0 defaults and 2 defaults
+  for (const defs of [[false, false]]) {
+    const an = 'syn_amb_' + defs.join('_') + '_' + Date.now();
+    const { rows: [au] } = await pool.query(`INSERT INTO users(username,full_name,password_hash,status) VALUES($1,'Synthetic Ambiguous',$2,'ACTIVE') RETURNING id`, [an, await hashPassword('Syn#Single123')]);
+    await pool.query(`INSERT INTO user_business_access(user_id,business_id,is_default) VALUES($1,$2,$4),($1,$3,$5)`, [au.id, A, B, defs[0], defs[1]]);
+    await pool.query(`INSERT INTO user_roles(user_id,role_id,business_id) VALUES($1,$2,$3),($1,$2,$4)`, [au.id, role.id, A, B]);
+    const rowsBefore = JSON.stringify((await pool.query('SELECT * FROM user_business_access WHERE user_id=$1 ORDER BY business_id', [au.id])).rows);
+    for (const bid of [A, B, undefined]) {
+      const r = await fetch(base + '/api/auth/login', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ username: an, password: 'Syn#Single123', businessId: bid }) });
+      const d: any = await r.json();
+      assert.equal(r.status, 403, 'ambiguous login must be refused ' + JSON.stringify(defs)); assert.equal(d.token, undefined); assert.equal(d.error, 'ACCOUNT_CONFIGURATION');
+      assert(!JSON.stringify(d).includes(A) && !JSON.stringify(d).includes(B));
+    }
+    // a token issued earlier (before the fix / before the rows changed) holds no capability either
+    const oldTok = generateAuthToken({ userId: au.id, username: an, isSuperAdmin: false, businessId: A });
+    for (const [path, biz, m, body] of [['/api/auth/me', A, 'GET'], ['/api/inventory', A, 'GET'], ['/api/inventory', B, 'GET'], ['/api/businesses', A, 'GET'], ['/api/businesses/' + B, A, 'GET'], ['/api/auth/switch-business', A, 'POST', { targetBusinessId: B }]] as any) {
+      const r = await call(path, oldTok, biz, m, body);
+      assert.equal(r.status, 403, `ambiguous token ${path} ${JSON.stringify(defs)} got ${r.status}`);
+    }
+    assert.equal(JSON.stringify((await pool.query('SELECT * FROM user_business_access WHERE user_id=$1 ORDER BY business_id', [au.id])).rows), rowsBefore, 'no access row changed');
+    note(`PASS ambiguous legacy login (defaults=${defs.filter(Boolean).length}) fails closed: login 403 x3, /me, inventory A+B, list, detail, switch all 403 with an existing token; rows unchanged`);
+  }
+  await assert.rejects(pool.query(`INSERT INTO user_business_access(user_id,business_id,is_default) VALUES($1,$2,true),($1,$3,true)`, [lu.id, first.id, B]), /user_biz_access_user_default_unique_idx/);
+  note('PASS two default flags for one login are impossible at the database level (unique index), so 0 defaults is the only ambiguous shape');
   const saTwo = await call('/api/users', saTok(A), A, 'POST', { username: 'syn_sa2_' + Date.now(), fullName: 'Synthetic SA2', password: 'Syn#Single123', isSuperAdmin: true });
   note(`RESULT Super Admin account creation still allowed: HTTP ${saTwo.status}`);
   if (false) {
