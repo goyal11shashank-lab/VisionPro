@@ -48,6 +48,7 @@ export interface AppSettings {
     reserveStockOnSalesOrder?: boolean;
     allowOrderBeyondAvailable?: boolean;
     autoReleaseExpiredReservations?: boolean;
+    reservationControlsVersion?: 1;
   };
   sales: {
     defaultPaymentMode: 'Credit' | 'Cash';

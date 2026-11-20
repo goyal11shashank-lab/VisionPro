@@ -8,6 +8,8 @@ import { Business } from '../../types/index.js';
 import { numberToIndianWords } from '../../utils/numberToWords.js';
 import { useBusinessSettings } from '../../context/SettingsContext.js';
 import { cleanNarrationNotes } from '../../utils/narrationHelper.js';
+import { printBusinessView, usesOpticalPrintBrand } from '../../utils/printBranding.js';
+import { HalfSheetEstimate } from './HalfSheetEstimate.js';
 
 export type VoucherDocumentType =
   | 'SALES_INVOICE'
@@ -30,6 +32,7 @@ export interface PrintableVoucherProps {
   showNarration?: boolean;
   showTerms?: boolean;
   showSignatures?: boolean;
+  orientation?: 'portrait' | 'landscape';
   id?: string;
 }
 
@@ -45,9 +48,15 @@ export const PrintableVoucher: React.FC<PrintableVoucherProps> = ({
   showTerms = true,
   showSignatures = true,
   id = 'printable-voucher',
+  orientation = 'portrait',
 }) => {
   const { settings } = useBusinessSettings();
   if (!voucher) return null;
+  if (usesOpticalPrintBrand(business) && documentType === 'SALES_INVOICE') {
+    return <HalfSheetEstimate voucher={voucher} settings={settings} id={id} orientation={orientation === 'landscape' ? 'landscape' : 'portrait'}
+      showBatches={showBatches} showNarration={showNarration} showSignatures={showSignatures} />;
+  }
+  business = printBusinessView(business);
 
   const effectiveShowLogo = showLogo && (settings?.print?.showBusinessLogo ?? true);
   const effectiveShowTerms = showTerms && (settings?.print?.showTermsAndConditions ?? true);
@@ -55,6 +64,9 @@ export const PrintableVoucher: React.FC<PrintableVoucherProps> = ({
   const effectiveShowBatches = showBatches && (settings?.print?.showBatchDetails ?? true);
   const signatoryLabel = settings?.print?.signatoryLabel || 'Authorized Signatory';
   const termsText = settings?.print?.termsAndConditionsText;
+  const showHsn = settings?.print?.showHsnSac ?? true;
+  const showDiscount = settings?.print?.showDiscountColumn ?? true;
+  const itemColumnCount = 8 + Number(showHsn) + Number(showDiscount);
 
   // Determine Title based on document type
   let title = customTitle;
@@ -273,9 +285,11 @@ export const PrintableVoucher: React.FC<PrintableVoucherProps> = ({
             <tr>
               <th className="py-2 px-2.5 w-8 text-center border-r border-slate-200">#</th>
               <th className="py-2 px-3 border-r border-slate-200">Stock Item &amp; Optical Details</th>
+              {showHsn && <th className="py-2 px-2 text-center w-14 border-r border-slate-200">HSN / SAC</th>}
               <th className="py-2 px-2.5 text-center w-16 border-r border-slate-200">Qty</th>
               <th className="py-2 px-2 text-center w-12 border-r border-slate-200">Unit</th>
               <th className="py-2 px-2.5 text-right w-20 border-r border-slate-200">Rate (₹)</th>
+              {showDiscount && <th className="py-2 px-2 text-right w-16 border-r border-slate-200">Discount (₹)</th>}
               <th className="py-2 px-2 text-right w-16 border-r border-slate-200">Taxable</th>
               <th className="py-2 px-2 text-right w-14 border-r border-slate-200">GST</th>
               <th className="py-2 px-3 text-right w-24">Amount (₹)</th>
@@ -284,7 +298,7 @@ export const PrintableVoucher: React.FC<PrintableVoucherProps> = ({
           <tbody className="divide-y divide-slate-200 font-mono">
             {lines.length === 0 ? (
               <tr>
-                <td colSpan={8} className="py-6 text-center text-slate-400 font-sans italic">
+                <td colSpan={itemColumnCount} className="py-6 text-center text-slate-400 font-sans italic">
                   No line items found in this voucher.
                 </td>
               </tr>
@@ -318,6 +332,7 @@ export const PrintableVoucher: React.FC<PrintableVoucherProps> = ({
                           )}
                         </div>
                       </td>
+                      {showHsn && <td className="py-2 px-2 text-center border-r border-slate-200 align-top">{l.hsnSac || l.hsnCode || l.uniqueItem?.hsnSac || l.uniqueItem?.hsnCode || '-'}</td>}
                       <td className="py-2 px-2.5 text-center font-bold text-slate-900 border-r border-slate-200 align-top">
                         {qty}
                       </td>
@@ -327,6 +342,7 @@ export const PrintableVoucher: React.FC<PrintableVoucherProps> = ({
                       <td className="py-2 px-2.5 text-right text-slate-800 border-r border-slate-200 align-top">
                         {rate.toFixed(2)}
                       </td>
+                      {showDiscount && <td className="py-2 px-2 text-right text-slate-800 border-r border-slate-200 align-top">{Number(l.discountAmount ?? 0).toFixed(2)}</td>}
                       <td className="py-2 px-2 text-right text-slate-800 border-r border-slate-200 align-top">
                         {taxable.toFixed(2)}
                       </td>
@@ -342,7 +358,7 @@ export const PrintableVoucher: React.FC<PrintableVoucherProps> = ({
                     {effectiveShowBatches && batches.length > 0 && (
                       <tr className="bg-slate-50/70 text-[10px]">
                         <td className="border-r border-slate-200"></td>
-                        <td colSpan={7} className="py-1 px-3">
+                        <td colSpan={itemColumnCount - 1} className="py-1 px-3">
                           <div className="font-sans font-semibold text-slate-500 uppercase tracking-wider text-[9px] mb-0.5">
                             Allocated Optical Batches:
                           </div>

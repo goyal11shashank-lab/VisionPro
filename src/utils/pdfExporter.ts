@@ -22,6 +22,32 @@ export async function exportToPdf(options: ExportPdfOptions): Promise<void> {
     throw new Error('Printable document element not found for PDF export.');
   }
 
+  // Half-sheet pages are already paginated as complete SVG pages. Export each
+  // separately instead of slicing one tall screenshot through item text.
+  if (targetEl.dataset.paperSize === 'a5') {
+    const landscape = targetEl.dataset.orientation === 'landscape';
+    const pdf = new jsPDF({ orientation: landscape ? 'l' : 'p', unit: 'mm', format: 'a5' });
+    const width = landscape ? 210 : 148, height = landscape ? 148 : 210;
+    const pages = Array.from(targetEl.querySelectorAll<SVGSVGElement>('.estimate-sheet svg'));
+    if (!pages.length) throw new Error('No half-sheet pages are ready for PDF export.');
+    for (const [index, svg] of pages.entries()) {
+      const url = URL.createObjectURL(new Blob([new XMLSerializer().serializeToString(svg)], { type: 'image/svg+xml;charset=utf-8' }));
+      try {
+        const image = new Image(); image.src = url; await image.decode();
+        const canvas = document.createElement('canvas');
+        canvas.width = landscape ? 2100 : 1480; canvas.height = landscape ? 1480 : 2100;
+        const context = canvas.getContext('2d');
+        if (!context) throw new Error('Canvas is unavailable for PDF export.');
+        context.fillStyle = 'white'; context.fillRect(0, 0, canvas.width, canvas.height);
+        context.drawImage(image, canvas.width * 0.03, canvas.height * 0.03, canvas.width * 0.94, canvas.height * 0.94);
+        if (index) pdf.addPage('a5', landscape ? 'l' : 'p');
+        pdf.addImage(canvas.toDataURL('image/png'), 'PNG', 0, 0, width, height);
+      } finally { URL.revokeObjectURL(url); }
+    }
+    pdf.save((filename.endsWith('.pdf') ? filename : `${filename}.pdf`).replace(/[^a-zA-Z0-9_.-]/g, '_'));
+    return;
+  }
+
   // Create high-resolution canvas snapshot of the printable document
   // html2canvas-pro natively supports OKLCH, OKLAB, LAB, LCH and modern CSS color spaces used by Tailwind CSS v4
   const canvas = await html2canvas(targetEl, {
@@ -73,4 +99,3 @@ export async function exportToPdf(options: ExportPdfOptions): Promise<void> {
   const cleanFilename = (filename.endsWith('.pdf') ? filename : `${filename}.pdf`).replace(/[^a-zA-Z0-9_.-]/g, '_');
   pdf.save(cleanFilename);
 }
-

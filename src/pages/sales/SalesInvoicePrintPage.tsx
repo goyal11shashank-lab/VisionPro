@@ -6,6 +6,7 @@ import { PrintableVoucher } from '../../components/print/PrintableVoucher.js';
 import { exportToPdf } from '../../utils/pdfExporter.js';
 import { printDocument } from '../../utils/printService.js';
 import { getStoredToken } from '../../api/client.js';
+import { usesOpticalPrintBrand } from '../../utils/printBranding.js';
 
 interface Props {
   invoiceId: string;
@@ -16,6 +17,8 @@ interface Props {
 export const SalesInvoicePrintPage: React.FC<Props> = ({ invoiceId, onBack, autoPrint = false }) => {
   const { currentBusiness } = useAuth();
   const { settings } = useBusinessSettings();
+  const [orientation, setOrientation] = useState<'portrait' | 'landscape'>('portrait');
+  const halfSheet = usesOpticalPrintBrand(currentBusiness);
   const [invoice, setInvoice] = useState<any | null>(null);
   const [loading, setLoading] = useState<boolean>(true);
   const [error, setError] = useState<string | null>(null);
@@ -46,12 +49,7 @@ export const SalesInvoicePrintPage: React.FC<Props> = ({ invoiceId, onBack, auto
           setInvoice(data);
           setLoading(false);
 
-          if (autoPrint) {
-            // Give DOM a moment to render then invoke print dialog
-            setTimeout(() => {
-              window.print();
-            }, 300);
-          }
+
         }
       } catch (err: any) {
         if (isMounted) {
@@ -77,9 +75,9 @@ export const SalesInvoicePrintPage: React.FC<Props> = ({ invoiceId, onBack, auto
     try {
       await printDocument({
         elementOrId: 'printable-sales-invoice-root',
-        title: `Tax Invoice - ${invoice.invoiceNumber || invoiceId}`,
+        title: `Invoice - ${invoice.invoiceNumber || invoiceId}`,
         filename: `Invoice_${invoice.invoiceNumber || invoiceId}`,
-        orientation: 'portrait',
+        orientation,
       });
     } catch (err: any) {
       console.error('Print failed:', err);
@@ -90,6 +88,10 @@ export const SalesInvoicePrintPage: React.FC<Props> = ({ invoiceId, onBack, auto
     }
   };
 
+  useEffect(() => {
+    if (autoPrint && invoice && !loading) void handlePrint();
+  }, [autoPrint, invoice, loading]);
+
   const handleExportPdf = async () => {
     if (isExportingPdf || !invoice) return;
     setIsExportingPdf(true);
@@ -97,7 +99,7 @@ export const SalesInvoicePrintPage: React.FC<Props> = ({ invoiceId, onBack, auto
       await exportToPdf({
         elementOrId: 'printable-sales-invoice-root',
         filename: `Invoice_${invoice.invoiceNumber || invoiceId}`,
-        orientation: 'portrait',
+        orientation,
       });
     } catch (err: any) {
       console.error('PDF export failed:', err);
@@ -149,7 +151,7 @@ export const SalesInvoicePrintPage: React.FC<Props> = ({ invoiceId, onBack, auto
           </button>
           <div>
             <h1 className="text-sm font-bold leading-tight">
-              Tax Invoice {invoice.invoiceNumber ? `(${invoice.invoiceNumber})` : ''}
+              Invoice print {invoice.invoiceNumber ? `(${invoice.invoiceNumber})` : ''}
             </h1>
             <p className="text-[11px] text-slate-400">
               Ready for Browser / System Print dialog
@@ -158,6 +160,9 @@ export const SalesInvoicePrintPage: React.FC<Props> = ({ invoiceId, onBack, auto
         </div>
 
         <div className="flex items-center gap-2">
+          {halfSheet && <select aria-label="Half-sheet orientation" value={orientation} onChange={e => setOrientation(e.target.value as 'portrait' | 'landscape')} className="bg-slate-800 text-white px-2 py-1 rounded text-xs">
+            <option value="portrait">A5 Portrait</option><option value="landscape">A5 Landscape</option>
+          </select>}
           <button
             id="btn-print-page-pdf"
             onClick={handleExportPdf}
@@ -188,11 +193,13 @@ export const SalesInvoicePrintPage: React.FC<Props> = ({ invoiceId, onBack, auto
         </div>
       </header>
 
+      {halfSheet && <div className="no-print bg-slate-100 text-slate-700 px-4 py-2 text-xs">Half-A4 / A5 sheets, with safe margins. Choose the matching orientation. Physical feed direction and clipping still need one printer test.</div>}
       {/* Main Printable Presentation Container */}
       <main className="flex-1 p-4 md:p-8 flex justify-center items-start overflow-auto">
         <div className="print-content-wrapper">
           <PrintableVoucher
             id="printable-sales-invoice-root"
+            orientation={orientation}
             business={currentBusiness}
             voucher={invoice}
             documentType="SALES_INVOICE"

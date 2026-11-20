@@ -87,6 +87,17 @@ export async function printDocument(options: PrintOptions): Promise<PrintResult>
     document.body.classList.remove('print-landscape');
   }
 
+  // Per-job stylesheet is removed after printing, so other sites/documents keep their defaults.
+  document.getElementById('erp-print-job-style')?.remove();
+  const jobStyle = document.createElement('style');
+  jobStyle.id = 'erp-print-job-style';
+  const paperSize = targetEl.dataset.paperSize === 'a5' ? 'A5' : 'A4';
+  const jobOrientation = targetEl.dataset.orientation || orientation;
+  jobStyle.textContent = `@page { size: ${paperSize} ${jobOrientation}; margin: ${paperSize === 'A5' ? '0' : '8mm'}; }
+    @media print { #print-root .estimate-sheet { margin: 0 !important; break-inside: avoid; page-break-inside: avoid; }
+    #print-root .half-sheet-estimate { min-height: 0 !important; } }`;
+  document.head.appendChild(jobStyle);
+
   // Cleanup handler
   let cleanedUp = false;
   const cleanup = () => {
@@ -98,12 +109,13 @@ export async function printDocument(options: PrintOptions): Promise<PrintResult>
     if (printRoot) {
       printRoot.innerHTML = '';
     }
+    jobStyle.remove();
     window.removeEventListener('afterprint', cleanup);
   };
 
   window.addEventListener('afterprint', cleanup, { once: true });
   // Safety fallback cleanup in case afterprint does not fire in certain browser versions
-  setTimeout(cleanup, 2000);
+  setTimeout(cleanup, 120000);
 
   try {
     window.focus();
@@ -137,5 +149,4 @@ export async function printDocument(options: PrintOptions): Promise<PrintResult>
     throw new Error(err?.message || 'Unable to prepare this document for printing.');
   }
 }
-
 

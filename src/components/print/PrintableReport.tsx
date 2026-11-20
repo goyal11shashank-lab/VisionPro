@@ -5,6 +5,7 @@
  */
 import React from 'react';
 import { Business } from '../../types/index.js';
+import { printBusinessView } from '../../utils/printBranding.js';
 
 export interface ReportColumn {
   header: string;
@@ -39,6 +40,7 @@ export const PrintableReport: React.FC<PrintableReportProps> = ({
   orientation = 'portrait',
   id = 'printable-report',
 }) => {
+  business = printBusinessView(business);
   const isLandscape = orientation === 'landscape';
 
   // Format Filter Summary

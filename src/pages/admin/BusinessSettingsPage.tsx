@@ -94,6 +94,7 @@ export const BusinessSettingsPage: React.FC<Props> = ({ initialTab = 'general' }
     pincode: '',
   });
 
+  const [bizInfoBaseline, setBizInfoBaseline] = useState<string | null>(null);
   const [saving, setSaving] = useState<boolean>(false);
   const [successMsg, setSuccessMsg] = useState<string | null>(null);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
@@ -115,10 +116,12 @@ export const BusinessSettingsPage: React.FC<Props> = ({ initialTab = 'general' }
   // Load business master details for General tab
   useEffect(() => {
     if (!currentBusiness?.id) return;
+    let active = true;
+    setBizInfoBaseline(null);
     apiRequest(`/api/businesses/${currentBusiness.id}`)
       .then((data: any) => {
-        if (data) {
-          setBizInfo({
+        if (data && active) {
+          const profile = {
             name: data.name || '',
             tradeName: data.tradeName || '',
             gstin: data.gstin || '',
@@ -131,10 +134,13 @@ export const BusinessSettingsPage: React.FC<Props> = ({ initialTab = 'general' }
             state: data.state || '',
             stateCode: data.stateCode || '',
             pincode: data.pincode || '',
-          });
+          };
+          setBizInfo(profile);
+          setBizInfoBaseline(JSON.stringify(profile));
         }
       })
       .catch((err) => console.error('Failed to load business profile', err));
+    return () => { active = false; };
   }, [currentBusiness?.id]);
 
   // Group definitions
@@ -243,6 +249,8 @@ export const BusinessSettingsPage: React.FC<Props> = ({ initialTab = 'general' }
       [group]: {
         ...prev[group],
         [key]: value,
+        ...(group === 'inventory' && (key === 'reserveStockOnSalesOrder' || key === 'allowOrderBeyondAvailable')
+          ? { reservationControlsVersion: 1 } : {}),
       },
     }));
   };
@@ -274,19 +282,22 @@ export const BusinessSettingsPage: React.FC<Props> = ({ initialTab = 'general' }
     setSuccessMsg(null);
 
     try {
-      // 1. Update business legal details if modified
-      if (currentBusiness?.id) {
+      let profileChanged = false;
+      // 1. Update business legal details only if explicitly modified
+      if (currentBusiness?.id && bizInfoBaseline !== null && JSON.stringify(bizInfo) !== bizInfoBaseline) {
         await apiRequest(`/api/businesses/${currentBusiness.id}`, {
           method: 'PUT',
           body: JSON.stringify(bizInfo),
         });
+        setBizInfoBaseline(JSON.stringify(bizInfo));
+        profileChanged = true;
       }
 
       // 2. Update all application settings
       const ok = await updateSettings(formData, lowStockThreshold);
       if (ok) {
-        setSuccessMsg('Settings updated successfully! Changes are active immediately.');
-        if (refreshUser) refreshUser();
+        setSuccessMsg('Settings saved. Changes apply where the feature is supported; existing vouchers are not recalculated.');
+        if (profileChanged && refreshUser) refreshUser();
         setTimeout(() => setSuccessMsg(null), 4000);
       } else {
         throw new Error('Failed to save settings to server');
@@ -616,8 +627,8 @@ export const BusinessSettingsPage: React.FC<Props> = ({ initialTab = 'general' }
                       </div>
                       <select
                         id="select-party-credit-limit-action"
-                        value={formData.party.creditLimitAction}
-                        onChange={(e) => handleUpdate('party', 'creditLimitAction', e.target.value)}
+                        value={formData.party.creditLimitBehavior}
+                        onChange={(e) => handleUpdate('party', 'creditLimitBehavior', e.target.value)}
                         className="px-3 py-1.5 text-xs border border-slate-300 rounded bg-white font-semibold text-slate-800"
                       >
                         <option value="WARNING">Warning Only (Allow Sale)</option>
@@ -634,9 +645,9 @@ export const BusinessSettingsPage: React.FC<Props> = ({ initialTab = 'general' }
                         <input
                           id="input-party-default-credit-limit"
                           type="number"
-                          value={formData.party.defaultCustomerCreditLimit}
+                          value={formData.party.defaultCreditLimit}
                           onChange={(e) =>
-                            handleUpdate('party', 'defaultCustomerCreditLimit', parseFloat(e.target.value) || 0)
+                            handleUpdate('party', 'defaultCreditLimit', parseFloat(e.target.value) || 0)
                           }
                           className="w-full px-3 py-2 text-xs border border-slate-300 rounded focus:ring-1 focus:ring-blue-500 focus:outline-none"
                         />
@@ -847,6 +858,7 @@ export const BusinessSettingsPage: React.FC<Props> = ({ initialTab = 'general' }
                   </div>
 
                   <div className="pt-2 space-y-3">
+                    <p className="text-[11px] text-slate-500">Reservation controls show the active policy. An explicit change applies to future order confirmations only; existing reservations are not recalculated.</p>
                     <label className="flex items-center gap-2 cursor-pointer">
                       <input
                         id="toggle-inventory-reserve-on-sales-order"
