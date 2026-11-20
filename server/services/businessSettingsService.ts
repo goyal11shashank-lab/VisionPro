@@ -532,6 +532,31 @@ export class BusinessSettingsService {
     );
     mergedSettings.inventory.lowStockThreshold = newThreshold;
 
+    // Accounts / cash opening validation (on the merged result).
+    // The configured opening is a physical cash count on the opening date, so a
+    // future date or a balance with no date would make Cash Book balances false.
+    const acc: any = (mergedSettings as any).accounts;
+    if (acc) {
+      const bal = Number(acc.cashOpeningBalance ?? 0);
+      const dt = typeof acc.cashOpeningDate === 'string' ? acc.cashOpeningDate.trim() : '';
+      const invalid = (message: string) =>
+        Object.assign(new Error(message), { code: 'SETTINGS_VALIDATION' });
+      if (!Number.isFinite(bal) || bal < 0) {
+        throw invalid('Cash opening balance cannot be negative.');
+      }
+      if (dt !== '') {
+        if (!/^\d{4}-\d{2}-\d{2}$/.test(dt)) {
+          throw invalid('Cash opening date must be in YYYY-MM-DD format.');
+        }
+        const today = new Date().toLocaleDateString('en-CA');
+        if (dt > today) {
+          throw invalid('Cash opening date cannot be in the future. Count the cash first, then enter today\'s or a past date.');
+        }
+      } else if (bal > 0) {
+        throw invalid('Set the cash opening date along with the cash opening balance.');
+      }
+    }
+
     const storedConfig = {
       ...(previous.config || {}),
       ...(data.config || {}),
