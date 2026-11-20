@@ -392,7 +392,7 @@ export const VoucherFooter: React.FC<VoucherFooterProps> = ({
               disabled={submitting}
               onClick={onSaveAndNew}
               className="px-2.5 py-0.5 text-[11px] font-black text-white bg-emerald-600 hover:bg-emerald-500 rounded border border-emerald-400/50 shadow-2xs transition-colors flex items-center gap-1.5 disabled:opacity-50 cursor-pointer"
-              title="Save Voucher and Open New (Ctrl+A)"
+              title={onSave ? 'Save Voucher and Open New (Ctrl+A)' : 'Save Voucher and Open New (Ctrl+S or Ctrl+A)'}
             >
               {submitting ? (
                 <>
@@ -401,7 +401,7 @@ export const VoucherFooter: React.FC<VoucherFooterProps> = ({
                 </>
               ) : (
                 <>
-                  <kbd className="px-1.5 py-0.2 bg-black/50 text-cyan-300 font-bold border border-cyan-500/30 rounded text-[9px]">Ctrl+A</kbd>
+                  <kbd className="px-1.5 py-0.2 bg-black/50 text-cyan-300 font-bold border border-cyan-500/30 rounded text-[9px]">{onSave ? 'Ctrl+A' : 'Ctrl+S'}</kbd>
                   <span>Save &amp; New</span>
                 </>
               )}
