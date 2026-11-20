@@ -59,6 +59,14 @@ export const SettingsProvider: React.FC<{ children: React.ReactNode }> = ({ chil
     fetchSettings();
   }, [fetchSettings]);
 
+  // Mirror interface settings for the non-React global row-actions adapter
+  useEffect(() => {
+    (window as any).__erpUiSettings = {
+      rightClickRowActions: settings?.ui?.rightClickRowActions ?? true,
+      hideStockItemMasterColumns: settings?.ui?.hideStockItemMasterColumns ?? true,
+    };
+  }, [settings]);
+
   const updateSettings = async (
     newSettings: Partial<AppSettings>,
     newThreshold?: number
