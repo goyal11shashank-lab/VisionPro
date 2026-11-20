@@ -11,8 +11,10 @@ import {
  * Pure: it never touches stock or the database. It only builds the new line list.
  * - Same stock item already on the voucher: add 1 to that power (batch) or add the power.
  * - New stock item: fills the empty row (or appends) with the item and that power, quantity 1.
- * - Stock short for that power: nothing is added and the message says why (unless allowOverStock,
- *   used when editing a saved voucher whose stock is already deducted).
+ * - Sales: stock short for that power means nothing is added and the message says why. The limit is
+ *   current available stock plus what this same saved voucher already holds of that power
+ *   (originalQty), so editing a saved voucher never bypasses availability.
+ * - Purchase: stock is incoming, so there is no stock limit; batch rate is set on the allocation.
  */
 export interface ScanLookup {
   batch?: any;
@@ -46,7 +48,7 @@ export function applyScannedBatch(
   lines: VoucherLineItem[],
   data: ScanLookup,
   rate: number,
-  opts: { allowOverStock?: boolean; categoryCode?: string } = {}
+  opts: { purchase?: boolean; originalQty?: (batchId: string) => number; categoryCode?: string } = {}
 ): ScanResult {
   const batch = data?.batch;
   const item = data?.uniqueItem;
@@ -60,11 +62,12 @@ export function applyScannedBatch(
   const currentQty =
     idx >= 0 ? (lines[idx].batches || []).find(b => b.batchId === batch.id)?.quantity || 0 : 0;
 
-  if (!opts.allowOverStock && currentQty + 1 > available) {
+  const limit = available + (opts.originalQty ? opts.originalQty(batch.id) || 0 : 0);
+  if (!opts.purchase && currentQty + 1 > limit) {
     return {
       ok: false,
       lines,
-      message: `${item.name} ${power}: only ${available} in stock, ${currentQty} already on this voucher`,
+      message: `${item.name} ${power}: only ${limit} available, ${currentQty} already on this voucher`,
     };
   }
 
@@ -77,7 +80,7 @@ export function applyScannedBatch(
     side: batch.side || 'NONE',
     quantity: qty,
     barcode: batch.barcode,
-    availableStock: available,
+    ...(opts.purchase ? { rate } : { availableStock: available }),
   });
 
   if (idx >= 0) {

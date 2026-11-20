@@ -34,10 +34,21 @@ assert.equal(lines.filter(l => l.uniqueItemId === 'A').length, 1); assert.equal(
 for (let i = 0; i < 2; i++) { r = applyScannedBatch(lines, hit(itemB, b('b1', '+2.00', 'Y1'), 3), 250); assert.ok(r.ok); lines = r.lines; }
 const before = lines;
 r = applyScannedBatch(lines, hit(itemB, b('b1', '+2.00', 'Y1'), 3), 250);
-assert.equal(r.ok, false); assert.equal(r.lines, before); assert.match(r.message, /only 3 in stock/);
+assert.equal(r.ok, false); assert.equal(r.lines, before); assert.match(r.message, /only 3 available/);
 // Zero stock new item refused; allowOverStock (editing a saved voucher) allows.
 assert.equal(applyScannedBatch(lines, hit({ id: 'C', name: 'C' }, b('c1', '0', 'Z'), 0), 1).ok, false);
-assert.equal(applyScannedBatch(lines, hit({ id: 'C', name: 'C' }, b('c1', '0', 'Z'), 0), 1, { allowOverStock: true }).ok, true);
+// Editing a saved voucher: limit is current stock + that voucher's own original qty for the power, no blanket bypass.
+const orig = (id: string) => (id === 'c1' ? 2 : 0);
+let e = applyScannedBatch(lines, hit({ id: 'C', name: 'C' }, b('c1', '0', 'Z'), 0), 1, { originalQty: orig }); // 0 + 2 original
+assert.equal(e.ok, true);
+e = applyScannedBatch(e.lines, hit({ id: 'C', name: 'C' }, b('c1', '0', 'Z'), 0), 1, { originalQty: orig });
+assert.equal(e.ok, true); // second unit = original 2
+const e3 = applyScannedBatch(e.lines, hit({ id: 'C', name: 'C' }, b('c1', '0', 'Z'), 0), 1, { originalQty: orig });
+assert.equal(e3.ok, false); // third unit exceeds stock 0 + original 2
+assert.equal(applyScannedBatch(lines, hit({ id: 'D', name: 'D' }, b('d1', '0', 'W'), 0), 1, { originalQty: orig }).ok, false); // new power not in original
+// Purchase: incoming stock, no limit; rate carried on the allocation.
+const pr = applyScannedBatch([createEmptyVoucherLine('row')], hit({ id: 'P', name: 'P' }, b('p1', '1', 'Q'), 0), 77, { purchase: true });
+assert.ok(pr.ok); assert.equal(pr.lines[0].batches[0].rate, 77); assert.equal(pr.lines[0].quantity, 1);
 // Missing item or batch.
 assert.equal(applyScannedBatch(lines, { batch: undefined, uniqueItem: undefined }, 1).ok, false);
 // Input lines are never mutated.

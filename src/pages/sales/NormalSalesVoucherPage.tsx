@@ -488,6 +488,13 @@ export const NormalSalesVoucherPage: React.FC<Props> = ({ onNavigate, onSuccess,
             }));
 
             setLines(ensureTrailingBlankRow(loadedLines, 'row'));
+            const origQty = new Map<string, number>();
+            if (inv.status === 'POSTED') {
+              loadedLines.forEach(l => (l.batches || []).forEach(b => {
+                if (b.batchId) origQty.set(b.batchId, (origQty.get(b.batchId) || 0) + (Number(b.quantity) || 0));
+              }));
+            }
+            scanOriginalQtyRef.current = origQty;
             baselineSnapshotRef.current = {
               partyId: partyId,
               invoiceDate: inv.invoiceDate ? inv.invoiceDate.split('T')[0] : '',
@@ -1019,6 +1026,8 @@ export const NormalSalesVoucherPage: React.FC<Props> = ({ onNavigate, onSuccess,
   linesRef.current = lines;
   const scanChainRef = useRef<Promise<void>>(Promise.resolve());
   const scanPriceRef = useRef<Map<string, Promise<number>>>(new Map());
+  // Quantity per batch the saved voucher already holds (its stock is already deducted). Empty for new vouchers.
+  const scanOriginalQtyRef = useRef<Map<string, number>>(new Map());
   const [scanPending, setScanPending] = useState(0);
   const [scanCount, setScanCount] = useState(0);
   const [scanStatus, setScanStatus] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
@@ -1066,7 +1075,7 @@ export const NormalSalesVoucherPage: React.FC<Props> = ({ onNavigate, onSuccess,
         }
         const rate = res.d?.uniqueItem ? await scanRateFor(res.d.uniqueItem) : 0;
         const result = applyScannedBatch(linesRef.current, res.d, rate, {
-          allowOverStock: !!editInvoiceId,
+          originalQty: (batchId: string) => scanOriginalQtyRef.current.get(batchId) || 0,
           categoryCode: res.d?.uniqueItem ? getOpticalCategory(res.d.uniqueItem) : undefined,
         });
         if (result.ok) {

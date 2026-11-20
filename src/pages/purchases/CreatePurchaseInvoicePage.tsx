@@ -30,6 +30,8 @@ import {
   TallyContextualPanel,
   ContextualPanelItem,
 } from '../../components/voucher/TallyContextualPanel';
+import { BarcodeScanBox } from '../../components/voucher/BarcodeScanBox';
+import { applyScannedBatch } from '../../lib/voucherBarcodeScan.js';
 import { PrintPreviewModal } from '../../components/print/PrintPreviewModal';
 import { PrintableVoucher } from '../../components/print/PrintableVoucher';
 import {
@@ -1182,6 +1184,48 @@ export const CreatePurchaseInvoicePage: React.FC<Props> = ({
     }, 60);
   };
 
+  // Continuous barcode scanning (purchase): each scan's lookup starts at once and results apply in
+  // scan order. Existing batches only (a barcode identifies item and power). Nothing is saved.
+  const linesRef = useRef<VoucherLineItem[]>(lines);
+  linesRef.current = lines;
+  const scanChainRef = useRef<Promise<void>>(Promise.resolve());
+  const [scanPending, setScanPending] = useState(0);
+  const [scanCount, setScanCount] = useState(0);
+  const [scanStatus, setScanStatus] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
+
+  const handleVoucherScan = (raw: string) => {
+    const code = raw.trim();
+    if (!code) return;
+    setScanPending(n => n + 1);
+    const lookup = apiRequest<any>(`/api/purchases/barcode-lookup/${encodeURIComponent(code)}`).then(
+      d => ({ d }),
+      (err: any) => ({ err })
+    );
+    scanChainRef.current = scanChainRef.current.then(async () => {
+      try {
+        const res: any = await lookup;
+        if (res.err) {
+          setScanStatus({ type: 'error', text: `${code}: ${res.err.message || 'barcode not found'}` });
+          return;
+        }
+        const uItem = res.d?.uniqueItem;
+        const batch = res.d?.batch;
+        const rate = batch?.rate ? Number(batch.rate) : uItem?.lastPurchasePrice ? Number(uItem.lastPurchasePrice) : 250;
+        const result = applyScannedBatch(linesRef.current, res.d, rate, { purchase: true });
+        if (result.ok) {
+          linesRef.current = result.lines;
+          setLines(result.lines);
+          setScanCount(n => n + 1);
+        }
+        setScanStatus({ type: result.ok ? 'success' : 'error', text: result.message });
+      } catch (err: any) {
+        setScanStatus({ type: 'error', text: `${code}: ${err?.message || 'scan failed'}` });
+      } finally {
+        setScanPending(n => Math.max(0, n - 1));
+      }
+    });
+  };
+
   // Barcode Lookup Fast Add
   const handleBarcodeLookup = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -2300,6 +2344,14 @@ export const CreatePurchaseInvoicePage: React.FC<Props> = ({
             onGstModeChange={setGstMode}
             narration={notes}
             onNarrationChange={setNotes}
+            scanBox={
+              <BarcodeScanBox
+                onScan={handleVoucherScan}
+                pending={scanPending}
+                scannedCount={scanCount}
+                status={scanStatus}
+              />
+            }
             discount={invoiceDiscount}
             onDiscountChange={setInvoiceDiscount}
             gstRate={invoiceGstRate}
