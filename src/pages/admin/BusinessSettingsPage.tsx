@@ -20,6 +20,7 @@ import {
   Check,
   HelpCircle,
   MessageSquare,
+  Wallet,
 } from 'lucide-react';
 import { apiRequest } from '../../api/client.js';
 import { useAuth } from '../../context/AuthContext.js';
@@ -53,6 +54,7 @@ export const BusinessSettingsPage: React.FC<Props> = ({ initialTab = 'general' }
   const getNormalizedTab = (tab: string): string => {
     const map: Record<string, string> = {
       general: 'general',
+      accounts: 'accounts',
       gst: 'gst',
       barcode: 'stockItem',
       parties: 'party',
@@ -151,6 +153,13 @@ export const BusinessSettingsPage: React.FC<Props> = ({ initialTab = 'general' }
       icon: Building2,
       description: 'Business legal entity, financial year and books beginning dates',
       count: 10,
+    },
+    {
+      id: 'accounts',
+      name: 'Accounts & Opening Balances',
+      icon: Wallet,
+      description: 'Cash opening balance and date for the Cash Book',
+      count: 2,
     },
     {
       id: 'party',
@@ -600,6 +609,52 @@ export const BusinessSettingsPage: React.FC<Props> = ({ initialTab = 'general' }
                           onChange={(e) => handleUpdate('general', 'financialYearBeginning', e.target.value)}
                           className="w-full px-3 py-2 text-xs border border-slate-300 rounded focus:ring-1 focus:ring-blue-500 focus:outline-none"
                         />
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              )}
+
+              {/* Group 1b: Accounts & Opening Balances */}
+              {activeTab === 'accounts' && (
+                <div id="section-settings-accounts" className="space-y-6">
+                  <div className="border-b border-slate-100 pb-3">
+                    <h2 className="text-base font-bold text-slate-900">Accounts & Opening Balances</h2>
+                    <p className="text-xs text-slate-500">
+                      Cash opening balance used by the Cash Book. Customer opening balances are entered on the party form when a party is created.
+                    </p>
+                  </div>
+
+                  <div className="rounded-lg border border-slate-200 p-4 space-y-4">
+                    <div>
+                      <h3 className="text-sm font-semibold text-slate-800">Cash Opening Balance</h3>
+                      <p className="text-[11px] text-slate-500 mt-0.5">
+                        Set once from a physical cash count. Cash Book shows opening and closing cash for the CASH tab as opening balance plus recorded receipts minus payments from this date. Changing it later does not alter any recorded receipt or payment.
+                      </p>
+                    </div>
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                      <div>
+                        <label className="block text-xs font-medium text-slate-700 mb-1">Cash in Hand (₹)</label>
+                        <input
+                          id="input-accounts-cash-opening-balance"
+                          type="number"
+                          min="0"
+                          step="0.01"
+                          value={formData.accounts?.cashOpeningBalance ?? 0}
+                          onChange={(e) => handleUpdate('accounts', 'cashOpeningBalance', Number(e.target.value) || 0)}
+                          className="w-full px-3 py-2 text-xs border border-slate-300 rounded focus:ring-1 focus:ring-blue-500 focus:outline-none"
+                        />
+                      </div>
+                      <div>
+                        <label className="block text-xs font-medium text-slate-700 mb-1">Opening As Of Date</label>
+                        <input
+                          id="input-accounts-cash-opening-date"
+                          type="date"
+                          value={formData.accounts?.cashOpeningDate ?? ''}
+                          onChange={(e) => handleUpdate('accounts', 'cashOpeningDate', e.target.value)}
+                          className="w-full px-3 py-2 text-xs border border-slate-300 rounded focus:ring-1 focus:ring-blue-500 focus:outline-none"
+                        />
+                        <p className="text-[10px] text-slate-400 mt-1">Clear the date to remove the opening balance from the Cash Book.</p>
                       </div>
                     </div>
                   </div>
