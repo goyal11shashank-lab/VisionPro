@@ -422,7 +422,7 @@ export const DEFAULT_APP_SETTINGS: AppSettings = {
 /**
  * Deeply merge source object into target object without mutating defaults
  */
-function deepMerge<T extends Record<string, any>>(target: T, source?: any): T {
+export function deepMerge<T extends Record<string, any>>(target: T, source?: any): T {
   if (!source || typeof source !== 'object') {
     return JSON.parse(JSON.stringify(target));
   }
