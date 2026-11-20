@@ -444,10 +444,10 @@ export const ExtraGodownsPage: React.FC = () => {
             </span>
             <div>
               <h1 className="text-xl font-bold text-slate-900 tracking-tight">
-                Extra Godowns & Secondary Warehouses
+                Legacy Stock Scope Administration
               </h1>
               <p className="text-xs text-slate-500 mt-0.5">
-                Manage independent secondary warehouse locations, dealer-operated godowns, and staff logins.
+                Historical stock-scope administration. Existing records and sync links remain here until approved Business conversion. Create new entities as Businesses.
               </p>
             </div>
           </div>
@@ -462,14 +462,7 @@ export const ExtraGodownsPage: React.FC = () => {
           >
             <RefreshCw className={`w-4 h-4 ${isLoading ? 'animate-spin text-blue-600' : ''}`} />
           </button>
-          <button
-            type="button"
-            onClick={handleOpenCreate}
-            className="inline-flex items-center gap-2 px-4 py-2 rounded-xl bg-blue-600 hover:bg-blue-700 text-white text-xs font-semibold shadow-xs hover:shadow-md transition-all cursor-pointer"
-          >
-            <Plus className="w-4 h-4" />
-            <span>Create Extra Godown</span>
-          </button>
+
         </div>
       </div>
 
@@ -542,22 +535,12 @@ export const ExtraGodownsPage: React.FC = () => {
           ) : filteredGodowns.length === 0 ? (
             <div className="p-12 text-center bg-white rounded-2xl border border-dashed border-slate-300">
               <Building2 className="w-10 h-10 text-slate-300 mx-auto mb-3" />
-              <h3 className="text-sm font-bold text-slate-800">No Extra Godowns Found</h3>
+              <h3 className="text-sm font-bold text-slate-800">No Historical Stock Scopes Found</h3>
               <p className="text-xs text-slate-500 max-w-sm mx-auto mt-1 mb-4">
                 {searchQuery
                   ? 'No locations match your search query.'
-                  : 'Create your first secondary warehouse or dealer godown to enable isolated operational accounts.'}
+                  : 'No historical stock scopes exist. New entities are created as independent Businesses.'}
               </p>
-              {!searchQuery && (
-                <button
-                  type="button"
-                  onClick={handleOpenCreate}
-                  className="inline-flex items-center gap-2 px-4 py-2 rounded-xl bg-blue-600 hover:bg-blue-700 text-white text-xs font-semibold shadow-xs"
-                >
-                  <Plus className="w-4 h-4" />
-                  <span>Create Extra Godown</span>
-                </button>
-              )}
             </div>
           ) : (
             <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">

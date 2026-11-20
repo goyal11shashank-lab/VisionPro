@@ -14,7 +14,7 @@ router.use(authenticateToken);
  * List extra godowns for active business context
  * If caller is a restricted godown staff, only returns their assigned godown!
  */
-router.get('/', async (req: Request, res: Response) => {
+router.get('/', requireAnyPermission(['inventory:view','inventory.view','godown:view','admin:manage_settings']), async (req: Request, res: Response) => {
   try {
     const businessId = req.user!.currentBusinessId;
 
@@ -38,69 +38,18 @@ router.get('/', async (req: Request, res: Response) => {
   }
 });
 
-/**
- * GET /api/godowns/main-warehouse/stock-lookup
- * Dedicated read-only stock search feed of Parent Business Main Warehouse stock.
- * STRICT ZERO-LEAK SECURITY: Returns available/physical/reserved stock only.
- * No cost prices, purchase rates, supplier info, or customer order data.
- */
-router.get('/main-warehouse/stock-lookup', async (req: Request, res: Response) => {
-  try {
-    const businessId = req.user!.currentBusinessId;
-    const { query, categoryId, sph, cyl, axis, add, side, limit, offset } = req.query;
-
-    const result = await GodownService.searchMainWarehouseStock(businessId, {
-      query: query as string,
-      categoryId: categoryId as string,
-      sph: sph as string,
-      cyl: cyl as string,
-      axis: axis as string,
-      add: add as string,
-      side: side as string,
-      limit: limit ? parseInt(limit as string, 10) : 50,
-      offset: offset ? parseInt(offset as string, 10) : 0,
-    });
-
-    res.json(result);
-  } catch (err: any) {
-    console.error('[GET /api/godowns/main-warehouse/stock-lookup Error]', err);
-    res.status(500).json({ error: 'MAIN_WAREHOUSE_SEARCH_FAILED', message: err.message });
-  }
-});
-
-/**
- * GET /api/godowns/main-warehouse-stock
- * Alias for main-warehouse stock search feed
- */
-router.get('/main-warehouse-stock', async (req: Request, res: Response) => {
-  try {
-    const businessId = req.user!.currentBusinessId;
-    const { query, categoryId, sph, cyl, axis, add, side, limit, offset } = req.query;
-
-    const result = await GodownService.searchMainWarehouseStock(businessId, {
-      query: query as string,
-      categoryId: categoryId as string,
-      sph: sph as string,
-      cyl: cyl as string,
-      axis: axis as string,
-      add: add as string,
-      side: side as string,
-      limit: limit ? parseInt(limit as string, 10) : 50,
-      offset: offset ? parseInt(offset as string, 10) : 0,
-    });
-
-    res.json(result);
-  } catch (err: any) {
-    console.error('[GET /api/godowns/main-warehouse-stock Error]', err);
-    res.status(500).json({ error: 'MAIN_WAREHOUSE_SEARCH_FAILED', message: err.message });
-  }
-});
+// Old parent-warehouse feeds exposed quantities. Use the linked Business boolean API.
+for (const path of ['/main-warehouse/stock-lookup','/main-warehouse-stock']) {
+  router.get(path, requireAnyPermission(['inventory:view','master:view','sales:view','sales:create','purchase:view','purchase:create','godown:view','godown:main_warehouse_search']), (_req: Request, res: Response) => {
+    res.status(410).json({error:'LEGACY_STOCK_FEED_RETIRED',message:'Use Business stock availability to check an exact item and optical power.'});
+  });
+}
 
 /**
  * GET /api/godowns/:id/stock
  * View stock balances for a specific godown
  */
-router.get('/:id/stock', async (req: Request, res: Response) => {
+router.get('/:id/stock', requireAnyPermission(['inventory:view','inventory.view','godown:view','admin:manage_settings']), async (req: Request, res: Response) => {
   try {
     const businessId = req.user!.currentBusinessId;
     const godownId = req.params.id;
@@ -130,7 +79,7 @@ router.get('/:id/stock', async (req: Request, res: Response) => {
  * View stock balances per godown or consolidated
  * If caller is restricted godown staff, strictly scoped to their godown!
  */
-router.get('/stock/balance', async (req: Request, res: Response) => {
+router.get('/stock/balance', requireAnyPermission(['inventory:view','inventory.view','godown:view','admin:manage_settings']), async (req: Request, res: Response) => {
   try {
     const businessId = req.user!.currentBusinessId;
     let targetGodownId = req.query.godownId as string | undefined;
@@ -159,7 +108,7 @@ router.get('/stock/balance', async (req: Request, res: Response) => {
  * GET /api/godowns/:id
  * Retrieve single godown details
  */
-router.get('/:id', async (req: Request, res: Response) => {
+router.get('/:id', requireAnyPermission(['inventory:view','inventory.view','godown:view','admin:manage_settings']), async (req: Request, res: Response) => {
   try {
     const businessId = req.user!.currentBusinessId;
     const godownId = req.params.id;
@@ -184,28 +133,9 @@ router.get('/:id', async (req: Request, res: Response) => {
  * POST /api/godowns
  * Create new Extra Godown (Admin only)
  */
-router.post(
-  '/',
-  requireAnyPermission(['godown:create', 'admin:manage_settings']),
-  async (req: Request, res: Response) => {
-    try {
-      // Godown staff cannot create godowns
-      if (req.user?.assignedGodownId) {
-        res.status(403).json({ error: 'PERMISSION_DENIED', message: 'Restricted godown staff cannot create godowns.' });
-        return;
-      }
-
-      const businessId = req.user!.currentBusinessId;
-      const userId = req.user!.id;
-
-      const created = await GodownService.createGodown(businessId, req.body, userId);
-      res.status(201).json(created);
-    } catch (err: any) {
-      console.error('[POST /api/godowns Error]', err);
-      res.status(400).json({ error: 'CREATE_GODOWN_FAILED', message: err.message });
-    }
-  }
-);
+router.post('/',requireAnyPermission(['godown:create','admin:manage_settings']),(_req:Request,res:Response)=>{
+  res.status(410).json({error:'LEGACY_ENTITY_CREATION_RETIRED',message:'Create an independent Business. Existing stock scopes and history are preserved for reviewed conversion.'});
+});
 
 /**
  * PUT /api/godowns/:id

@@ -196,8 +196,6 @@ export const NormalSalesVoucherPage: React.FC<Props> = ({ onNavigate, onSuccess,
   const canCancel = Boolean(
     hasPermission('sales:cancel') ||
     hasPermission('sales.cancel') ||
-    hasPermission('sales:edit') ||
-    hasPermission('sales.edit') ||
     hasPermission('admin')
   );
 

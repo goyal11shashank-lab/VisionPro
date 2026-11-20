@@ -7,6 +7,7 @@ export interface PaginationParams {
 }
 
 export interface InventoryReportFilters extends PaginationParams {
+  strictScope?: boolean;
   stockStatus?: 'ALL' | 'IN_STOCK' | 'ZERO_STOCK' | 'NEGATIVE_STOCK' | 'RESERVED' | 'LOW_STOCK';
   categoryId?: string;
   categoryCode?: string;
@@ -22,6 +23,7 @@ export interface InventoryReportFilters extends PaginationParams {
 }
 
 export interface StockLedgerFilters extends PaginationParams {
+  godownId?: string;
   batchId?: string;
   barcode?: string;
   uniqueItemId?: string;
@@ -31,6 +33,7 @@ export interface StockLedgerFilters extends PaginationParams {
 }
 
 export interface DocumentReportFilters extends PaginationParams {
+  godownId?: string;
   partyId?: string;
   startDate?: string;
   endDate?: string;
@@ -93,6 +96,8 @@ export class ReportService {
         GROUP BY batch_id, business_id
       `;
     }
+
+    if(filters.strictScope)conditions.push('s.batch_id IS NOT NULL');
 
     // Stock Status filter
     if (filters.stockStatus === 'IN_STOCK') {
@@ -278,6 +283,7 @@ export class ReportService {
     const params: any[] = [businessId];
     let paramIndex = 2;
 
+    if(filters.godownId){conditions.push(`sl.godown_id = $${paramIndex}`);params.push(filters.godownId);paramIndex++;}
     if (filters.batchId) {
       conditions.push(`sl.batch_id = $${paramIndex}`);
       params.push(filters.batchId);
@@ -425,6 +431,12 @@ export class ReportService {
     const conditions: string[] = ['pi.business_id = $1'];
     const params: any[] = [businessId];
     let paramIndex = 2;
+
+    if (filters.godownId) {
+      conditions.push(`pi.godown_id = $${paramIndex}`);
+      params.push(filters.godownId);
+      paramIndex++;
+    }
 
     if (filters.partyId) {
       conditions.push(`pi.supplier_party_id = $${paramIndex}`);
@@ -587,6 +599,12 @@ export class ReportService {
     const params: any[] = [businessId];
     let paramIndex = 2;
 
+    if (filters.godownId) {
+      conditions.push(`pi.godown_id = $${paramIndex}`);
+      params.push(filters.godownId);
+      paramIndex++;
+    }
+
     if (filters.partyId) {
       conditions.push(`pi.supplier_party_id = $${paramIndex}`);
       params.push(filters.partyId);
@@ -736,6 +754,12 @@ export class ReportService {
     const params: any[] = [businessId];
     let paramIndex = 2;
 
+    if (filters.godownId) {
+      conditions.push(`EXISTS (SELECT 1 FROM purchase_invoices origin_invoice WHERE origin_invoice.id=pr.purchase_invoice_id AND origin_invoice.business_id=pr.business_id AND origin_invoice.godown_id=$${paramIndex})`);
+      params.push(filters.godownId);
+      paramIndex++;
+    }
+
     if (filters.partyId) {
       conditions.push(`pr.supplier_party_id = $${paramIndex}`);
       params.push(filters.partyId);
@@ -842,6 +866,12 @@ export class ReportService {
     const conditions: string[] = ['si.business_id = $1'];
     const params: any[] = [businessId];
     let paramIndex = 2;
+
+    if (filters.godownId) {
+      conditions.push(`si.godown_id = $${paramIndex}`);
+      params.push(filters.godownId);
+      paramIndex++;
+    }
 
     if (filters.partyId) {
       conditions.push(`si.party_id = $${paramIndex}`);
@@ -1001,6 +1031,12 @@ export class ReportService {
     const params: any[] = [businessId];
     let paramIndex = 2;
 
+    if (filters.godownId) {
+      conditions.push(`si.godown_id = $${paramIndex}`);
+      params.push(filters.godownId);
+      paramIndex++;
+    }
+
     if (filters.partyId) {
       conditions.push(`si.party_id = $${paramIndex}`);
       params.push(filters.partyId);
@@ -1149,6 +1185,12 @@ export class ReportService {
     const conditions: string[] = ['sr.business_id = $1'];
     const params: any[] = [businessId];
     let paramIndex = 2;
+
+    if (filters.godownId) {
+      conditions.push(`EXISTS (SELECT 1 FROM sales_invoices origin_invoice WHERE origin_invoice.id=sr.sales_invoice_id AND origin_invoice.business_id=sr.business_id AND origin_invoice.godown_id=$${paramIndex})`);
+      params.push(filters.godownId);
+      paramIndex++;
+    }
 
     if (filters.partyId) {
       conditions.push(`sr.party_id = $${paramIndex}`);
@@ -1526,6 +1568,7 @@ export class ReportService {
   static async getPaymentReport(
     businessId: string,
     filters: PaginationParams & {
+      godownId?: string;
       paymentType?: string;
       paymentMode?: string;
       partyId?: string;
@@ -1542,6 +1585,12 @@ export class ReportService {
     const conditions: string[] = ['pm.business_id = $1'];
     const params: any[] = [businessId];
     let paramIndex = 2;
+
+    if (filters.godownId) {
+      conditions.push(`pm.godown_id = $${paramIndex}`);
+      params.push(filters.godownId);
+      paramIndex++;
+    }
 
     if (filters.paymentType && filters.paymentType !== 'ALL') {
       conditions.push(`pm.payment_type = $${paramIndex}`);

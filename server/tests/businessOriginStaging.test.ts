@@ -1,0 +1,21 @@
+import assert from 'node:assert/strict';import {readFileSync} from 'node:fs';import {assertSyntheticDatabase} from './assertSyntheticDatabase.js';assertSyntheticDatabase();
+import {pool} from '../db/index.js';import {BusinessOriginStagingService} from '../services/businessOriginStagingService.js';
+try{
+ const {rows:[exists]}=await pool.query(`SELECT to_regclass('public.business_origin_bindings') AS name`);if(!exists.name)await pool.query(readFileSync(new URL('../db/proposals/business-origin-bindings.sql',import.meta.url),'utf8'));
+ const {rows:[owner]}=await pool.query(`SELECT id FROM businesses LIMIT 1`);const {rows:[admin]}=await pool.query(`SELECT id FROM users WHERE is_super_admin=true LIMIT 1`);
+ const {rows:[origin]}=await pool.query(`INSERT INTO godowns(business_id,code,name) VALUES($1,$2,'Synthetic historical Ankit stock scope') RETURNING id`,[owner.id,'SYN-STAGE-'+Date.now()]);
+ const actor={isSuperAdmin:true,userId:admin.id};const input={legacyLocationId:origin.id,targetBusinessId:crypto.randomUUID(),name:'Synthetic Ankit Independent Business',decisionReference:'Synthetic explicit owner identity choice'};
+ const hashes=async(tables:string[])=>{const result=[];for(const table of tables){const {rows:[r]}=await pool.query(`SELECT md5(COALESCE(string_agg(row_to_json(t)::text,E'\n' ORDER BY row_to_json(t)::text),'')) AS h FROM public."${table}" t`);result.push([table,r.h]);}return JSON.stringify(result);};
+ const protectedTables=['users','user_roles','user_business_access','godowns','optical_stocks','stock_ledger','stock_reservations','sales_invoices','sales_orders','purchase_invoices','purchase_orders','customer_ledgers','supplier_ledgers','payments','dealer_orders','dealer_shipments','dealer_goods_receipts','b2b_order_sync_logs'];
+ const before=await hashes(protectedTables);
+ await assert.rejects(()=>BusinessOriginStagingService.stage(input,{...actor,isSuperAdmin:false}),/Super Administrator/);
+ await assert.rejects(()=>BusinessOriginStagingService.stage({...input,targetBusinessId:owner.id},actor),/separate Business/);
+ await pool.query(`CREATE OR REPLACE FUNCTION synthetic_reject_stage_audit() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN IF NEW.entity_type='business_origin_bindings' THEN RAISE EXCEPTION 'SYN_STAGE_AUDIT_FAILURE'; END IF; RETURN NEW; END $$; CREATE TRIGGER synthetic_reject_stage_audit BEFORE INSERT ON audit_logs FOR EACH ROW EXECUTE FUNCTION synthetic_reject_stage_audit()`);
+ try {await assert.rejects(()=>BusinessOriginStagingService.stage(input,actor),/SYN_STAGE_AUDIT_FAILURE/);assert.equal((await pool.query(`SELECT COUNT(*)::int AS n FROM businesses WHERE id=$1`,[input.targetBusinessId])).rows[0].n,0);}finally{await pool.query(`DROP TRIGGER synthetic_reject_stage_audit ON audit_logs;DROP FUNCTION synthetic_reject_stage_audit()`);}
+ const result=await BusinessOriginStagingService.stage(input,actor);assert.equal(result.state,'STAGED');assert.equal(await hashes(protectedTables),before,'Staging must not alter credentials, memberships, legacy stock/docs, or either logistics family');
+ const retry=await BusinessOriginStagingService.stage(input,actor);assert.equal(retry.idempotent,true);await assert.rejects(()=>BusinessOriginStagingService.stage({...input,targetBusinessId:crypto.randomUUID()},actor),/different Business/);
+ const {rows:[target]}=await pool.query(`SELECT status,settings_config FROM businesses WHERE id=$1`,[input.targetBusinessId]);assert.equal(target.status,'INACTIVE');assert.equal(target.settings_config.businessIdentity.legacyLocationId,origin.id);
+ assert.equal((await pool.query(`SELECT COUNT(*)::int AS n FROM user_business_access WHERE business_id=$1`,[input.targetBusinessId])).rows[0].n,0);
+ await assert.rejects(()=>pool.query(`UPDATE business_origin_bindings SET state='ACTIVE' WHERE business_id=$1`,[input.targetBusinessId]),/check constraint/);
+ console.log('PASS reversible staged Business identity: separate inactive record and immutable origin binding, no users provisioned, credentials/memberships/stock/docs/ledger/both logistics families unchanged, duplicate staging idempotent, conflicting mapping denied, audit failure rolls back identity, ACTIVE cutover blocked by schema.');
+}finally{await pool.end();}

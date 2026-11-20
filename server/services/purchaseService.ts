@@ -1,3 +1,4 @@
+import { PaymentService } from './paymentService.js';
 import { db, pool } from '../db/index.js';
 import {
   purchaseOrders,
@@ -22,6 +23,7 @@ import { calculateLineTax, calculateInvoiceTotals, round2 } from './taxCalculati
 import { findOrCreateOpticalBatch, OpticalPowerInput } from './opticalMasterService.js';
 import { AuditService } from './auditService.js';
 import { PoolClient } from 'pg';
+import { drizzle } from 'drizzle-orm/node-postgres';
 import { BusinessSettingsService } from './businessSettingsService.js';
 import { assertValidQuantity } from '../utils/quantityValidator.js';
 import { DocumentSequenceService } from './documentSequenceService.js';
@@ -147,8 +149,11 @@ export class PurchaseService {
   static async createPurchaseInvoice(
     businessId: string,
     data: CreatePurchaseInvoiceDTO,
-    userId?: string
+    userId?: string,
+    receiptTransaction?: { client: PoolClient; goodsReceiptId: string }
   ) {
+    // Internal caller-only context. Never read this from a purchase API payload.
+    const invoiceDb = receiptTransaction ? drizzle(receiptTransaction.client) : db;
     if (!businessId) throw new Error('Business ID is strictly required');
     if (!data.supplierPartyId) throw new Error('Supplier party ID is required');
     if (!data.lines || data.lines.length === 0) throw new Error('At least one purchase line is required');
@@ -161,7 +166,7 @@ export class PurchaseService {
     }
 
     // 1. Verify supplier party
-    const [supplier] = await db
+    const [supplier] = await invoiceDb
       .select()
       .from(parties)
       .where(and(eq(parties.businessId, businessId), eq(parties.id, data.supplierPartyId)))
@@ -175,7 +180,7 @@ export class PurchaseService {
       throw new Error('Selected party is a CUSTOMER. Only parties of type SUPPLIER or BOTH can be used for purchase.');
     }
 
-    const [biz] = await db
+    const [biz] = await invoiceDb
       .select()
       .from(businesses)
       .where(eq(businesses.id, businessId))
@@ -212,7 +217,7 @@ export class PurchaseService {
       const line = data.lines[i];
       if (!line.uniqueItemId) throw new Error(`Line ${i + 1}: Unique Item ID is missing`);
 
-      const [uItem] = await db
+      const [uItem] = await invoiceDb
         .select({
           uniqueItem: uniqueItems,
           primaryItem: primaryItems,
@@ -325,9 +330,23 @@ export class PurchaseService {
     });
 
     // 4. Insert into database inside transaction
-    const client = await pool.connect();
+    const client = receiptTransaction?.client || await pool.connect();
     try {
-      await client.query('BEGIN');
+      if (!receiptTransaction) await client.query('BEGIN');
+
+      if (receiptTransaction) {
+        const grn = await client.query(
+          `SELECT id, total_received_qty FROM dealer_goods_receipts
+           WHERE id = $1 AND dealer_business_id = $2
+           AND dealer_purchase_order_id IS NOT DISTINCT FROM $3::uuid
+           AND dealer_purchase_invoice_id IS NULL FOR UPDATE`,
+          [receiptTransaction.goodsReceiptId, businessId, data.purchaseOrderId || null]
+        );
+        const quantity = data.lines.reduce((n, line) => n + Number(line.quantity), 0);
+        if (grn.rows.length !== 1 || Math.abs(Number(grn.rows[0].total_received_qty) - quantity) > 0.001) {
+          throw new Error('Purchase posting must match its unposted dealer goods receipt.');
+        }
+      }
 
       const invoiceNumber =
         data.invoiceNumber ||
@@ -456,7 +475,7 @@ export class PurchaseService {
         if (poRow.status === 'CANCELLED') {
           throw new Error(`Cannot convert cancelled Purchase Order ${poRow.order_number}`);
         }
-        if (poRow.source === 'DEALER_ORDER' || poRow.dealer_order_id) {
+        if ((poRow.source === 'DEALER_ORDER' || poRow.dealer_order_id) && !receiptTransaction) {
           throw new Error(
             `Dealer-linked purchase orders must be processed via the Dealer GRN lifecycle and cannot be directly converted to a Purchase Invoice.`
           );
@@ -502,7 +521,7 @@ export class PurchaseService {
         await this._postPurchaseInvoiceInternal(client, businessId, invoice.id, userId);
       }
 
-      await client.query('COMMIT');
+      if (!receiptTransaction) await client.query('COMMIT');
 
       await AuditService.log({
         businessId,
@@ -515,16 +534,16 @@ export class PurchaseService {
           invoiceNumber: invoice.invoice_number,
           supplierPartyId: invoice.supplier_party_id,
           grandTotal: invoice.grand_total,
-          status: 'POSTED',
+          status: targetStatus,
         },
-      });
+      }, receiptTransaction?.client);
 
-      return await this.getPurchaseInvoiceById(businessId, invoice.id);
+      return receiptTransaction ? { ...invoice, id: invoice.id } : await this.getPurchaseInvoiceById(businessId, invoice.id);
     } catch (err) {
-      await client.query('ROLLBACK');
+      if (!receiptTransaction) await client.query('ROLLBACK');
       throw err;
     } finally {
-      client.release();
+      if (!receiptTransaction) client.release();
     }
   }
 
@@ -705,6 +724,10 @@ export class PurchaseService {
             batchSum += bQty;
 
             let resolvedBatchId = b.batchId;
+            if (resolvedBatchId) {
+              const ownedBatch=await client.query(`SELECT id FROM optical_batches WHERE id=$1 AND business_id=$2 AND unique_item_id=$3`,[resolvedBatchId,businessId,line.uniqueItemId]);
+              if(!ownedBatch.rows.length) throw new Error('Batch does not belong to this business and selected item.');
+            }
             if (!resolvedBatchId) {
               const res = await findOrCreateOpticalBatch({
                 businessId,
@@ -876,115 +899,12 @@ export class PurchaseService {
         }
       }
 
-      // If target status is POSTED, re-apply stock, lots, and ledger
+      // Reuse the canonical posting path, including godown-scoped stock, current
+      // ledger columns and lot pricing, inside this same update transaction.
       if (targetStatus === 'POSTED') {
-        const grandTotalNum = parseFloat(totals.grandTotal.toFixed(2));
-
-        for (const pLine of processedLines) {
-          for (const b of pLine.resolvedBatches) {
-            const batchId = b.batchId;
-            const qtyNum = b.quantity;
-
-            // Optical stock update
-            const stockRes = await client.query(
-              `SELECT * FROM optical_stocks WHERE business_id = $1 AND batch_id = $2 FOR UPDATE`,
-              [businessId, batchId]
-            );
-
-            let newPhysical = qtyNum;
-            let newAvailable = qtyNum;
-
-            if (stockRes.rows.length > 0) {
-              const curStock = stockRes.rows[0];
-              newPhysical = round2(parseFloat(curStock.physical_stock) + qtyNum);
-              newAvailable = round2(newPhysical - parseFloat(curStock.reserved_stock));
-
-              await client.query(
-                `UPDATE optical_stocks 
-                 SET physical_stock = $1, available_stock = $2, updated_at = NOW() 
-                 WHERE id = $3`,
-                [newPhysical.toFixed(2), newAvailable.toFixed(2), curStock.id]
-              );
-            } else {
-              await client.query(
-                `INSERT INTO optical_stocks (
-                  business_id, batch_id, physical_stock, reserved_stock, available_stock
-                ) VALUES ($1, $2, $3, '0.00', $3)`,
-                [businessId, batchId, qtyNum.toFixed(2)]
-              );
-            }
-
-            // Stock ledger
-            await client.query(
-              `INSERT INTO stock_ledger (
-                business_id, batch_id, transaction_type, reference_type, reference_id,
-                quantity, unit_cost, balance_after, created_by
-              ) VALUES ($1, $2, 'INWARD', 'PURCHASE_INVOICE', $3, $4, $5, $6, $7)`,
-              [
-                businessId,
-                batchId,
-                invoiceId,
-                qtyNum.toFixed(2),
-                b.rate.toFixed(2),
-                newPhysical.toFixed(2),
-                userId || null,
-              ]
-            );
-
-            // Purchase lot
-            await client.query(
-              `INSERT INTO purchase_lots (
-                business_id, purchase_invoice_id, batch_id,
-                received_quantity, available_quantity, unit_cost, received_date
-              ) VALUES ($1, $2, $3, $4, $4, $5, $6)`,
-              [
-                businessId,
-                invoiceId,
-                batchId,
-                qtyNum.toFixed(2),
-                b.rate.toFixed(2),
-                invoiceDate.toISOString(),
-              ]
-            );
-          }
-
-          // Update unique item last purchase price
-          await client.query(
-            `UPDATE unique_items 
-             SET purchase_price = $1, updated_at = NOW() 
-             WHERE id = $2 AND business_id = $3`,
-            [pLine.taxRes.rate.toFixed(2), pLine.uniqueItemId, businessId]
-          );
-        }
-
-        // Supplier ledger running balance
-        const lastLedgerRes = await client.query(
-          `SELECT balance FROM supplier_ledgers 
-           WHERE business_id = $1 AND party_id = $2 
-           ORDER BY transaction_date DESC, created_at DESC 
-           LIMIT 1`,
-          [businessId, data.supplierPartyId]
-        );
-
-        const prevBalance = lastLedgerRes.rows.length > 0 ? parseFloat(lastLedgerRes.rows[0].balance) : 0;
-        const newBalance = round2(prevBalance + grandTotalNum);
-
-        await client.query(
-          `INSERT INTO supplier_ledgers (
-            business_id, party_id, transaction_type, transaction_date, reference_type, reference_id,
-            credit, debit, balance, notes, created_by
-          ) VALUES ($1, $2, 'PURCHASE', $3, 'PURCHASE_INVOICE', $4, $5, '0.00', $6, $7, $8)`,
-          [
-            businessId,
-            data.supplierPartyId,
-            invoiceDate.toISOString(),
-            invoiceId,
-            grandTotalNum.toFixed(2),
-            newBalance.toFixed(2),
-            `Purchase Invoice #${existingInv.invoice_number}`,
-            userId || null,
-          ]
-        );
+        await client.query(`UPDATE purchase_invoices SET status='DRAFT' WHERE business_id=$1 AND id=$2`,[businessId,invoiceId]);
+        await this._postPurchaseInvoiceInternal(client,businessId,invoiceId,userId);
+        await PaymentService.syncPurchaseInvoicePaymentStatus(client,businessId,invoiceId);
       }
 
       await client.query('COMMIT');
@@ -1938,8 +1858,10 @@ export class PurchaseService {
   static async createPurchaseOrder(
     businessId: string,
     data: CreatePurchaseOrderDTO,
-    userId?: string
+    userId?: string,
+    transactionClient?: PoolClient
   ) {
+    const readDb = transactionClient ? drizzle(transactionClient) : db;
     if (!businessId) throw new Error('Business ID is strictly required');
     if (!data.supplierPartyId) throw new Error('Supplier party ID is required');
     if (!data.lines || data.lines.length === 0) throw new Error('At least one order line is required');
@@ -1951,7 +1873,7 @@ export class PurchaseService {
       }
     }
 
-    const [supplier] = await db
+    const [supplier] = await readDb
       .select()
       .from(parties)
       .where(and(eq(parties.businessId, businessId), eq(parties.id, data.supplierPartyId)))
@@ -1972,7 +1894,7 @@ export class PurchaseService {
       const line = data.lines[i];
       if (!line.uniqueItemId) throw new Error(`Line ${i + 1}: Unique Item ID is missing`);
 
-      const [uItem] = await db
+      const [uItem] = await readDb
         .select({
           uniqueItem: uniqueItems,
           primaryItem: primaryItems,
@@ -2062,9 +1984,9 @@ export class PurchaseService {
       gstMode,
     });
 
-    const client = await pool.connect();
+    const client = transactionClient || await pool.connect();
     try {
-      await client.query('BEGIN');
+      if (!transactionClient) await client.query('BEGIN');
 
       const orderNumber =
         data.orderNumber ||
@@ -2164,7 +2086,7 @@ export class PurchaseService {
         );
       }
 
-      await client.query('COMMIT');
+      if (!transactionClient) await client.query('COMMIT');
 
       await AuditService.log({
         businessId,
@@ -2179,14 +2101,14 @@ export class PurchaseService {
           grandTotal: order.grand_total,
           status: 'OPEN',
         },
-      });
+      }, transactionClient);
 
-      return await this.getPurchaseOrderById(businessId, order.id);
+      return await this.getPurchaseOrderById(businessId, order.id, transactionClient);
     } catch (err) {
-      await client.query('ROLLBACK');
+      if (!transactionClient) await client.query('ROLLBACK');
       throw err;
     } finally {
-      client.release();
+      if (!transactionClient) client.release();
     }
   }
 
@@ -2273,12 +2195,14 @@ export class PurchaseService {
   /**
    * Retrieves a single Purchase Order with lines, batches, and supplier
    */
-  static async getPurchaseOrderById(businessId: string, orderId: string) {
+  static async getPurchaseOrderById(businessId: string, orderId: string, transactionClient?: PoolClient) {
+    const readDb = transactionClient ? drizzle(transactionClient) : db;
+    const queryClient = transactionClient || pool;
     if (!businessId || !orderId || !isValidUUID(orderId)) {
       throw new Error(`Purchase order not found with ID ${orderId}`);
     }
 
-    const [orderRow] = await db
+    const [orderRow] = await readDb
       .select({
         order: purchaseOrders,
         supplier: {
@@ -2303,7 +2227,7 @@ export class PurchaseService {
       throw new Error(`Purchase order not found with ID ${orderId}`);
     }
 
-    const lines = await db
+    const lines = await readDb
       .select({
         line: purchaseOrderLines,
         uniqueItem: uniqueItems,
@@ -2314,39 +2238,47 @@ export class PurchaseService {
       .innerJoin(uniqueItems, eq(purchaseOrderLines.uniqueItemId, uniqueItems.id))
       .leftJoin(primaryItems, eq(uniqueItems.primaryItemId, primaryItems.id))
       .leftJoin(categories, eq(primaryItems.categoryId, categories.id))
-      .where(eq(purchaseOrderLines.purchaseOrderId, orderId));
+      .where(eq(purchaseOrderLines.purchaseOrderId, orderId))
+      .orderBy(purchaseOrderLines.id);
 
     // Query invoiced quantity by item and by batch from active linked purchase invoices
-    const invoicedLinesRes = await pool.query(
-      `SELECT pil.unique_item_id, COALESCE(SUM(pil.quantity), 0) as total_invoiced
+    const invoicedLinesRes = await queryClient.query(
+      `SELECT pil.unique_item_id, pil.rate, pil.gst_rate, COALESCE(SUM(pil.quantity), 0) as total_invoiced
        FROM purchase_invoice_lines pil
        JOIN purchase_invoices pi ON pil.purchase_invoice_id = pi.id
        WHERE pi.business_id = $1 AND pi.purchase_order_id = $2 AND pi.status != 'CANCELLED'
-       GROUP BY pil.unique_item_id`,
+       GROUP BY pil.unique_item_id, pil.rate, pil.gst_rate`,
       [businessId, orderId]
     );
+    const commercialKey = (id: string, rate: unknown, gst: unknown) => `${id}:${Number(rate || 0)}:${Number(gst || 0)}`;
     const invoicedQtyByItem = new Map<string, number>();
+    const invoicedQtyByCommercialItem = new Map<string, number>();
     for (const r of invoicedLinesRes.rows) {
-      invoicedQtyByItem.set(r.unique_item_id, parseFloat(r.total_invoiced || '0'));
+      const quantity = Number(r.total_invoiced || 0);
+      invoicedQtyByItem.set(r.unique_item_id, (invoicedQtyByItem.get(r.unique_item_id) || 0) + quantity);
+      invoicedQtyByCommercialItem.set(commercialKey(r.unique_item_id, r.rate, r.gst_rate), quantity);
     }
 
-    const invoicedBatchesRes = await pool.query(
-      `SELECT pilb.batch_id, COALESCE(SUM(pilb.quantity), 0) as total_invoiced
+    const invoicedBatchesRes = await queryClient.query(
+      `SELECT pilb.batch_id, pil.rate, pil.gst_rate, COALESCE(SUM(pilb.quantity), 0) as total_invoiced
        FROM purchase_invoice_line_batches pilb
        JOIN purchase_invoice_lines pil ON pilb.purchase_invoice_line_id = pil.id
        JOIN purchase_invoices pi ON pil.purchase_invoice_id = pi.id
        WHERE pi.business_id = $1 AND pi.purchase_order_id = $2 AND pi.status != 'CANCELLED'
-       GROUP BY pilb.batch_id`,
+       GROUP BY pilb.batch_id, pil.rate, pil.gst_rate`,
       [businessId, orderId]
     );
     const invoicedQtyByBatch = new Map<string, number>();
+    const invoicedQtyByCommercialBatch = new Map<string, number>();
     for (const r of invoicedBatchesRes.rows) {
-      invoicedQtyByBatch.set(r.batch_id, parseFloat(r.total_invoiced || '0'));
+      const quantity = Number(r.total_invoiced || 0);
+      invoicedQtyByBatch.set(r.batch_id, (invoicedQtyByBatch.get(r.batch_id) || 0) + quantity);
+      invoicedQtyByCommercialBatch.set(commercialKey(r.batch_id, r.rate, r.gst_rate), quantity);
     }
 
     const populatedLines = await Promise.all(
       lines.map(async l => {
-        const batchAllocations = await db
+        const batchAllocations = await readDb
           .select({
             batchAlloc: purchaseOrderLineBatches,
             batch: opticalBatches,
@@ -2356,33 +2288,60 @@ export class PurchaseService {
           .where(eq(purchaseOrderLineBatches.purchaseOrderLineId, l.line.id));
 
         const lineQty = parseFloat(l.line.quantity);
-        const invQty = invoicedQtyByItem.get(l.line.uniqueItemId) || 0;
-        const remQty = Math.max(0, round2(lineQty - invQty));
-
         return {
           ...l.line,
           uniqueItem: l.uniqueItem,
           primaryItem: l.primaryItem,
           category: l.category,
-          invoicedQuantity: invQty,
-          remainingQuantity: remQty,
-          batches: batchAllocations.map(ba => {
-            const bQty = parseFloat(ba.batchAlloc.quantity);
-            const invBQty = invoicedQtyByBatch.get(ba.batch.id) || 0;
-            const remBQty = Math.max(0, round2(bQty - invBQty));
-            return {
-              ...ba.batchAlloc,
-              batch: ba.batch,
-              invoicedQuantity: invBQty,
-              remainingQuantity: remBQty,
-            };
-          }),
+          invoicedQuantity: 0,
+          remainingQuantity: lineQty,
+          batches: batchAllocations.map(ba => ({
+            ...ba.batchAlloc,
+            batch: ba.batch,
+            invoicedQuantity: 0,
+            remainingQuantity: Number(ba.batchAlloc.quantity),
+          })),
         };
       })
     );
 
+    // Allocate each invoiced unit once, first to matching commercial lines, then
+    // to remaining quantities when an invoice legitimately used a revised rate.
+    // Item-only totals must never be subtracted from every power/price line.
+    const take = (budget: Map<string, number>, key: string, quantity: number) => {
+      const used = Math.min(Math.max(0, budget.get(key) || 0), Math.max(0, quantity));
+      budget.set(key, round2((budget.get(key) || 0) - used));
+      return used;
+    };
+    for (const exact of [true, false]) {
+      for (const line of populatedLines) {
+        const itemKey = commercialKey(line.uniqueItemId, line.rate, line.gstRate);
+        if (line.batches.length) {
+          for (const batch of line.batches) {
+            const key = commercialKey(batch.batchId, line.rate, line.gstRate);
+            const remaining = Number(batch.quantity) - batch.invoicedQuantity;
+            const used = take(exact ? invoicedQtyByCommercialBatch : invoicedQtyByBatch, exact ? key : batch.batchId, remaining);
+            if (exact) {
+              take(invoicedQtyByBatch, batch.batchId, used);
+              take(invoicedQtyByCommercialItem, itemKey, used);
+            }
+            take(invoicedQtyByItem, line.uniqueItemId, used);
+            batch.invoicedQuantity = round2(batch.invoicedQuantity + used);
+            batch.remainingQuantity = Math.max(0, round2(Number(batch.quantity) - batch.invoicedQuantity));
+          }
+          line.invoicedQuantity = round2(line.batches.reduce((sum, batch) => sum + batch.invoicedQuantity, 0));
+        } else {
+          const remaining = Number(line.quantity) - line.invoicedQuantity;
+          const used = take(exact ? invoicedQtyByCommercialItem : invoicedQtyByItem, exact ? itemKey : line.uniqueItemId, remaining);
+          if (exact) take(invoicedQtyByItem, line.uniqueItemId, used);
+          line.invoicedQuantity = round2(line.invoicedQuantity + used);
+        }
+        line.remainingQuantity = Math.max(0, round2(Number(line.quantity) - line.invoicedQuantity));
+      }
+    }
+
     // Query linked Purchase Invoices
-    const linkedInvoicesRes = await pool.query(
+    const linkedInvoicesRes = await queryClient.query(
       `SELECT id, invoice_number, invoice_date, status, taxable_amount, grand_total, created_at
        FROM purchase_invoices
        WHERE business_id = $1 AND purchase_order_id = $2
@@ -2391,7 +2350,7 @@ export class PurchaseService {
     );
 
     // Query linked shipments (via dealer_purchase_order_id OR dealer_order_id)
-    const linkedShipmentsRes = await pool.query(
+    const linkedShipmentsRes = await queryClient.query(
       `SELECT id, shipment_number, dispatch_date, status, courier_name, tracking_number,
               vehicle_number, total_packages, total_quantity, created_at
        FROM dealer_shipments
@@ -2401,7 +2360,7 @@ export class PurchaseService {
     );
 
     // Query linked goods receipts
-    const linkedGrnsRes = await pool.query(
+    const linkedGrnsRes = await queryClient.query(
       `SELECT id, receipt_number, receipt_date, status, total_received_qty, total_damaged_qty, total_short_qty, created_at
        FROM dealer_goods_receipts
        WHERE dealer_business_id = $1 AND (dealer_purchase_order_id = $2 OR dealer_shipment_id IN (
@@ -2415,7 +2374,7 @@ export class PurchaseService {
     const orderedQty = round2(populatedLines.reduce((acc, l) => acc + parseFloat((l as any).quantity || '0'), 0));
     
     // Invoiced quantity from active linked purchase invoices
-    const invoicedQtyRes = await pool.query(
+    const invoicedQtyRes = await queryClient.query(
       `SELECT COALESCE(SUM(pil.quantity), 0) as total_invoiced
        FROM purchase_invoice_lines pil
        JOIN purchase_invoices pi ON pil.purchase_invoice_id = pi.id

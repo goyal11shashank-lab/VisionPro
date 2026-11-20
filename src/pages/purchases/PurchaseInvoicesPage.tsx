@@ -30,7 +30,9 @@ import { exportToExcel, ExcelColumn } from '../../utils/excelExporter.js';
 import { exportToCsv } from '../../utils/csvExporter.js';
 
 export const PurchaseInvoicesPage: React.FC = () => {
-  const { currentBusiness } = useAuth();
+  const { currentBusiness, hasPermission } = useAuth();
+  const canDeleteInvoice = ['purchase:delete','purchase.delete','purchase:invoice:delete','purchase.invoice.delete'].some(hasPermission);
+  const canCancelInvoice = ['purchase:cancel','purchase.cancel'].some(hasPermission);
   const [invoices, setInvoices] = useState<PurchaseInvoice[]>([]);
   const [loading, setLoading] = useState<boolean>(true);
   const [error, setError] = useState<string | null>(null);
@@ -644,7 +646,7 @@ export const PurchaseInvoicesPage: React.FC = () => {
               Edit Purchase Bill
             </button>
           )}
-          {contextMenu.invoice.status === 'POSTED' && (
+          {canCancelInvoice && contextMenu.invoice.status === 'POSTED' && (
             <button
               onClick={() => {
                 const inv = contextMenu.invoice!;
@@ -658,7 +660,7 @@ export const PurchaseInvoicesPage: React.FC = () => {
             </button>
           )}
           <div className="my-1 border-t border-slate-100"></div>
-          <button
+          {canDeleteInvoice && (<button
             onClick={() => {
               const inv = contextMenu.invoice!;
               setContextMenu({ visible: false, x: 0, y: 0, invoice: null });
@@ -668,7 +670,7 @@ export const PurchaseInvoicesPage: React.FC = () => {
           >
             <Trash2 className="w-4 h-4 text-rose-500" />
             Delete Purchase Bill
-          </button>
+          </button>)}
         </div>
       )}
 

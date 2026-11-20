@@ -356,7 +356,7 @@ export class SearchService {
            COALESCE(p.name, 'Direct Item') AS primary_item_name
          FROM unique_items u
          LEFT JOIN primary_items p ON u.primary_item_id = p.id
-         LEFT JOIN categories c ON COALESCE(u.category_id, p.category_id) = c.id
+         LEFT JOIN categories c ON p.category_id = c.id
          WHERE u.business_id = $1 
            AND (u.name ILIKE $2 OR u.code ILIKE $2 OR COALESCE(p.name, '') ILIKE $2)
          ORDER BY u.name ASC

@@ -1,3 +1,5 @@
+import {getAssignedB2bHistory} from '../services/assignedB2bHistoryService.js';
+import {getAssignedFinancialActivity} from '../services/assignedFinancialActivityService.js';
 import { Router, Request, Response } from 'express';
 import { authenticateToken } from '../middleware/auth.js';
 import { requireAnyPermission } from '../middleware/permission.js';
@@ -16,6 +18,18 @@ function sendXlsx(res: Response, fileName: string, buffer: Buffer) {
   res.setHeader('Content-Length', buffer.length);
   res.send(buffer);
 }
+
+router.get('/assigned-b2b-history',authenticateToken,requireAnyPermission(['purchase:view','purchase.view','reports:view']),async(req:Request,res:Response):Promise<void>=>{
+ if(!req.user?.assignedGodownId){res.status(403).json({error:'This history requires an assigned historical stock origin.'});return;}
+ if(req.query.export==='true'){res.status(403).json({error:'Historical sync export is not enabled.'});return;}
+ try{res.json({success:true,...await getAssignedB2bHistory({businessId:req.user.currentBusinessId,originId:req.user.assignedGodownId},{page:Number(req.query.page)||1,limit:Number(req.query.limit)||25,status:req.query.status as string})});}catch(error:any){res.status(400).json({error:error.message});}
+});
+
+router.get('/assigned-financial-activity',authenticateToken,requireAnyPermission(['accounts:view','reports:view']),async(req:Request,res:Response):Promise<void>=>{
+ if(!req.user?.assignedGodownId){res.status(403).json({error:'This history requires an assigned historical stock origin.'});return;}
+ if(req.query.export==='true'){res.status(403).json({error:'Export is not enabled for unreconciled historical activity.'});return;}
+ try{res.json({success:true,...await getAssignedFinancialActivity({businessId:req.user.currentBusinessId,originId:req.user.assignedGodownId},{partyType:req.query.partyType as string,partyId:req.query.partyId as string,startDate:req.query.startDate as string,endDate:req.query.endDate as string,page:Number(req.query.page)||1,limit:Number(req.query.limit)||50})});}catch(error:any){res.status(400).json({error:error.message});}
+});
 
 /**
  * 1. INVENTORY STOCK REPORT
@@ -47,7 +61,7 @@ router.get(
             cyl: req.query.cyl !== undefined ? Number(req.query.cyl) : undefined,
             categoryId: req.query.categoryId as string,
             uniqueItemId: req.query.uniqueItemId as string,
-            godownId: req.query.godownId as string,
+            godownId: req.user?.assignedGodownId || req.query.godownId as string,
           }
         );
         sendXlsx(res, fileName, buffer);
@@ -55,6 +69,7 @@ router.get(
       }
 
       const report = await ReportService.getInventoryReport(businessId, {
+        strictScope: Boolean(req.user?.assignedGodownId),
         stockStatus: req.query.stockStatus as any,
         categoryId: req.query.categoryId as string,
         categoryCode: req.query.categoryCode as string,
@@ -66,7 +81,7 @@ router.get(
         axis: req.query.axis !== undefined ? Number(req.query.axis) : undefined,
         add: req.query.add !== undefined ? Number(req.query.add) : undefined,
         side: req.query.side as string,
-        godownId: req.query.godownId as string,
+        godownId: req.user?.assignedGodownId || req.query.godownId as string,
         page: req.query.page ? Number(req.query.page) : 1,
         limit: req.query.limit ? Number(req.query.limit) : 50,
       });
@@ -114,6 +129,7 @@ router.get(
       }
 
       const report = await ReportService.getStockLedgerReport(businessId, {
+        godownId: req.user?.assignedGodownId || undefined,
         batchId: req.query.batchId as string,
         barcode: req.query.barcode as string,
         uniqueItemId: req.query.uniqueItemId as string,
@@ -167,6 +183,7 @@ router.get(
       }
 
       const report = await ReportService.getPurchaseReport(businessId, {
+        godownId: req.user?.assignedGodownId || undefined,
         partyId: req.query.partyId as string,
         startDate: req.query.startDate as string,
         endDate: req.query.endDate as string,
@@ -219,6 +236,7 @@ router.get(
       }
 
       const report = await ReportService.getPurchaseDetailReport(businessId, {
+        godownId: req.user?.assignedGodownId || undefined,
         partyId: req.query.partyId as string,
         startDate: req.query.startDate as string,
         endDate: req.query.endDate as string,
@@ -271,6 +289,7 @@ router.get(
       }
 
       const report = await ReportService.getPurchaseReturnReport(businessId, {
+        godownId: req.user?.assignedGodownId || undefined,
         partyId: req.query.partyId as string,
         startDate: req.query.startDate as string,
         endDate: req.query.endDate as string,
@@ -325,6 +344,7 @@ router.get(
       }
 
       const report = await ReportService.getSalesReport(businessId, {
+        godownId: req.user?.assignedGodownId || undefined,
         partyId: req.query.partyId as string,
         startDate: req.query.startDate as string,
         endDate: req.query.endDate as string,
@@ -380,6 +400,7 @@ router.get(
       }
 
       const report = await ReportService.getSalesDetailReport(businessId, {
+        godownId: req.user?.assignedGodownId || undefined,
         partyId: req.query.partyId as string,
         startDate: req.query.startDate as string,
         endDate: req.query.endDate as string,
@@ -432,6 +453,7 @@ router.get(
       }
 
       const report = await ReportService.getSalesReturnReport(businessId, {
+        godownId: req.user?.assignedGodownId || undefined,
         partyId: req.query.partyId as string,
         startDate: req.query.startDate as string,
         endDate: req.query.endDate as string,
@@ -634,6 +656,7 @@ router.get(
       }
 
       const report = await ReportService.getPaymentReport(businessId, {
+        godownId: req.user?.assignedGodownId || undefined,
         paymentType: req.query.paymentType as string,
         paymentMode: req.query.paymentMode as string,
         partyId: req.query.partyId as string,

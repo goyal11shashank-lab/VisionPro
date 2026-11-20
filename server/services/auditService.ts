@@ -1,3 +1,5 @@
+import { drizzle } from 'drizzle-orm/node-postgres';
+import type { PoolClient } from 'pg';
 import { db } from '../db/index.js';
 import { auditLogs } from '../db/schema.js';
 import { Request } from 'express';
@@ -37,7 +39,7 @@ function sanitizeAuditData(data: any): any {
   return sanitized;
 }
 
-export async function recordAuditLog(params: RecordAuditParams) {
+export async function recordAuditLog(params: RecordAuditParams, transactionClient?: PoolClient) {
   try {
     let ipAddress: string | undefined;
     let userAgent: string | undefined;
@@ -51,7 +53,8 @@ export async function recordAuditLog(params: RecordAuditParams) {
     const cleanPrevious = sanitizeAuditData(params.previousValue);
     const cleanNew = sanitizeAuditData(params.newValue);
 
-    const [log] = await db.insert(auditLogs).values({
+    const auditDb = transactionClient ? drizzle(transactionClient) : db;
+    const [log] = await auditDb.insert(auditLogs).values({
       businessId: params.businessId || null,
       userId: params.userId || null,
       action: params.action,
@@ -66,6 +69,7 @@ export async function recordAuditLog(params: RecordAuditParams) {
 
     return log;
   } catch (error) {
+    if (transactionClient) throw error;
     console.error('[Audit Service Error] Failed to write audit log:', error);
     // Audit logging should not crash the main transaction if DB allows, but we log the error
     return null;
@@ -73,7 +77,7 @@ export async function recordAuditLog(params: RecordAuditParams) {
 }
 
 export class AuditService {
-  static async log(params: RecordAuditParams) {
-    return recordAuditLog(params);
+  static async log(params: RecordAuditParams, transactionClient?: PoolClient) {
+    return recordAuditLog(params, transactionClient);
   }
 }

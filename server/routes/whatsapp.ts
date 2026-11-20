@@ -1,6 +1,7 @@
 import { Router, Request, Response, NextFunction } from 'express';
 import { WhatsAppService } from '../services/whatsapp/whatsappService.js';
 import { authenticateToken } from '../middleware/auth.js';
+import { requireAnyPermission } from '../middleware/permission.js';
 import { pool } from '../db/index.js';
 
 const router = Router();
@@ -21,7 +22,9 @@ router.use((req: Request, res: Response, next: NextFunction) => {
  * GET /api/whatsapp/status
  * Get connection session status & configuration
  */
-router.get('/status', async (req: Request, res: Response) => {
+router.get('/status',
+  requireAnyPermission(['admin:manage_settings', 'sales:view', 'sales.create', 'sales:create', 'accounts:view', 'accounts.view']),
+  async (req: Request, res: Response) => {
   try {
     const businessId = (req as any).businessId;
     const session = await WhatsAppService.getSession(businessId);
@@ -41,7 +44,9 @@ router.get('/status', async (req: Request, res: Response) => {
  * POST /api/whatsapp/connect
  * Initiate a new QR code link session
  */
-router.post('/connect', async (req: Request, res: Response) => {
+router.post('/connect',
+  requireAnyPermission(['admin:manage_settings']),
+  async (req: Request, res: Response) => {
   try {
     const businessId = (req as any).businessId;
     const sessionData = await WhatsAppService.initiateLinkSession(businessId);
@@ -60,7 +65,9 @@ router.post('/connect', async (req: Request, res: Response) => {
  * GET /api/whatsapp/qr
  * Fetch current QR code challenge when authentication is required
  */
-router.get('/qr', async (req: Request, res: Response) => {
+router.get('/qr',
+  requireAnyPermission(['admin:manage_settings']),
+  async (req: Request, res: Response) => {
   try {
     const businessId = (req as any).businessId;
     const qrData = await WhatsAppService.getQR(businessId);
@@ -78,7 +85,9 @@ router.get('/qr', async (req: Request, res: Response) => {
  * POST /api/whatsapp/pairing-code
  * Request 8-character pairing code for linking via phone number without camera
  */
-router.post('/pairing-code', async (req: Request, res: Response) => {
+router.post('/pairing-code',
+  requireAnyPermission(['admin:manage_settings']),
+  async (req: Request, res: Response) => {
   try {
     const businessId = (req as any).businessId;
     const { phone } = req.body;
@@ -103,7 +112,9 @@ router.post('/pairing-code', async (req: Request, res: Response) => {
  * POST /api/whatsapp/confirm-auth
  * Confirm authentication for the linking session
  */
-router.post('/confirm-auth', async (req: Request, res: Response) => {
+router.post('/confirm-auth',
+  requireAnyPermission(['admin:manage_settings']),
+  async (req: Request, res: Response) => {
   try {
     const businessId = (req as any).businessId;
     const { phone, pushname } = req.body;
@@ -124,7 +135,9 @@ router.post('/confirm-auth', async (req: Request, res: Response) => {
  * POST /api/whatsapp/disconnect
  * Disconnect current WhatsApp session
  */
-router.post('/disconnect', async (req: Request, res: Response) => {
+router.post('/disconnect',
+  requireAnyPermission(['admin:manage_settings']),
+  async (req: Request, res: Response) => {
   try {
     const businessId = (req as any).businessId;
     const result = await WhatsAppService.disconnectSession(businessId);
@@ -143,7 +156,9 @@ router.post('/disconnect', async (req: Request, res: Response) => {
  * POST /api/whatsapp/test-connection
  * Verify WhatsApp session without spamming test messages
  */
-router.post('/test-connection', async (req: Request, res: Response) => {
+router.post('/test-connection',
+  requireAnyPermission(['admin:manage_settings']),
+  async (req: Request, res: Response) => {
   try {
     const businessId = (req as any).businessId;
     const result = await WhatsAppService.testConnection(businessId);
@@ -158,7 +173,9 @@ router.post('/test-connection', async (req: Request, res: Response) => {
  * GET /api/whatsapp/settings
  * Fetch WhatsApp business configuration
  */
-router.get('/settings', async (req: Request, res: Response) => {
+router.get('/settings',
+  requireAnyPermission(['admin:manage_settings', 'sales:view', 'sales.create', 'sales:create', 'accounts:view', 'accounts.view']),
+  async (req: Request, res: Response) => {
   try {
     const businessId = (req as any).businessId;
     const settings = await WhatsAppService.getWhatsAppSettings(businessId);
@@ -176,7 +193,9 @@ router.get('/settings', async (req: Request, res: Response) => {
  * PUT /api/whatsapp/settings
  * Update WhatsApp business configuration
  */
-router.put('/settings', async (req: Request, res: Response) => {
+router.put('/settings',
+  requireAnyPermission(['admin:manage_settings']),
+  async (req: Request, res: Response) => {
   try {
     const businessId = (req as any).businessId;
     const { autoSendOnSave, autoSendRequireOptIn, messageTemplate, includePdf } = req.body;
@@ -202,7 +221,9 @@ router.put('/settings', async (req: Request, res: Response) => {
  * GET /api/whatsapp/invoices/:invoiceId/status
  * Get WhatsApp sending status and queue history for an invoice
  */
-router.get('/invoices/:invoiceId/status', async (req: Request, res: Response) => {
+router.get('/invoices/:invoiceId/status',
+  requireAnyPermission(['admin:manage_settings', 'sales:view', 'sales.create', 'sales:create', 'accounts:view', 'accounts.view']),
+  async (req: Request, res: Response) => {
   try {
     const businessId = (req as any).businessId;
     const { invoiceId } = req.params;
@@ -222,7 +243,9 @@ router.get('/invoices/:invoiceId/status', async (req: Request, res: Response) =>
  * POST /api/whatsapp/send-invoice
  * Manual trigger to share/send invoice via WhatsApp
  */
-router.post('/send-invoice', async (req: Request, res: Response) => {
+router.post('/send-invoice',
+  requireAnyPermission(['admin:manage_settings']),
+  async (req: Request, res: Response) => {
   try {
     const businessId = (req as any).businessId;
     const { invoiceId, recipientPhone, recipientName, customMessage, idempotencyKey } = req.body;
@@ -311,7 +334,9 @@ router.post('/send-invoice', async (req: Request, res: Response) => {
  * POST /api/whatsapp/queue/:id/retry
  * Retry a failed message dispatch
  */
-router.post('/queue/:id/retry', async (req: Request, res: Response) => {
+router.post('/queue/:id/retry',
+  requireAnyPermission(['admin:manage_settings']),
+  async (req: Request, res: Response) => {
   try {
     const businessId = (req as any).businessId;
     const { id } = req.params;
@@ -332,7 +357,9 @@ router.post('/queue/:id/retry', async (req: Request, res: Response) => {
  * GET /api/whatsapp/wa-link
  * Generate wa.me click-to-chat URL with prefilled text
  */
-router.get('/wa-link', (req: Request, res: Response) => {
+router.get('/wa-link',
+  requireAnyPermission(['admin:manage_settings', 'sales:view', 'sales.create', 'sales:create', 'accounts:view', 'accounts.view']),
+  (req: Request, res: Response) => {
   const phone = String(req.query.phone || '');
   const text = String(req.query.text || '');
 

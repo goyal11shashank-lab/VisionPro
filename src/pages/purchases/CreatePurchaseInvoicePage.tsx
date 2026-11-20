@@ -219,8 +219,6 @@ export const CreatePurchaseInvoicePage: React.FC<Props> = ({
   const canCancel = Boolean(
     hasPermission('purchase:cancel') ||
     hasPermission('purchase.cancel') ||
-    hasPermission('purchase:edit') ||
-    hasPermission('purchase.edit') ||
     hasPermission('admin')
   );
 

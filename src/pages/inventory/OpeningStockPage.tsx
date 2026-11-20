@@ -455,7 +455,7 @@ export const OpeningStockPage: React.FC<OpeningStockPageProps> = ({ onNavigate }
                 </span>
               </h1>
               <p className="text-xs text-slate-500 mt-0.5">
-                Audit, view, edit, delete, and initialize opening inventory balances with automatic running ledger balance reconciliation.
+                {canCreate || canEdit || canDelete ? 'Audit and manage opening inventory balances with running ledger reconciliation.' : 'Read-only opening inventory history. Your role cannot change these balances.'}
               </p>
             </div>
           </div>
@@ -680,7 +680,7 @@ export const OpeningStockPage: React.FC<OpeningStockPageProps> = ({ onNavigate }
                     <p className="text-[11px] text-slate-400 mt-1">
                       {search || selectedCategory !== 'ALL'
                         ? 'Try clearing your filters or search keywords.'
-                        : 'Click "Initialize Opening Stock" above to record initial batch inventory.'}
+                        : canCreate ? 'Click "Initialize Opening Stock" above to record initial batch inventory.' : 'No records to display. Stock changes require an authorized inventory user.'}
                     </p>
                   </td>
                 </tr>

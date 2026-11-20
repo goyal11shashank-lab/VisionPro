@@ -1,3 +1,5 @@
+import { assertSyntheticDatabase } from './assertSyntheticDatabase.js';
+assertSyntheticDatabase();
 /**
  * Phase 4C — Dealer Onboarding & First-Login Experience
  * Comprehensive Runtime & Security Verification Test Suite
@@ -98,6 +100,7 @@ export async function runPhase4CTestSuite(): Promise<{
 
     // Create Manager User
     const managerCreationResult = await DealerUserService.createDealerUser(
+      mainBiz.id,
       dealerBizId,
       superAdminUser.id,
       true,
@@ -118,6 +121,7 @@ export async function runPhase4CTestSuite(): Promise<{
 
     // Create Viewer User
     const viewerCreationResult = await DealerUserService.createDealerUser(
+      mainBiz.id,
       dealerBizId,
       superAdminUser.id,
       true,

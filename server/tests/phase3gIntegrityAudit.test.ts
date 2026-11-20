@@ -1212,11 +1212,11 @@ export async function runPhase3gAudit() {
       `Reservations released (0 active), Dealer Order status synchronized to CANCELLED`);
 
     // =========================================================================
-    // PART 55 — STOCK SHARING PRIVACY
+    // PART 55 — SUPER ADMIN LEGACY SHARING TOGGLE
     // =========================================================================
-    console.log('\n--- PART 55: Stock Sharing Privacy ---');
+    console.log('\n--- PART 55: Super Admin Legacy Sharing Toggle ---');
     // Default: sharing disabled
-    const shareOff = await DealerControlService.getDealerStockSharing(mainBizId, dealerABizId);
+    const shareOff = await DealerControlService.getDealerStockSharing(mainBizId, dealerABizId, { isSuperAdmin: true });
     const p55PassOff = shareOff.sharingEnabled === false && shareOff.items.length === 0;
 
     // Toggle sharing ON
@@ -1226,14 +1226,14 @@ export async function runPhase3gAudit() {
        WHERE id = $1`,
       [dealerABizId]
     );
-    const shareOn = await DealerControlService.getDealerStockSharing(mainBizId, dealerABizId);
+    const shareOn = await DealerControlService.getDealerStockSharing(mainBizId, dealerABizId, { isSuperAdmin: true });
     const p55PassOn = shareOn.sharingEnabled === true && shareOn.items.length > 0 &&
                       !('purchase_rate' in shareOn.items[0]) &&
                       !('selling_price' in shareOn.items[0]) &&
                       !('margin' in shareOn.items[0]);
 
-    recordResult(55, 'Stock Sharing Privacy', p55PassOff && p55PassOn,
-      `Stock Sharing OFF hides inventory; Stock Sharing ON exposes ONLY quantity & optical coordinates (costs/margins strictly excluded)`);
+    recordResult(55, 'Super Admin Stock Inspection Toggle', p55PassOff && p55PassOn,
+      `Super Admin only: sharing OFF hides inventory; ON returns quantities and powers. Ordinary-user privacy is tested separately through both HTTP mounts.`);
 
     console.log('\n============================================================');
     console.log('ALL PHASE 3G AUDIT TESTS COMPLETED SUCCESSFULLY! ✅');

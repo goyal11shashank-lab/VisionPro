@@ -46,7 +46,9 @@ router.get(
  * GET /api/sales/returns/number-preview
  * Get preview of next auto-generated return number
  */
-router.get('/number-preview', async (req: Request, res: Response) => {
+router.get('/number-preview',
+  requireAnyPermission(['sales:view', 'sales.view', 'sales:return:view']),
+  async (req: Request, res: Response) => {
   try {
     const businessId = req.user!.currentBusinessId;
     const nextNum = await SalesReturnService.generateReturnNumber(businessId);
@@ -93,8 +95,6 @@ router.post(
   requireAnyPermission([
     'sales:return:create',
     'sales.return.create',
-    'sales:create',
-    'sales.create',
   ]),
   async (req: Request, res: Response) => {
     try {
@@ -145,8 +145,6 @@ router.post(
   requireAnyPermission([
     'sales:return:post',
     'sales.return.post',
-    'sales:invoice:post',
-    'sales.invoice.post',
   ]),
   async (req: Request, res: Response) => {
     try {
@@ -203,8 +201,6 @@ router.delete(
     'sales.return.delete',
     'sales:delete',
     'sales.delete',
-    'sales:cancel',
-    'sales:edit',
   ]),
   async (req: Request, res: Response) => {
     try {

@@ -1,3 +1,4 @@
+import businessStockRoutes from './routes/businessStock.js';
 import express, { Request, Response, NextFunction } from 'express';
 import authRoutes from './routes/auth.js';
 import businessRoutes from './routes/businesses.js';
@@ -61,6 +62,7 @@ export function createExpressApp() {
   app.use('/api/purchases/returns', purchaseReturnRoutes);
   app.use('/api/purchases', purchaseRoutes);
   app.use('/api/inventory', inventoryRoutes);
+  app.use('/api/business-stock',businessStockRoutes);
   app.use('/api/sales/returns', salesReturnRoutes);
   app.use('/api/sales', salesRoutes);
   app.use('/api/payments', paymentRoutes);

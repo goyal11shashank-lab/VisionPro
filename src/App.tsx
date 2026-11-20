@@ -1,4 +1,9 @@
+import {AssignedB2bHistoryPage} from './pages/purchases/AssignedB2bHistoryPage.js';
+import {AssignedFinancialHistoryPage} from './pages/accounts/AssignedFinancialHistoryPage.js';
+import { AssignedStockHistoryPage } from './pages/inventory/AssignedStockHistoryPage.js';
+import { BusinessStockAvailabilityPage } from './pages/inventory/BusinessStockAvailabilityPage.js';
 import React, { useState } from 'react';
+import { IncomingBusinessShipmentsPage } from './pages/purchases/IncomingBusinessShipmentsPage.js';
 import { AuthProvider, useAuth } from './context/AuthContext.js';
 import { SettingsProvider, useSettings } from './context/SettingsContext.js';
 import { MainLayout } from './components/layout/MainLayout.js';
@@ -13,7 +18,6 @@ import { DealerMainWarehouseAvailabilityPage } from './pages/inventory/DealerMai
 import { DealerOrdersListPage } from './pages/sales/DealerOrdersListPage.js';
 import { DealerControlCenterPage } from './pages/dealers/DealerControlCenterPage.js';
 import { DealerDashboardPage } from './pages/dashboard/DealerDashboardPage.js';
-import { DealerOnboardingPage } from './pages/dealers/DealerOnboardingPage.js';
 import { DealerPaymentAdvicesList } from './pages/dealers/DealerPaymentAdvicesList.js';
 import { ModulePlaceholderPage } from './pages/admin/ModulePlaceholderPage.js';
 import { CategoriesPage } from './pages/master/CategoriesPage.js';
@@ -46,29 +50,12 @@ import { RefreshCw, ShieldCheck, Building2, LogOut } from 'lucide-react';
 import { UnsavedChangesProvider, useUnsavedChanges } from './context/UnsavedChangesContext.js';
 
 const AppContent: React.FC = () => {
-  const { user, isLoading, currentBusiness, accessibleBusinesses, logout, hasPermission, roles, refreshUser } = useAuth();
+  const { user, isLoading, currentBusiness, accessibleBusinesses, logout, hasPermission, roles } = useAuth();
   const { currentPath, setCurrentPath, navigate } = useUnsavedChanges();
   const { settings } = useSettings();
   const enablePos = settings?.sales?.enablePos ?? true;
 
-  const canConfigureDealer = Boolean(
-    user?.isSuperAdmin ||
-    hasPermission('admin:manage_settings') ||
-    hasPermission('business:edit') ||
-    roles?.some(r => r.code === 'MANAGER' || r.code === 'ADMIN' || r.code === 'SUPER_ADMIN')
-  );
-
-  React.useEffect(() => {
-    if (
-      currentBusiness?.businessType === 'DEALER' &&
-      currentBusiness.onboardingCompleted !== true &&
-      canConfigureDealer
-    ) {
-      if (currentPath === '/' || currentPath === '/dashboard' || currentPath === '/dealer/dashboard') {
-        setCurrentPath('/dealer/onboarding');
-      }
-    }
-  }, [currentBusiness?.id, currentBusiness?.businessType, currentBusiness?.onboardingCompleted, canConfigureDealer]);
+  // Opening a Business never triggers legacy type-based account/catalogue setup.
 
   if (isLoading) {
     return (
@@ -100,12 +87,12 @@ const AppContent: React.FC = () => {
             <h2 className="text-lg font-bold text-slate-900">No Authorized Business Assigned</h2>
             <p className="text-xs text-slate-500 mt-1.5 leading-relaxed">
               Welcome, <strong className="text-slate-800">{user.fullName || user.username}</strong>. Your login account
-              is active, but an administrator has not yet assigned you to any Dealer or Main Warehouse business.
+              is active, but an administrator has not yet assigned you to a Business.
             </p>
           </div>
           <div className="p-3 bg-slate-50 rounded-xl text-xs text-slate-600 border border-slate-200 text-left space-y-1">
             <p className="font-semibold text-slate-700">Next Steps:</p>
-            <p>1. Contact your Main Warehouse or Dealer Administrator.</p>
+            <p>1. Contact your Business administrator.</p>
             <p>2. Ask them to assign your account (@{user.username}) to your business location.</p>
           </div>
           <button
@@ -129,7 +116,13 @@ const AppContent: React.FC = () => {
     switch (targetPath) {
       case '/':
       case '/dashboard':
-        return 'Enterprise Dashboard';
+        return user?.assignedGodown ? 'Assigned Stock History' : 'Enterprise Dashboard';
+      case '/assigned-b2b-history':
+        return 'Assigned Supplier Order History';
+      case '/assigned-financial-history':
+        return 'Assigned Financial Activity';
+      case '/assigned-stock-history':
+        return 'Assigned Stock History';
       case '/admin/businesses':
         return 'Business Entities & Multi-Tenancy';
       case '/admin/users':
@@ -164,10 +157,10 @@ const AppContent: React.FC = () => {
       case '/inventory/dealer-availability':
       case '/dealer/availability':
       case '/inventory/main-warehouse':
-        return 'Main Warehouse Stock Availability';
+        return 'Supplier Business Stock';
       case '/dealer/orders':
       case '/inventory/dealer-orders':
-        return 'My Warehouse Orders';
+        return 'Supplier Business Orders';
       case '/sales/pos':
         return 'Optical POS & Billing';
       case '/sales/invoices/new':
@@ -248,17 +241,19 @@ const AppContent: React.FC = () => {
         return 'Product & Optical Power Analytics';
       case '/dealers':
       case '/sales/dealers':
-        return 'Dealer Control Center';
+        return 'Linked Business Orders';
+      case '/dealer/shipments':
+        return 'Incoming Business Shipments';
       case '/dealer/dashboard':
-        return 'Dealer Operations Dashboard';
+        return 'Business Dashboard';
       case '/dealer/onboarding':
-        return 'Dealer Setup Wizard';
+        return 'Business setup';
       case '/inventory/locations/godowns':
       case '/inventory/godowns':
       case '/admin/godowns':
-        return 'Extra Godowns & Secondary Warehouses';
+        return 'Legacy Business History';
       case '/inventory/main-warehouse-search':
-        return 'Main Warehouse Stock Search';
+        return 'Business Stock Availability';
       default:
         return 'Optical Billing & Management';
     }
@@ -271,26 +266,19 @@ const AppContent: React.FC = () => {
   const renderContent = () => {
     switch (pathOnly) {
       case '/dealer/onboarding':
-        if (currentBusiness?.businessType === 'MAIN') {
-          return <DashboardPage onNavigate={navigate} />;
-        }
-        return (
-          <DealerOnboardingPage
-            onNavigate={navigate}
-            onComplete={() => {
-              navigate('/dealer/dashboard');
-              refreshUser();
-            }}
-          />
-        );
+        return <div className="p-6 max-w-3xl mx-auto bg-white border rounded-xl space-y-3"><h1 className="text-xl font-bold">Business setup</h1><p>Legacy dealer setup is retired. Existing records and supplier links are preserved. A Super Administrator can manage the Business profile and review supplier links in Businesses. Opening this page does not create accounts, copy items or change historical records.</p><button className="min-h-11 px-4 border rounded-lg" onClick={()=>navigate('/')}>Back to your Business</button></div>;
+      case '/assigned-b2b-history':
+        return <AssignedB2bHistoryPage />;
+      case '/assigned-financial-history':
+        return <AssignedFinancialHistoryPage />;
+      case '/assigned-stock-history':
+        return <AssignedStockHistoryPage />;
       case '/':
       case '/dashboard':
-        if (currentBusiness?.businessType === 'DEALER') {
-          return <DealerDashboardPage onNavigate={navigate} />;
-        }
+        if(user?.assignedGodown)return <AssignedStockHistoryPage />;
         return <DashboardPage onNavigate={navigate} />;
       case '/dealer/dashboard':
-        return <DealerDashboardPage onNavigate={navigate} />;
+        return <DashboardPage onNavigate={navigate} />;
       case '/dealers':
       case '/sales/dealers':
       case '/admin/dealers':
@@ -347,7 +335,7 @@ const AppContent: React.FC = () => {
       case '/inventory/dealer-availability':
       case '/dealer/availability':
       case '/inventory/main-warehouse':
-        return <DealerMainWarehouseAvailabilityPage onNavigate={navigate} />;
+        return <BusinessStockAvailabilityPage />;
       case '/dealer/orders':
       case '/inventory/dealer-orders':
         return <DealerOrdersListPage onNavigate={navigate} />;
@@ -356,7 +344,9 @@ const AppContent: React.FC = () => {
       case '/admin/godowns':
         return <ExtraGodownsPage />;
       case '/inventory/main-warehouse-search':
-        return <MainWarehouseStockSearchPage />;
+        return <BusinessStockAvailabilityPage />;
+      case '/dealer/shipments':
+        return <IncomingBusinessShipmentsPage />;
       case '/dealer/payments':
       case '/dealer/payment-advices':
         return (
@@ -544,9 +534,6 @@ const AppContent: React.FC = () => {
         if (pathOnly.startsWith('/dealers/')) {
           const dealerId = pathOnly.replace('/dealers/', '');
           return <DealerControlCenterPage onNavigate={navigate} initialDealerId={dealerId} />;
-        }
-        if (currentBusiness?.businessType === 'DEALER') {
-          return <DealerDashboardPage onNavigate={navigate} />;
         }
         return <DashboardPage onNavigate={navigate} />;
     }

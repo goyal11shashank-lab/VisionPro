@@ -1092,6 +1092,7 @@ export class StockService {
   static async getInventoryList(
     businessId: string,
     filters: {
+      strictScope?: boolean;
       categoryId?: string;
       uniqueItemId?: string;
       primaryItemId?: string;
@@ -1132,7 +1133,7 @@ export class StockService {
     const allRows = await query;
 
     // In-memory filter pipeline for robust composite search and stockStatus
-    let filtered = allRows.map((r) => {
+    let filtered = allRows.filter(r=>!filters.strictScope||Boolean(r.stock)).map((r) => {
       const physical = r.stock ? round2(parseFloat(r.stock.physicalStock)) : 0;
       const reserved = r.stock ? round2(parseFloat(r.stock.reservedStock)) : 0;
       const available = r.stock ? round2(parseFloat(r.stock.availableStock)) : 0;

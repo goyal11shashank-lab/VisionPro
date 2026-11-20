@@ -59,6 +59,8 @@ router.get(
       const { categoryId, uniqueItemId, primaryItemId, stockStatus, search, limit, offset } = req.query;
 
       const result = await StockService.getInventoryList(businessId, {
+        godownId: req.user?.assignedGodownId || undefined,
+        strictScope: Boolean(req.user?.assignedGodownId),
         categoryId: categoryId as string,
         uniqueItemId: uniqueItemId as string,
         primaryItemId: primaryItemId as string,

@@ -1,3 +1,5 @@
+import { PaymentService } from './paymentService.js';
+import { drizzle } from 'drizzle-orm/node-postgres';
 import { db, pool } from '../db/index.js';
 import {
   businesses,
@@ -142,10 +144,11 @@ export class SalesService {
   /**
    * Validates that a party is a valid Customer (CUSTOMER or BOTH)
    */
-  static async validateCustomerParty(businessId: string, partyId: string) {
+  static async validateCustomerParty(businessId: string, partyId: string, transactionClient?: PoolClient) {
+    const readDb = transactionClient ? drizzle(transactionClient) : db;
     if (!partyId) throw new Error('Customer Party ID is required');
 
-    const [party] = await db
+    const [party] = await readDb
       .select()
       .from(parties)
       .where(and(eq(parties.businessId, businessId), eq(parties.id, partyId)))
@@ -395,7 +398,8 @@ export class SalesService {
   /**
    * Creates a Sales Order (DRAFT or directly CONFIRMED)
    */
-  static async createSalesOrder(businessId: string, data: CreateSalesOrderDTO, userId?: string) {
+  static async createSalesOrder(businessId: string, data: CreateSalesOrderDTO, userId?: string, transactionClient?: PoolClient) {
+    const readDb = transactionClient ? drizzle(transactionClient) : db;
     if (!businessId) throw new Error('Business ID is required');
 
     if (data.idempotencyKey) {
@@ -405,13 +409,13 @@ export class SalesService {
       }
     }
 
-    const party = await this.validateCustomerParty(businessId, data.partyId);
+    const party = await this.validateCustomerParty(businessId, data.partyId, transactionClient);
 
     if (!data.lines || data.lines.length === 0) {
       throw new Error('At least one sales line is required');
     }
 
-    const [biz] = await db.select().from(businesses).where(eq(businesses.id, businessId)).limit(1);
+    const [biz] = await readDb.select().from(businesses).where(eq(businesses.id, businessId)).limit(1);
     const isInterState =
       biz?.state && party?.state && biz.state.trim().toLowerCase() !== party.state.trim().toLowerCase();
     const gstMode = data.gstMode || (isInterState ? 'INTER_STATE' : 'INTRA_STATE');
@@ -422,7 +426,7 @@ export class SalesService {
     // Fetch units of line items for unit-aware quantity validation
     const lineItemIds = data.lines.map(l => l.uniqueItemId);
     const lineItems = lineItemIds.length > 0
-      ? await db.select({ id: uniqueItems.id, unit: uniqueItems.unit }).from(uniqueItems).where(inArray(uniqueItems.id, lineItemIds))
+      ? await readDb.select({ id: uniqueItems.id, unit: uniqueItems.unit }).from(uniqueItems).where(inArray(uniqueItems.id, lineItemIds))
       : [];
     const itemUnitMap = new Map<string, string>();
     for (const it of lineItems) {
@@ -463,9 +467,9 @@ export class SalesService {
       gstMode,
     });
 
-    const client = await pool.connect();
+    const client = transactionClient || await pool.connect();
     try {
-      await client.query('BEGIN');
+      if (!transactionClient) await client.query('BEGIN');
 
       const soSettings = await BusinessSettingsService.getVoucherPrefix(businessId, 'salesOrder').catch(() => null);
       const soMethod = soSettings?.method || 'AUTOMATIC';
@@ -606,7 +610,7 @@ export class SalesService {
         await this._confirmOrderInternal(client, businessId, orderId, userId);
       }
 
-      await client.query('COMMIT');
+      if (!transactionClient) await client.query('COMMIT');
 
       // Audit Log
       await AuditService.log({
@@ -617,21 +621,21 @@ export class SalesService {
         entityType: 'SALES_ORDER',
         entityId: orderId,
         newValue: { orderNumber, partyId: data.partyId, grandTotal: totals.grandTotal, status: targetStatus },
-      });
+      }, transactionClient);
 
       // B2B Automatic Order Synchronization to Dealer / Extra Godown
       try {
-        await B2bOrderSyncService.syncSalesOrderToPurchaseOrder(businessId, orderId, userId);
+        if (!transactionClient) await B2bOrderSyncService.syncSalesOrderToPurchaseOrder(businessId, orderId, userId);
       } catch (syncErr) {
         console.error('[B2B Order Sync Error on createSalesOrder]', syncErr);
       }
 
-      return await this.getSalesOrderById(businessId, orderId);
+      return await this.getSalesOrderById(businessId, orderId, transactionClient);
     } catch (err) {
-      await client.query('ROLLBACK');
+      if (!transactionClient) await client.query('ROLLBACK');
       throw err;
     } finally {
-      client.release();
+      if (!transactionClient) client.release();
     }
   }
 
@@ -1328,8 +1332,9 @@ export class SalesService {
   /**
    * Get single Sales Order by ID with lines and batches
    */
-  static async getSalesOrderById(businessId: string, orderId: string) {
-    const [order] = await db
+  static async getSalesOrderById(businessId: string, orderId: string, transactionClient?: PoolClient) {
+    const readDb = transactionClient ? drizzle(transactionClient) : db;
+    const [order] = await readDb
       .select({
         order: salesOrders,
         party: parties,
@@ -1343,7 +1348,7 @@ export class SalesService {
       throw new Error('Sales order not found');
     }
 
-    const lines = await db
+    const lines = await readDb
       .select({
         line: salesOrderLines,
         uniqueItem: uniqueItems,
@@ -1355,7 +1360,7 @@ export class SalesService {
     const lineIds = lines.map(l => l.line.id);
     let batches: any[] = [];
     if (lineIds.length > 0) {
-      batches = await db
+      batches = await readDb
         .select({
           lineBatch: salesOrderLineBatches,
           batch: opticalBatches,
@@ -1376,7 +1381,7 @@ export class SalesService {
     }
 
     // Query active stock reservations to determine remaining convertible quantity per batch
-    const activeReservations = await db
+    const activeReservations = await readDb
       .select({
         batchId: stockReservations.batchId,
         quantity: stockReservations.quantity,
@@ -1897,6 +1902,8 @@ export class SalesService {
       }
 
       const existingInv = invRes.rows[0];
+      if (data.status && !['DRAFT','POSTED'].includes(data.status)) throw new Error('Use the authorized cancellation endpoint to cancel an invoice.');
+      if (existingInv.status === 'POSTED' && data.status === 'DRAFT') throw new Error('A posted invoice cannot be reverted to draft.');
 
       if (existingInv.status === 'CANCELLED') {
         throw new Error(`Cannot edit Sales Invoice ${existingInv.invoice_number} because it has been CANCELLED. Cancelled invoices are permanently read-only.`);
@@ -2146,6 +2153,7 @@ export class SalesService {
       // If target status is POSTED, perform stock deduction & ledger update
       if (targetStatus === 'POSTED') {
         await this._postDirectInvoiceInternal(client, businessId, invoiceId, userId);
+        await PaymentService.syncSalesInvoicePaymentStatus(client,businessId,invoiceId);
       }
 
       await client.query('COMMIT');

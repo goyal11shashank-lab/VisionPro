@@ -17,7 +17,7 @@ router.get(
     try {
       const businessId = req.user!.currentBusinessId;
       const userPermissions = (req.user as any)?.permissions || [];
-      const isSuperAdmin = Boolean((req.user as any)?.role?.isSuperAdmin || (req.user as any)?.role?.code === 'SUPER_ADMIN');
+      const isSuperAdmin = Boolean(req.user?.isSuperAdmin);
 
       const data = await DashboardService.getDashboardData(
         businessId,

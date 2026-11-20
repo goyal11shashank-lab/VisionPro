@@ -1,3 +1,4 @@
+import {assertSyntheticDatabase} from './assertSyntheticDatabase.js';assertSyntheticDatabase();
 import { pool } from '../db/index.js';
 import { GodownService } from '../services/godownService.js';
 import { SalesService } from '../services/salesService.js';
@@ -446,7 +447,7 @@ async function runHardenAuditTests() {
   }
 }
 
-runHardenAuditTests().catch((err) => {
+runHardenAuditTests().then(()=>pool.end()).catch((err) => {
   console.error('\nHARDEN AUDIT TEST FAILED:', err);
   process.exit(1);
 });

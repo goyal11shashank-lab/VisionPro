@@ -44,7 +44,9 @@ router.get(
  * GET /api/parties/code-preview
  * Generate next sequence code preview
  */
-router.get('/code-preview', async (req: Request, res: Response) => {
+router.get('/code-preview',
+  requireAnyPermission(['parties:view', 'parties.view']),
+  async (req: Request, res: Response) => {
   try {
     const businessId = req.user!.currentBusinessId;
     const partyType = (req.query.partyType as 'CUSTOMER' | 'SUPPLIER' | 'BOTH') || 'SUPPLIER';

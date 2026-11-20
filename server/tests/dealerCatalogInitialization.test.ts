@@ -1,29 +1,6 @@
-import fs from 'fs';
-
-// Setup database environment before importing db pool
-if (!process.env.DEV_DATABASE_URL && !process.env.DATABASE_URL) {
-  try {
-    const pids = ['145', '134'];
-    for (const pid of pids) {
-      if (fs.existsSync(`/proc/${pid}/environ`)) {
-        const envStr = fs.readFileSync(`/proc/${pid}/environ`, 'utf-8');
-        for (const entry of envStr.split('\0')) {
-          const eq = entry.indexOf('=');
-          if (eq > 0) {
-            const k = entry.slice(0, eq);
-            const v = entry.slice(eq + 1);
-            if (['DEV_DATABASE_URL', 'DATABASE_URL_UNPOOLED'].includes(k)) {
-              process.env[k] = v;
-            }
-          }
-        }
-        break;
-      }
-    }
-  } catch (e) {
-    // Ignore error
-  }
-}
+// Synthetic-only fixtures. No production rows or account environments are used.
+import { assertSyntheticDatabase } from './assertSyntheticDatabase.js';
+assertSyntheticDatabase();
 
 let passed = 0;
 let total = 0;
@@ -48,7 +25,18 @@ async function runDealerCatalogInitializationTests() {
   const { DealerCatalogInitializationService } = await import('../services/dealerCatalogInitializationService.js');
   const { PurchaseService } = await import('../services/purchaseService.js');
 
-  const luminaId = 'c43b93ef-8569-4857-80ff-faca53b4ed7c';
+  const { seedInitialDatabase } = await import('../db/seed.js');
+  await seedInitialDatabase();
+  const source = await pool.query(`SELECT id FROM businesses WHERE business_type='MAIN' ORDER BY created_at LIMIT 1`);
+  const luminaId = source.rows[0].id;
+  const { findOrCreateOpticalBatch } = await import('../services/opticalMasterService.js');
+  const sourceItems = await pool.query(`SELECT DISTINCT ON (optical_category) id,optical_category FROM unique_items WHERE business_id=$1 ORDER BY optical_category,id`,[luminaId]);
+  for (const sourceItem of sourceItems.rows) {
+    const category=sourceItem.optical_category;
+    if (!['SV','KT','PROG'].includes(category)) continue;
+    const powers = category==='KT' ? [{sph:-1,cyl:-1,axis:90,add:2},{sph:-1,cyl:-1,axis:180,add:2}] : category==='PROG' ? [{sph:1,add:2,side:'R'},{sph:1,add:2,side:'L'}] : [{sph:-1.5},{sph:1.5}];
+    for (const powerspec of powers) await findOrCreateOpticalBatch({businessId:luminaId,uniqueItemId:sourceItem.id,cyl:0,axis:0,add:0,side:'NONE',...powerspec});
+  }
   const testDealerIdsToClean: string[] = [];
 
   // Helper for spotless cleanup
@@ -195,7 +183,7 @@ async function runDealerCatalogInitializationTests() {
       LEFT JOIN categories cat ON ob.category_id = cat.id AND cat.business_id = $1
       WHERE ob.business_id = $1 AND (ui.id IS NULL OR cat.id IS NULL)
     `, [dealerId1]);
-    assert(parseInt(batchFkCheck.rows[0].invalid_count, 10) === 0, 'All 8,380 optical batches link exclusively to dealer-scoped unique_items and categories');
+    assert(parseInt(batchFkCheck.rows[0].invalid_count, 10) === 0, 'All synthetic optical batches link exclusively to dealer-scoped unique_items and categories');
 
     // 2f. Check optical_stocks link dealer-scoped batches
     const stockFkCheck = await pool.query(`
@@ -204,7 +192,7 @@ async function runDealerCatalogInitializationTests() {
       LEFT JOIN optical_batches ob ON os.batch_id = ob.id AND ob.business_id = $1
       WHERE os.business_id = $1 AND ob.id IS NULL
     `, [dealerId1]);
-    assert(parseInt(stockFkCheck.rows[0].invalid_count, 10) === 0, 'All 8,380 optical stocks link exclusively to dealer-scoped optical batches');
+    assert(parseInt(stockFkCheck.rows[0].invalid_count, 10) === 0, 'All synthetic optical stocks link exclusively to dealer-scoped optical batches');
 
     // -------------------------------------------------------------------------
     // TEST 3: Optical Coordinates & Identity Key Preservation
@@ -225,7 +213,7 @@ async function runDealerCatalogInitializationTests() {
       ORDER BY src.id
       LIMIT 100
     `, [dealerId1, luminaId]);
-    assert(sampleCoordCheck.rows.length === 100, 'Matched 100 sample batches by identity_key');
+    assert(sampleCoordCheck.rows.length === Math.min(100, Number(baselineLumina.optical_batches)), 'All available sample batches matched by identity_key');
     const coordsMatch = sampleCoordCheck.rows.every(r =>
       r.src_key === r.dst_key &&
       Number(r.src_sph) === Number(r.dst_sph) &&
@@ -274,7 +262,7 @@ async function runDealerCatalogInitializationTests() {
       WHERE business_id = $1
     `, [dealerId1]);
     const stockStats = stockQuantityCheck.rows[0];
-    assert(parseInt(stockStats.total_stocks, 10) === 8380, 'All 8,380 optical stocks present');
+    assert(parseInt(stockStats.total_stocks, 10) === Number(baselineLumina.optical_batches), 'Every source power has a zero-quantity dealer stock row');
     assert(parseInt(stockStats.non_zero_physical, 10) === 0, 'physical_stock = 0.00 for 100% of rows');
     assert(parseInt(stockStats.non_zero_reserved, 10) === 0, 'reserved_stock = 0.00 for 100% of rows');
     assert(parseInt(stockStats.non_zero_available, 10) === 0, 'available_stock = 0.00 for 100% of rows');
@@ -298,7 +286,7 @@ async function runDealerCatalogInitializationTests() {
       WHERE business_id = $1
     `, [dealerId1]);
     const costStats = commercialCostCheck.rows[0];
-    assert(parseInt(costStats.total_items, 10) === 120, 'All 120 unique items verified');
+    assert(parseInt(costStats.total_items, 10) === Number(baselineLumina.unique_items), 'Every source unique item verified');
     assert(parseInt(costStats.non_zero_rate, 10) === 0, 'purchase_rate is strictly 0.00 for all dealer unique_items');
     assert(parseInt(costStats.non_zero_last_price, 10) === 0, 'last_purchase_price is strictly 0.00 for all dealer unique_items');
 
@@ -311,10 +299,10 @@ async function runDealerCatalogInitializationTests() {
       dealerId1,
       null
     );
-    assert(rerunStats.categories === 3, 'Idempotent rerun: Categories count preserved (3)');
-    assert(rerunStats.uniqueItems === 120, 'Idempotent rerun: Unique items count preserved (120)');
-    assert(rerunStats.opticalBatches === 8380, 'Idempotent rerun: Optical batches count preserved (8,380)');
-    assert(rerunStats.opticalStocks === 8380, 'Idempotent rerun: Optical stocks count preserved (8,380)');
+    assert(rerunStats.categories === Number(baselineLumina.categories), 'Idempotent rerun: Categories count preserved (3)');
+    assert(rerunStats.uniqueItems === Number(baselineLumina.unique_items), 'Idempotent rerun: Unique items count preserved');
+    assert(rerunStats.opticalBatches === Number(baselineLumina.optical_batches), 'Idempotent rerun: Optical batches count preserved');
+    assert(rerunStats.opticalStocks === Number(baselineLumina.optical_stocks), 'Idempotent rerun: Optical stocks count preserved');
 
     // -------------------------------------------------------------------------
     // TEST 8: Dealer Purchase Invoice Entry & Isolation Verification

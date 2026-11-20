@@ -1,3 +1,5 @@
+import {hiddenFromSuperAdmin} from '../services/businessVisibilityService.js';
+import { canonicalBusinessFor, restrictBusinessChoices } from '../services/canonicalLoginService.js';
 import { Router, Request, Response } from 'express';
 import { db, pool, checkDatabaseConnection, resolveDatabaseConfig } from '../db/index.js';
 import { users, userBusinessAccess, businesses, userRoles, roles, rolePermissions, permissions, auditLogs, godowns } from '../db/schema.js';
@@ -478,6 +480,9 @@ router.post('/login', async (req: Request, res: Response): Promise<void> => {
       return;
     }
 
+    const canonicalBusinessId=await canonicalBusinessFor(userRecord);
+    if(canonicalBusinessId && businessId && businessId!==canonicalBusinessId){res.status(403).json({error:'This login is assigned to one Business.'});return;}
+
     // 4. Role & Business Lookup
     let accessibleBiz: any[] = [];
     let selectedBusiness: any = null;
@@ -533,6 +538,7 @@ router.post('/login', async (req: Request, res: Response): Promise<void> => {
           .innerJoin(businesses, eq(userBusinessAccess.businessId, businesses.id))
           .where(eq(userBusinessAccess.userId, userRecord.id));
 
+        accessibleBiz=restrictBusinessChoices(accessibleBiz,canonicalBusinessId);
         selectedBusiness = accessibleBiz.find(b => b.businessId === businessId)?.business;
 
         if (!selectedBusiness) {
@@ -677,6 +683,7 @@ router.post('/login', async (req: Request, res: Response): Promise<void> => {
         onboardingCompleted: Boolean((selectedBusiness.settingsConfig as any)?.dealer?.onboardingCompleted ?? false),
       } : null,
       accessibleBusinesses: accessibleBiz.map(b => ({
+        hiddenFromSuperAdmin: hiddenFromSuperAdmin(b.business),
         id: b.business.id,
         name: b.business.name,
         tradeName: b.business.tradeName,
@@ -745,6 +752,8 @@ router.get('/me', authenticateToken, async (req: Request, res: Response): Promis
       .where(eq(userBusinessAccess.userId, req.user.id));
   }
 
+  accessibleBiz=restrictBusinessChoices(accessibleBiz,await canonicalBusinessFor(req.user));
+
   res.json({
     user: {
       id: req.user.id,
@@ -758,6 +767,7 @@ router.get('/me', authenticateToken, async (req: Request, res: Response): Promis
     },
     currentBusiness: req.user.currentBusiness,
     accessibleBusinesses: accessibleBiz.map(b => ({
+      hiddenFromSuperAdmin: hiddenFromSuperAdmin(b.business),
       id: b.business.id,
       name: b.business.name,
       tradeName: b.business.tradeName,
@@ -788,6 +798,9 @@ router.post('/switch-business', authenticateToken, async (req: Request, res: Res
       res.status(400).json({ error: 'targetBusinessId is required' });
       return;
     }
+
+    const canonicalId=await canonicalBusinessFor(req.user!);
+    if(canonicalId&&targetBusinessId!==canonicalId){res.status(403).json({error:'This login is assigned to one Business.'});return;}
 
     const [targetBiz] = await db.select().from(businesses).where(eq(businesses.id, targetBusinessId)).limit(1);
     if (!targetBiz) {

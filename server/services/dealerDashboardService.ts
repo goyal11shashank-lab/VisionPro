@@ -1,3 +1,4 @@
+import { supplierBusinessId } from './businessRelationshipService.js';
 import { pool } from '../db/index.js';
 
 export class DealerDashboardService {
@@ -6,7 +7,7 @@ export class DealerDashboardService {
    */
   static async resolveParentMainWarehouse(client: any, dealerBusinessId: string) {
     const bizRes = await client.query(
-      `SELECT id, name, trade_name, business_type, parent_business_id, gstin, phone, email, city, state 
+      `SELECT id, name, trade_name, business_type, parent_business_id, settings_config, gstin, phone, email, city, state
        FROM businesses WHERE id = $1`,
       [dealerBusinessId]
     );
@@ -16,43 +17,9 @@ export class DealerDashboardService {
     }
 
     const dealerBiz = bizRes.rows[0];
-    if (dealerBiz.business_type !== 'DEALER') {
-      // If current business is not a DEALER (e.g. MAIN warehouse), check if there is an existing child dealer
-      const childDealerRes = await client.query(
-        `SELECT id, name, trade_name, business_type, parent_business_id, gstin, phone, email, city, state 
-         FROM businesses 
-         WHERE parent_business_id = $1 AND business_type = 'DEALER' AND status = 'ACTIVE'
-         ORDER BY created_at ASC LIMIT 1`,
-        [dealerBusinessId]
-      );
-      if (childDealerRes.rows.length > 0) {
-        return {
-          dealerBiz: childDealerRes.rows[0],
-          mainWarehouse: dealerBiz,
-        };
-      }
-
-      // No child dealer linked; treat current MAIN business as its own primary hub
-      return {
-        dealerBiz,
-        mainWarehouse: dealerBiz,
-      };
-    }
-
-    let mainWarehouseId = dealerBiz.parent_business_id;
-    if (!mainWarehouseId) {
-      // Fallback to first active MAIN business if parent is not explicitly linked
-      const firstMainRes = await client.query(
-        `SELECT id FROM businesses WHERE business_type = 'MAIN' AND status = 'ACTIVE' ORDER BY created_at ASC LIMIT 1`
-      );
-      if (firstMainRes.rows.length > 0) {
-        mainWarehouseId = firstMainRes.rows[0].id;
-      }
-    }
-
-    if (!mainWarehouseId) {
-      throw new Error('No Main Warehouse assigned to this Dealer.');
-    }
+    const mainWarehouseId = supplierBusinessId(dealerBiz);
+    if (!mainWarehouseId) return {dealerBiz,mainWarehouse:dealerBiz};
+    if (!mainWarehouseId) throw new Error('No supplier Business linked to this business.');
 
     const mainRes = await client.query(
       `SELECT id, name, trade_name, gstin, phone, email, city, state, status FROM businesses WHERE id = $1`,
@@ -97,13 +64,22 @@ export class DealerDashboardService {
   /**
    * GET Purpose-built Dealer Dashboard Summary
    */
-  static async getDealerDashboardSummary(dealerBusinessId: string) {
+  static async getDealerDashboardSummary(dealerBusinessId: string, actor?: { isSuperAdmin: boolean }) {
+    const summary = await this.buildDealerDashboardSummary(dealerBusinessId);
+    if (!actor?.isSuperAdmin) {
+      delete (summary.kpis as any).mainWarehouseAvailable;
+      summary.mainWarehouse = { name: summary.mainWarehouse.name } as any;
+    }
+    return summary;
+  }
+
+  private static async buildDealerDashboardSummary(dealerBusinessId: string) {
     const client = await pool.connect();
     try {
       const { dealerBiz, mainWarehouse } = await this.resolveParentMainWarehouse(client, dealerBusinessId);
 
       // If business is operating as a MAIN warehouse (not an active dealer branch), return main warehouse operational overview
-      if (dealerBiz.business_type !== 'DEALER') {
+      if (mainWarehouse.id === dealerBiz.id) {
         const localStockRes = await client.query(
           `SELECT COALESCE(SUM(GREATEST(available_stock, 0)), 0)::numeric(12, 2) AS my_available_stock,
                   COALESCE(SUM(physical_stock), 0)::numeric(12, 2) AS my_physical_stock,
@@ -410,7 +386,7 @@ export class DealerDashboardService {
          JOIN optical_batches ob ON os.batch_id = ob.id
          JOIN unique_items ui ON ob.unique_item_id = ui.id
          LEFT JOIN primary_items pi ON ui.primary_item_id = pi.id
-         LEFT JOIN categories c ON COALESCE(ob.category_id, ui.category_id, pi.category_id) = c.id
+         LEFT JOIN categories c ON COALESCE(ob.category_id, pi.category_id) = c.id
          WHERE os.business_id = $1 AND os.available_stock <= 1.00
          ORDER BY os.available_stock ASC, ui.name ASC
          LIMIT 6`,
@@ -524,7 +500,7 @@ export class DealerDashboardService {
          JOIN optical_batches ob ON os.batch_id = ob.id
          JOIN unique_items ui ON ob.unique_item_id = ui.id
          LEFT JOIN primary_items pi ON ui.primary_item_id = pi.id
-         LEFT JOIN categories c ON COALESCE(ob.category_id, ui.category_id, pi.category_id) = c.id
+         LEFT JOIN categories c ON COALESCE(ob.category_id, pi.category_id) = c.id
          WHERE ${whereClause}
          ORDER BY ui.name ASC, ob.sph ASC
          LIMIT $${queryParams.length}`,

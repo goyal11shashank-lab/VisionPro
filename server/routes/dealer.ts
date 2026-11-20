@@ -1,3 +1,5 @@
+import { BusinessRelationshipService } from '../services/businessRelationshipService.js';
+import { drizzle } from 'drizzle-orm/node-postgres';
 import { Router, Request, Response } from 'express';
 import { db, pool } from '../db/index.js';
 import { businesses, parties, dealerOrders, salesOrders, uniqueItems } from '../db/schema.js';
@@ -41,56 +43,17 @@ async function resolveMainWarehouseContext(req: Request): Promise<{
     return { error: 'Current business entity could not be found.', status: 404 };
   }
 
-  let mainWarehouseId = biz.parentBusinessId;
-
-  // If Super Admin is previewing and current business is not a dealer, allow passing ?mainWarehouseId or default to first MAIN business
-  if ((!mainWarehouseId || biz.businessType !== 'DEALER') && req.user?.isSuperAdmin) {
-    const queryMainId = req.query.mainWarehouseId as string;
-    if (queryMainId) {
-      mainWarehouseId = queryMainId;
-    } else {
-      const [firstMain] = await db
-        .select()
-        .from(businesses)
-        .where(and(eq(businesses.businessType, 'MAIN'), eq(businesses.status, 'ACTIVE')))
-        .limit(1);
-      if (firstMain) {
-        mainWarehouseId = firstMain.id;
-      }
-    }
+  let parentBiz:any;
+  try { parentBiz=(await BusinessRelationshipService.resolveSupplier(currentBizId)).source; }
+  catch(error:any) {
+    // Explicit Super Admin previews are allowed; never silently choose a first company.
+    if(req.user?.isSuperAdmin && typeof req.query.mainWarehouseId==='string'){
+      const {rows:[source]}=await pool.query(`SELECT * FROM businesses WHERE id=$1 AND status='ACTIVE'`,[req.query.mainWarehouseId]);
+      if(!source)return {error:'Supplier Business unavailable.',status:404};
+      parentBiz={...source,tradeName:source.trade_name};
+    }else return {error:error.message,status:403};
   }
-
-  if (!mainWarehouseId) {
-    return {
-      error: 'This business is not configured as a Dealer with an assigned Main Warehouse. Main Warehouse availability is strictly available to Dealer entities.',
-      status: 403,
-    };
-  }
-
-  // Fetch Parent Main Warehouse business
-  const [parentBiz] = await db
-    .select({
-      id: businesses.id,
-      name: businesses.name,
-      tradeName: businesses.tradeName,
-      city: businesses.city,
-      state: businesses.state,
-      phone: businesses.phone,
-      email: businesses.email,
-      status: businesses.status,
-      businessType: businesses.businessType,
-    })
-    .from(businesses)
-    .where(eq(businesses.id, mainWarehouseId))
-    .limit(1);
-
-  if (!parentBiz) {
-    return { error: 'Assigned Main Warehouse entity not found.', status: 404 };
-  }
-
-  if (parentBiz.status !== 'ACTIVE') {
-    return { error: `Assigned Main Warehouse "${parentBiz.name}" is currently ${parentBiz.status.toLowerCase()}.`, status: 403 };
-  }
+  parentBiz={...parentBiz,tradeName:parentBiz.trade_name || parentBiz.tradeName};
 
   return {
     dealerBusiness: biz,
@@ -108,336 +71,13 @@ async function resolveMainWarehouseContext(req: Request): Promise<{
  * - Internal costs, supplier names, purchase margins, and internal ledgers are NEVER exposed
  * - Dealer local available stock is provided alongside for immediate stock comparison
  */
-router.get(
-  '/main-warehouse/availability',
-  requireAnyPermission(['inventory:view', 'inventory.view', 'sales:view', 'sales:create', 'master:view']),
-  async (req: Request, res: Response): Promise<void> => {
-    try {
-      const context = await resolveMainWarehouseContext(req);
-      if ('error' in context) {
-        res.status(context.status).json({ error: context.error });
-        return;
-      }
-
-      const { dealerBusiness, mainWarehouse } = context;
-      const {
-        search,
-        categoryId,
-        categoryCode,
-        sph,
-        cyl,
-        axis,
-        add,
-        side,
-        inStockOnly,
-        page = '1',
-        limit = '50',
-      } = req.query;
-
-      const pageNum = Math.max(1, parseInt(page as string, 10) || 1);
-      const limitNum = Math.min(200, Math.max(1, parseInt(limit as string, 10) || 50));
-      const offset = (pageNum - 1) * limitNum;
-
-      // 1. Build Query for Main Warehouse stock
-      const queryParams: any[] = [mainWarehouse.id];
-      const whereClauses: string[] = [
-        `ob.business_id = $1`,
-        `ob.status = 'ACTIVE'`,
-      ];
-
-      if (inStockOnly === 'true' || inStockOnly === '1') {
-        whereClauses.push(`COALESCE(os.available_stock, 0) > 0`);
-      }
-
-      if (categoryId) {
-        queryParams.push(categoryId);
-        whereClauses.push(`ob.category_id = $${queryParams.length}`);
-      }
-
-      if (categoryCode) {
-        queryParams.push(String(categoryCode).toUpperCase());
-        whereClauses.push(`UPPER(c.code) = $${queryParams.length}`);
-      }
-
-      if (sph !== undefined && sph !== '') {
-        queryParams.push(parseFloat(sph as string));
-        whereClauses.push(`ob.sph = $${queryParams.length}`);
-      }
-
-      if (cyl !== undefined && cyl !== '') {
-        queryParams.push(parseFloat(cyl as string));
-        whereClauses.push(`ob.cyl = $${queryParams.length}`);
-      }
-
-      if (axis !== undefined && axis !== '') {
-        queryParams.push(parseFloat(axis as string));
-        whereClauses.push(`ob.axis = $${queryParams.length}`);
-      }
-
-      if (add !== undefined && add !== '') {
-        queryParams.push(parseFloat(add as string));
-        whereClauses.push(`ob.add = $${queryParams.length}`);
-      }
-
-      if (side && side !== 'ALL' && side !== 'NONE') {
-        queryParams.push(side);
-        whereClauses.push(`ob.side = $${queryParams.length}`);
-      }
-
-      const whereSql = whereClauses.join(' AND ');
-
-      // Query Main Warehouse batches and current stock
-      // CRITICAL: Strict field projection. NO purchase price, NO cost, NO margin, NO supplier!
-      const mainStockSql = `
-        SELECT 
-          ob.id AS batch_id,
-          ob.barcode,
-          ob.identity_key,
-          ob.sph,
-          ob.cyl,
-          ob.axis,
-          ob.add,
-          ob.side,
-          ob.status AS batch_status,
-          ui.id AS unique_item_id,
-          ui.name AS unique_item_name,
-          ui.code AS unique_item_code,
-          pi.name AS primary_item_name,
-          c.id AS category_id,
-          c.name AS category_name,
-          c.code AS category_code,
-          GREATEST(COALESCE(os.available_stock, 0), 0)::float AS main_available_stock,
-          GREATEST(COALESCE(os.physical_stock, 0), 0)::float AS main_physical_stock
-        FROM optical_batches ob
-        INNER JOIN unique_items ui ON ob.unique_item_id = ui.id
-        LEFT JOIN primary_items pi ON ui.primary_item_id = pi.id
-        LEFT JOIN categories c ON ob.category_id = c.id
-        LEFT JOIN optical_stocks os ON ob.id = os.batch_id
-        WHERE ${whereSql}
-        ORDER BY ui.name ASC, ob.sph ASC, ob.cyl ASC
-      `;
-
-      const { rows } = await pool.query(mainStockSql, queryParams);
-
-      // 2. Fetch Dealer's corresponding local stock for comparison using identity_key
-      const dealerStockMap = new Map<string, { available: number; physical: number }>();
-      if (dealerBusiness.id !== mainWarehouse.id) {
-        const dealerStockSql = `
-          SELECT 
-            ob.identity_key,
-            ui.code AS unique_item_code,
-            GREATEST(COALESCE(os.available_stock, 0), 0)::float AS dealer_available,
-            GREATEST(COALESCE(os.physical_stock, 0), 0)::float AS dealer_physical
-          FROM optical_batches ob
-          INNER JOIN unique_items ui ON ob.unique_item_id = ui.id
-          LEFT JOIN optical_stocks os ON ob.id = os.batch_id
-          WHERE ob.business_id = $1
-        `;
-        const dealerStockRes = await pool.query(dealerStockSql, [dealerBusiness.id]);
-        for (const r of dealerStockRes.rows) {
-          if (r.identity_key) {
-            dealerStockMap.set(r.identity_key, {
-              available: r.dealer_available || 0,
-              physical: r.dealer_physical || 0,
-            });
-          }
-          if (r.unique_item_code) {
-            dealerStockMap.set(`${r.unique_item_code}:${r.identity_key}`, {
-              available: r.dealer_available || 0,
-              physical: r.dealer_physical || 0,
-            });
-          }
-        }
-      }
-
-      // 3. Format items with canonical power display & attach dealer stock
-      let formattedItems = rows.map((row: any) => {
-        const sphStr = row.sph != null ? (row.sph > 0 ? `+${Number(row.sph).toFixed(2)}` : Number(row.sph).toFixed(2)) : '0.00';
-        const cylStr = row.cyl != null ? (row.cyl > 0 ? `+${Number(row.cyl).toFixed(2)}` : Number(row.cyl).toFixed(2)) : '0.00';
-        let formattedPower = `SPH ${sphStr} / CYL ${cylStr}`;
-        if (row.axis) formattedPower += ` AXIS ${row.axis}°`;
-        if (row.add) formattedPower += ` ADD +${Number(row.add).toFixed(2)}`;
-        if (row.side && row.side !== 'NONE') formattedPower += ` (${row.side})`;
-
-        const dealerStock = dealerStockMap.get(`${row.unique_item_code}:${row.identity_key}`)
-          || dealerStockMap.get(row.identity_key)
-          || { available: 0, physical: 0 };
-
-        return {
-          batchId: row.batch_id,
-          barcode: row.barcode,
-          identityKey: row.identity_key,
-          sph: row.sph != null ? Number(row.sph) : null,
-          cyl: row.cyl != null ? Number(row.cyl) : null,
-          axis: row.axis != null ? Number(row.axis) : null,
-          add: row.add != null ? Number(row.add) : null,
-          side: row.side || 'NONE',
-          formattedPower,
-          uniqueItemId: row.unique_item_id,
-          uniqueItemName: row.unique_item_name,
-          uniqueItemCode: row.unique_item_code,
-          primaryItemName: row.primary_item_name || '',
-          categoryId: row.category_id,
-          categoryName: row.category_name || 'Standard',
-          categoryCode: row.category_code || '',
-          mainWarehouseAvailable: row.main_available_stock,
-          mainWarehousePhysical: row.main_physical_stock,
-          dealerAvailable: dealerStock.available,
-          dealerPhysical: dealerStock.physical,
-        };
-      });
-
-      // 4. Apply smart search ranking if search query provided
-      if (search && String(search).trim()) {
-        const queryStr = String(search).trim();
-        const scored = formattedItems.map(item => {
-          const candidate: SearchCandidate = {
-            id: item.batchId,
-            name: `${item.uniqueItemName} ${item.primaryItemName || ''}`.trim(),
-            code: item.uniqueItemCode,
-            barcode: item.barcode,
-            sph: item.sph,
-            cyl: item.cyl,
-            axis: item.axis,
-            add: item.add,
-            side: item.side,
-            categoryCode: item.categoryCode,
-            rawText: `${item.uniqueItemName} ${item.uniqueItemCode} ${item.formattedPower} ${item.barcode}`,
-          };
-          const score = scoreCandidate(candidate, queryStr);
-          return { item, score };
-        });
-
-        console.log('Availability search query:', queryStr, 'scored count:', scored.length, 'scores:', scored.map(s => ({ sph: s.item.sph, cyl: s.item.cyl, score: s.score })));
-
-        formattedItems = scored
-          .filter(s => s.score > 30)
-          .sort((a, b) => b.score - a.score)
-          .map(s => s.item);
-      }
-
-      const totalItems = formattedItems.length;
-      const totalPages = Math.ceil(totalItems / limitNum) || 1;
-      const paginatedItems = formattedItems.slice(offset, offset + limitNum);
-
-      res.json({
-        success: true,
-        mainWarehouse: {
-          id: mainWarehouse.id,
-          name: mainWarehouse.name,
-          tradeName: mainWarehouse.tradeName,
-          city: mainWarehouse.city,
-          state: mainWarehouse.state,
-          phone: mainWarehouse.phone,
-          email: mainWarehouse.email,
-        },
-        dealerBusiness: {
-          id: dealerBusiness.id,
-          name: dealerBusiness.name,
-          businessType: dealerBusiness.businessType,
-        },
-        pagination: {
-          page: pageNum,
-          limit: limitNum,
-          totalItems,
-          totalPages,
-        },
-        items: paginatedItems,
-      });
-    } catch (error: any) {
-      console.error('[GET /api/dealer/main-warehouse/availability Error]', error);
-      res.status(500).json({
-        error: error.message || 'Failed to fetch Main Warehouse stock availability',
-      });
-    }
-  }
-);
+router.get('/main-warehouse/availability', requireAnyPermission(['inventory:view','sales:view','sales:create','master:view']), (_req:Request,res:Response) => { res.status(410).json({error:'Use /api/business-stock/catalogue and /api/business-stock/check. Quantities are not shared.'}); });
 
 /**
  * GET /api/dealer/main-warehouse/summary
  * Aggregate metrics of Main Warehouse catalog and availability for Dashboard/Header banner
  */
-router.get(
-  '/main-warehouse/summary',
-  requireAnyPermission(['inventory:view', 'inventory.view', 'sales:view', 'master:view']),
-  async (req: Request, res: Response): Promise<void> => {
-    try {
-      const context = await resolveMainWarehouseContext(req);
-      if ('error' in context) {
-        res.status(context.status).json({ error: context.error });
-        return;
-      }
-
-      const { mainWarehouse, dealerBusiness } = context;
-
-      // Summary counts
-      const summaryRes = await pool.query(`
-        SELECT 
-          COUNT(DISTINCT ob.id)::int AS total_batches,
-          COUNT(DISTINCT ob.unique_item_id)::int AS total_unique_items,
-          COUNT(DISTINCT CASE WHEN COALESCE(os.available_stock, 0) > 0 THEN ob.id END)::int AS in_stock_batches,
-          COALESCE(SUM(GREATEST(COALESCE(os.available_stock, 0), 0)), 0)::float AS total_units_available
-        FROM optical_batches ob
-        LEFT JOIN optical_stocks os ON ob.id = os.batch_id
-        WHERE ob.business_id = $1 AND ob.status = 'ACTIVE'
-      `, [mainWarehouse.id]);
-
-      // Category breakdown
-      const categoryRes = await pool.query(`
-        SELECT 
-          c.id,
-          c.name,
-          c.code,
-          COUNT(ob.id)::int AS total_batches,
-          COUNT(CASE WHEN COALESCE(os.available_stock, 0) > 0 THEN 1 END)::int AS in_stock_batches,
-          COALESCE(SUM(GREATEST(COALESCE(os.available_stock, 0), 0)), 0)::float AS available_units
-        FROM categories c
-        JOIN optical_batches ob ON c.id = ob.category_id AND ob.business_id = $1 AND ob.status = 'ACTIVE'
-        LEFT JOIN optical_stocks os ON ob.id = os.batch_id
-        GROUP BY c.id, c.name, c.code
-        ORDER BY available_units DESC
-      `, [mainWarehouse.id]);
-
-      const stats = summaryRes.rows[0] || {
-        total_batches: 0,
-        total_unique_items: 0,
-        in_stock_batches: 0,
-        total_units_available: 0,
-      };
-
-      res.json({
-        success: true,
-        mainWarehouse: {
-          id: mainWarehouse.id,
-          name: mainWarehouse.name,
-          tradeName: mainWarehouse.tradeName,
-          city: mainWarehouse.city,
-          state: mainWarehouse.state,
-        },
-        dealerBusiness: {
-          id: dealerBusiness.id,
-          name: dealerBusiness.name,
-        },
-        metrics: {
-          totalBatches: stats.total_batches,
-          totalUniqueItems: stats.total_unique_items,
-          inStockBatches: stats.in_stock_batches,
-          totalUnitsAvailable: stats.total_units_available,
-        },
-        categories: categoryRes.rows.map((c: any) => ({
-          id: c.id,
-          name: c.name,
-          code: c.code,
-          totalBatches: c.total_batches,
-          inStockBatches: c.in_stock_batches,
-          availableUnits: c.available_units,
-        })),
-      });
-    } catch (error: any) {
-      res.status(500).json({ error: error.message || 'Failed to fetch Main Warehouse summary' });
-    }
-  }
-);
+router.get('/main-warehouse/summary', requireAnyPermission(['inventory:view','sales:view','sales:create','master:view']), (_req:Request,res:Response) => { res.status(410).json({error:'Use /api/business-stock/catalogue and /api/business-stock/check. Quantities are not shared.'}); });
 
 /**
  * Helper: Resolve or provision Dealer as a Customer Party inside Main Warehouse business
@@ -524,7 +164,7 @@ async function resolveDealerPartyInMain(
  */
 router.post(
   '/order',
-  requireAnyPermission(['sales:create', 'sales.create', 'sales.order.create', 'sales:order:create', 'master:view']),
+  requireAnyPermission(['sales:create', 'sales.create', 'sales.order.create', 'sales:order:create']),
   async (req: Request, res: Response) => {
     const context = await resolveMainWarehouseContext(req);
     if ('error' in context) {
@@ -540,10 +180,15 @@ router.post(
       return;
     }
 
+    const client = await pool.connect();
+    try {
+      await client.query('BEGIN');
+      // Serialize same-warehouse order provisioning and idempotency checks.
+      await client.query('SELECT pg_advisory_xact_lock(hashtext($1))', ['dealer-order:' + mainWarehouse.id]);
     // Check idempotency if key provided
     if (idempotencyKey && typeof idempotencyKey === 'string' && idempotencyKey.trim().length > 0) {
       const trimmedKey = idempotencyKey.trim();
-      const existingDealerOrder = await db
+      const existingDealerOrder = await drizzle(client)
         .select()
         .from(dealerOrders)
         .where(
@@ -557,12 +202,16 @@ router.post(
       if (existingDealerOrder.length > 0) {
         // Return already processed order
         const [existing] = existingDealerOrder;
-        const mainSo = await SalesService.getSalesOrderById(mainWarehouse.id, existing.mainSalesOrderId).catch(() => null);
+        const mainSo = await SalesService.getSalesOrderById(mainWarehouse.id, existing.mainSalesOrderId, client).catch(() => null);
+        await client.query('COMMIT');
+        client.release();
         res.json({
           success: true,
           message: 'Order already processed (idempotent submission).',
           order: {
             id: existing.id,
+            mainSalesOrderId: existing.mainSalesOrderId,
+            dealerPurchaseOrderId: existing.dealerPurchaseOrderId,
             orderNumber: existing.orderNumber,
             status: existing.status,
             grandTotal: parseFloat(existing.grandTotal),
@@ -575,9 +224,6 @@ router.post(
       }
     }
 
-    const client = await pool.connect();
-    try {
-      await client.query('BEGIN');
 
       // 1. Resolve Dealer as Customer Party in Main Warehouse
       const dealerPartyId = await resolveDealerPartyInMain(client, dealerBusiness, mainWarehouse);
@@ -592,8 +238,11 @@ router.post(
       }[] = [];
 
       for (const line of lines) {
-        const qty = parseFloat(line.quantity);
-        if (isNaN(qty) || qty <= 0) {
+        if (line.rate !== undefined && (!Number.isFinite(Number(line.rate)) || Number(line.rate) < 0)) {
+          throw new Error('Order rate must be a finite non-negative number.');
+        }
+        const qty = Number(line.quantity);
+        if (!Number.isFinite(qty) || qty <= 0) {
           throw new Error(`Invalid line quantity: ${line.quantity}`);
         }
         if (Math.abs(Math.round(qty * 2) - qty * 2) > 0.0001) {
@@ -605,12 +254,14 @@ router.post(
             batchId: line.batchId,
             uniqueItemId: line.uniqueItemId,
             quantity: qty,
-            rate: line.rate ? parseFloat(line.rate) : undefined,
+            rate: line.rate !== undefined ? Number(line.rate) : undefined,
           });
         } else if (Array.isArray(line.batches) && line.batches.length > 0) {
+          let batchTotal = 0;
           for (const b of line.batches) {
-            const bQty = parseFloat(b.quantity);
-            if (isNaN(bQty) || bQty <= 0) continue;
+            const bQty = Number(b.quantity);
+            if (!Number.isFinite(bQty) || bQty <= 0) throw new Error('Batch quantity must be finite and greater than zero.');
+            batchTotal += bQty;
             if (Math.abs(Math.round(bQty * 2) - bQty * 2) > 0.0001) {
               throw new Error(`Batch quantity (${bQty}) must be in steps of 0.5 (e.g., 0.5, 1.0, 1.5, 2.0).`);
             }
@@ -618,9 +269,10 @@ router.post(
               batchId: b.batchId,
               uniqueItemId: line.uniqueItemId,
               quantity: bQty,
-              rate: line.rate ? parseFloat(line.rate) : undefined,
+              rate: line.rate !== undefined ? Number(line.rate) : undefined,
             });
           }
+          if (Math.abs(batchTotal - qty) > 0.001) throw new Error('Batch quantities must equal the order line quantity.');
         } else {
           throw new Error('Every order item must specify an optical batch ID to reserve at Main Warehouse.');
         }
@@ -631,20 +283,27 @@ router.post(
       }
 
       // Check stock for all requested batches with FOR UPDATE lock against Main Warehouse
-      for (const reqItem of requestedBatches) {
+      const stockDemands = new Map<string, typeof requestedBatches[number]>();
+      for (const item of requestedBatches) {
+        const existing = stockDemands.get(item.batchId);
+        if (existing && existing.uniqueItemId !== item.uniqueItemId) throw new Error('The same batch cannot belong to different items.');
+        stockDemands.set(item.batchId, { ...item, quantity: (existing?.quantity || 0) + item.quantity });
+      }
+      for (const reqItem of [...stockDemands.values()].sort((a,b)=>a.batchId.localeCompare(b.batchId))) {
         // Lock stock record at Main Warehouse
         const stock = await StockService.lockAndGetStock(client, mainWarehouse.id, reqItem.batchId);
 
         // Fetch batch details to give friendly error if insufficient
         const batchInfoRes = await client.query(
-          `SELECT ob.id, ob.barcode, ob.sph, ob.cyl, ob.axis, ob.add, ui.name as item_name
+          `SELECT ob.id, ob.unique_item_id, ob.barcode, ob.sph, ob.cyl, ob.axis, ob.add, ui.name as item_name
            FROM optical_batches ob
            JOIN unique_items ui ON ob.unique_item_id = ui.id
            WHERE ob.id = $1 AND ob.business_id = $2`,
           [reqItem.batchId, mainWarehouse.id]
         );
 
-        const batchInfo = batchInfoRes.rows[0] || { item_name: 'Item', barcode: reqItem.batchId };
+        const batchInfo = batchInfoRes.rows[0];
+        if (!batchInfo || batchInfo.unique_item_id !== reqItem.uniqueItemId) throw new Error('Order batch does not belong to the selected Main Warehouse item.');
         const powerDesc = [
           batchInfo.sph !== null ? `SPH ${Number(batchInfo.sph) > 0 ? '+' : ''}${batchInfo.sph}` : '',
           batchInfo.cyl !== null ? `CYL ${Number(batchInfo.cyl) > 0 ? '+' : ''}${batchInfo.cyl}` : '',
@@ -683,7 +342,7 @@ router.post(
 
         // Determine rate: check partyItemPrices, or mrp, or purchaseRate, or provided rate
         let resolvedRate = reqItem.rate;
-        if (resolvedRate === undefined || isNaN(resolvedRate) || resolvedRate <= 0) {
+        if (resolvedRate === undefined || isNaN(resolvedRate) || resolvedRate < 0) {
           const lastRate = await SalesService.getPartyItemPrice(mainWarehouse.id, dealerPartyId, reqItem.uniqueItemId);
           if (lastRate && lastRate > 0) {
             resolvedRate = lastRate;
@@ -692,20 +351,22 @@ router.post(
           } else if (itemData?.purchaseRate && parseFloat(itemData.purchaseRate) > 0) {
             resolvedRate = parseFloat(itemData.purchaseRate);
           } else {
-            resolvedRate = 100.00; // fallback standard unit rate
+            throw new Error('No configured dealer/item price found. Supply a rate or configure the item price before ordering.');
           }
         }
 
-        const existing = itemsMap.get(reqItem.uniqueItemId);
+        const itemGstRate = (itemData?.gstRate !== undefined && itemData?.gstRate !== null) ? parseFloat(itemData.gstRate) : 0.0;
+        const commercialKey = `${reqItem.uniqueItemId}:${resolvedRate}:${itemGstRate}`;
+        const existing = itemsMap.get(commercialKey);
         if (existing) {
           existing.quantity = round2(existing.quantity + reqItem.quantity);
           existing.batches.push({ batchId: reqItem.batchId, quantity: reqItem.quantity });
         } else {
-          itemsMap.set(reqItem.uniqueItemId, {
+          itemsMap.set(commercialKey, {
             uniqueItemId: reqItem.uniqueItemId,
             quantity: reqItem.quantity,
             rate: resolvedRate,
-            gstRate: (itemData?.gstRate !== undefined && itemData?.gstRate !== null) ? parseFloat(itemData.gstRate) : 0.0,
+            gstRate: itemGstRate,
             batches: [{ batchId: reqItem.batchId, quantity: reqItem.quantity }],
           });
         }
@@ -721,9 +382,7 @@ router.post(
         batches: item.batches,
       }));
 
-      // Commit early stock lock check so createSalesOrder can execute cleanly within its own transaction
-      await client.query('COMMIT');
-      client.release();
+      // Keep SO reservations, dealer linkage and every PO power allocation atomic.
 
       // 4. Create authoritative Sales Order directly in Main Warehouse
       const orderNotes = [
@@ -743,12 +402,13 @@ router.post(
           status: 'CONFIRMED', // Immediately reserve stock at Main Warehouse
           lines: salesLines,
         },
-        req.user!.id
+        req.user!.id,
+        client
       );
 
       // 5. Store Dealer Order linkage record in dealer_orders table
       const totalQuantity = salesLines.reduce((acc, l) => acc + l.quantity, 0);
-      const [dealerOrderRecord] = await db
+      const [dealerOrderRecord] = await drizzle(client)
         .insert(dealerOrders)
         .values({
           dealerBusinessId: dealerBusiness.id,
@@ -772,7 +432,7 @@ router.post(
       // Create corresponding Dealer Purchase Order in Dealer business
       let dealerPurchaseOrder: any = null;
       try {
-        const pClient = await pool.connect();
+        const pClient = client;
         try {
           const mainSupplierPartyId = await DealerLogisticsService.resolveMainWarehouseSupplierParty(
             pClient,
@@ -784,17 +444,18 @@ router.post(
           const poLines = [];
           for (const sLine of salesLines) {
             let dealerUniqueItemId: string | null = null;
-            let dealerBatchId: string | null = null;
+            const dealerBatches: { batchId: string; quantity: number }[] = [];
             if (sLine.batches && sLine.batches.length > 0) {
-              const rep = await DealerLogisticsService.resolveOrReplicateItemAndBatchInDealer(
-                pClient,
-                dealerBusiness.id,
-                sLine.uniqueItemId,
-                sLine.batches[0].batchId,
-                req.user!.id
-              );
-              dealerUniqueItemId = rep.dealerUniqueItemId;
-              dealerBatchId = rep.dealerBatchId;
+              for (const batch of sLine.batches) {
+                const rep = await DealerLogisticsService.resolveOrReplicateItemAndBatchInDealer(
+                  pClient, dealerBusiness.id, sLine.uniqueItemId, batch.batchId, req.user!.id
+                );
+                if (dealerUniqueItemId && dealerUniqueItemId !== rep.dealerUniqueItemId) {
+                  throw new Error('Dealer power batches resolved to inconsistent catalogue items.');
+                }
+                dealerUniqueItemId = rep.dealerUniqueItemId;
+                dealerBatches.push({ batchId: rep.dealerBatchId, quantity: batch.quantity });
+              }
             } else {
               // Resolve item without batch
               const uiRes = await pClient.query(
@@ -814,7 +475,7 @@ router.post(
                 discountType: 'NONE' as const,
                 discountValue: 0,
                 gstRate: sLine.gstRate,
-                batches: dealerBatchId ? [{ batchId: dealerBatchId, quantity: sLine.quantity }] : undefined,
+                batches: dealerBatches.length ? dealerBatches : undefined,
               });
             }
           }
@@ -835,27 +496,28 @@ router.post(
               notes: `Linked to Main Sales Order ${mainSalesOrder.orderNumber}`,
               lines: poLines,
             },
-            req.user!.id
+            req.user!.id,
+            client
           );
 
           const poId = dealerPurchaseOrder?.order?.id || dealerPurchaseOrder?.id;
 
           // Update dealer_orders with dealer_purchase_order_id
           if (poId) {
-            await pool.query(
+            await client.query(
               `UPDATE dealer_orders SET dealer_purchase_order_id = $1 WHERE id = $2`,
               [poId, dealerOrderRecord.id]
             );
           }
         } finally {
-          pClient.release();
+          // Outer order transaction owns this connection.
         }
       } catch (poErr) {
-        console.error('Failed to create linked dealer purchase order:', poErr);
+        throw poErr;
       }
 
       const linkedPoId = dealerPurchaseOrder?.order?.id || dealerPurchaseOrder?.id || null;
-
+      if (!linkedPoId) throw new Error('Linked dealer purchase order was not created.');
       // 6. Record Audit Log for Dealer Business
       await recordAuditLog({
         businessId: dealerBusiness.id,
@@ -873,7 +535,9 @@ router.post(
           totalQuantity,
         },
         req,
-      });
+      }, client);
+      await client.query('COMMIT');
+      client.release();
 
       res.status(201).json({
         success: true,
@@ -1405,6 +1069,11 @@ router.get(
   }
 );
 
+router.get('/shipments/:id/receipt-attempt/:requestId',requireAnyPermission(['purchase:view','purchase:create','purchase:receive']),async(req:Request,res:Response)=>{
+  try {res.json(await DealerLogisticsService.getReceiptAttempt(req.user!.currentBusinessId,req.params.id,req.params.requestId));}
+  catch(error:any){res.status(400).json({error:error.message});}
+});
+
 /**
  * POST /api/dealer/shipments/:id/receive
  * Dealer confirms Goods Receipt (GRN), performs physical count (Good, Damaged, Short),
@@ -1412,12 +1081,12 @@ router.get(
  */
 router.post(
   '/shipments/:id/receive',
-  requireAnyPermission(['purchase:create', 'purchase.create', 'inventory:edit', 'master:edit', 'sales:create']),
+  requireAnyPermission(['purchase:create', 'purchase.create', 'purchase:receive']),
   async (req: Request, res: Response) => {
     try {
       const currentBizId = req.user!.currentBusinessId;
       const shipmentId = req.params.id;
-      const { receiptDate, remarks, lines } = req.body;
+      const { receiptDate, remarks, lines, requestId } = req.body;
 
       if (!lines || !Array.isArray(lines) || lines.length === 0) {
         res.status(400).json({ error: 'Inspection lines are required to confirm goods receipt.' });
@@ -1427,33 +1096,17 @@ router.post(
       const result = await DealerLogisticsService.confirmDealerGoodsReceipt({
         dealerBusinessId: currentBizId,
         dealerShipmentId: shipmentId,
+        requestId,
         receiptDate,
         remarks,
         lines,
         userId: req.user!.id,
       });
 
-      await recordAuditLog({
-        businessId: currentBizId,
-        userId: req.user!.id,
-        action: 'CREATE',
-        module: 'DEALER_LOGISTICS',
-        entityType: 'dealer_goods_receipts',
-        entityId: result.goodsReceiptId,
-        newValue: {
-          receiptNumber: result.receiptNumber,
-          shipmentId,
-          totalGoodReceived: result.totalGoodReceived,
-          totalDamaged: result.totalDamaged,
-          totalShort: result.totalShort,
-          purchaseInvoiceId: result.purchaseInvoiceId,
-        },
-      });
-
       res.status(200).json(result);
     } catch (error: any) {
       console.error('[POST /api/dealer/shipments/:id/receive Error]', error);
-      res.status(400).json({ error: error.message || 'Failed to confirm goods receipt' });
+      res.status(400).json({ error: error.message || 'Failed to confirm goods receipt', receiptOutcome: error.receiptOutcome || 'UNKNOWN' });
     }
   }
 );
@@ -1477,7 +1130,11 @@ router.get(
         return;
       }
 
-      const summary = await DealerDashboardService.getDealerDashboardSummary(dealerBizId);
+      const summary = await DealerDashboardService.getDealerDashboardSummary(dealerBizId, { isSuperAdmin: req.user!.isSuperAdmin });
+      if (!req.user!.isSuperAdmin) {
+        delete (summary.kpis as any).mainWarehouseAvailable;
+        summary.mainWarehouse = { name: summary.mainWarehouse.name } as any;
+      }
       res.json({
         success: true,
         ...summary,
@@ -1495,30 +1152,7 @@ router.get(
  * GET /api/dealer/dashboard/search
  * Fast search of parent Main Warehouse available optical stock
  */
-router.get(
-  '/dashboard/search',
-  requireAnyPermission(['inventory:view', 'inventory.view', 'sales:view', 'master:view']),
-  async (req: Request, res: Response): Promise<void> => {
-    try {
-      let dealerBizId = req.user!.currentBusinessId;
-      if (req.user?.isSuperAdmin && req.query.dealerBusinessId) {
-        dealerBizId = req.query.dealerBusinessId as string;
-      }
-
-      const q = (req.query.q as string) || '';
-      const limit = parseInt(req.query.limit as string, 10) || 8;
-
-      const result = await DealerDashboardService.searchMainAvailability(dealerBizId, q, limit);
-      res.json({
-        success: true,
-        ...result,
-      });
-    } catch (error: any) {
-      console.error('[GET /api/dealer/dashboard/search Error]', error);
-      res.status(500).json({ error: error.message || 'Failed to search Main Warehouse availability' });
-    }
-  }
-);
+router.get('/dashboard/search',requireAnyPermission(['inventory:view','sales:view','master:view']),(_req:Request,res:Response)=>{res.status(410).json({error:'Use the exact item/power Business availability check. Quantities are not shared.'});});
 
 /**
  * GET /api/dealer/settings/stock-sharing

@@ -1,3 +1,4 @@
+import {assertSyntheticDatabase} from './assertSyntheticDatabase.js';assertSyntheticDatabase();
 import { pool } from '../db/index.js';
 import { GodownService } from '../services/godownService.js';
 import { SalesService } from '../services/salesService.js';
@@ -578,7 +579,7 @@ async function runTests() {
   }
 }
 
-runTests().catch((err) => {
+runTests().then(()=>pool.end()).catch((err) => {
   console.error('\nTEST SUITE FAILED WITH ERROR:', err);
   process.exit(1);
 });

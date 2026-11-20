@@ -76,6 +76,63 @@ function getImportPermission(type: ImportType): string {
   }
 }
 
+// Permission helpers for session-scoped import/export routes. getImportPermission maps each
+// import type to its module permission; the helpers accept both colon and dot notations and
+// always allow Super Admin.
+function userHasAnyPermission(req: Request, codes: string[]): boolean {
+  if (req.user?.isSuperAdmin) return true;
+  const perms = req.user?.permissions || [];
+  return codes.some(c => perms.includes(c));
+}
+
+function notationVariants(code: string): string[] {
+  return code.includes(':') ? [code, code.replace(/:/g, '.')] : [code, code.replace(/\./g, ':')];
+}
+
+function assertImportTypePermission(req: Request, res: Response, type: ImportType): boolean {
+  const base = getImportPermission(type);
+  if (!userHasAnyPermission(req, notationVariants(base))) {
+    res.status(403).json({ error: `Permission denied. Required permission: '${base}'` });
+    return false;
+  }
+  return true;
+}
+
+// Maps an export dataset type to the exporting module's permission.
+function getExportPermission(type: string): string {
+  switch (type) {
+    case 'PARTIES':
+      return 'parties:export';
+    case 'OPTICAL_BATCHES':
+    case 'INVENTORY':
+    case 'STOCK_LEDGER':
+      return 'inventory:export';
+    case 'PURCHASE_INVOICES':
+    case 'PURCHASE_DETAILS':
+    case 'PURCHASE_RETURNS':
+      return 'purchase:export';
+    case 'SALES_ORDERS':
+    case 'SALES_INVOICES':
+    case 'SALES_DETAILS':
+    case 'SALES_RETURNS':
+      return 'sales:export';
+    case 'CUSTOMER_OUTSTANDING':
+    case 'SUPPLIER_OUTSTANDING':
+      return 'accounts:export';
+    default:
+      return 'reports:export';
+  }
+}
+
+function assertExportTypePermission(req: Request, res: Response, type: string): boolean {
+  const base = getExportPermission(type);
+  if (!userHasAnyPermission(req, notationVariants(base))) {
+    res.status(403).json({ error: `Permission denied. Required permission: '${base}'` });
+    return false;
+  }
+  return true;
+}
+
 /**
  * 1. Download Template XLSX
  * GET /api/imports/templates/:type
@@ -171,6 +228,11 @@ router.post(
       const importType = (req.body.importType || '').toUpperCase() as ImportType;
       if (!TEMPLATE_DEFINITIONS[importType]) {
         return res.status(400).json({ error: `Invalid importType "${importType}". Allowed: PARTY, PURCHASE, SALES_ORDER, SALES_INVOICE, OPENING_STOCK, OPTICAL_BATCH, STOCK_ITEM` });
+      }
+
+      // PERMISSION: importing data requires the module permission for the import type.
+      if (!assertImportTypePermission(req, res, importType)) {
+        return;
       }
 
       if (!rawRows) {
@@ -297,6 +359,11 @@ router.post(
         return res.status(404).json({ error: 'Import session not found.' });
       }
 
+      // PERMISSION: session operations require the module permission for the session's import type.
+      if (!assertImportTypePermission(req, res, (session.importType || '').toUpperCase() as ImportType)) {
+        return;
+      }
+
       const prevPreview = session.previewData as any;
       const rawRows = (prevPreview?.rows || []).map((r: any) => r.raw);
       const importMode = (req.body.importMode || prevPreview?.importMode || 'CREATE_ONLY').toUpperCase() as 'CREATE_ONLY' | 'UPSERT';
@@ -353,6 +420,11 @@ router.get(
         return res.status(404).json({ error: 'Import session not found.' });
       }
 
+      // PERMISSION: session operations require the module permission for the session's import type.
+      if (!assertImportTypePermission(req, res, (session.importType || '').toUpperCase() as ImportType)) {
+        return;
+      }
+
       return res.json({
         session: {
           id: session.id,
@@ -395,6 +467,19 @@ router.post(
 
       if (!businessId) return res.status(400).json({ error: 'Business context required.' });
 
+      // PERMISSION: posting an import requires the module permission for the session's import type.
+      const [session] = await db
+        .select()
+        .from(importSessions)
+        .where(eq(importSessions.id, sessionId))
+        .limit(1);
+      if (!session || session.businessId !== businessId) {
+        return res.status(404).json({ error: 'Import session not found.' });
+      }
+      if (!assertImportTypePermission(req, res, (session.importType || '').toUpperCase() as ImportType)) {
+        return;
+      }
+
       const result = await ImportPostingService.postImportSession(businessId, sessionId, userId);
       return res.json(result);
     } catch (err: any) {
@@ -424,6 +509,11 @@ router.get(
 
       if (!session || session.businessId !== businessId) {
         return res.status(404).json({ error: 'Import session not found.' });
+      }
+
+      // PERMISSION: session operations require the module permission for the session's import type.
+      if (!assertImportTypePermission(req, res, (session.importType || '').toUpperCase() as ImportType)) {
+        return;
       }
 
       const errors = (session.errorSummary as any[]) || [];
@@ -506,6 +596,11 @@ router.post(
       const datasetType = (req.params.type || '').toUpperCase() as ExportDatasetType;
       const filters = req.body || {};
 
+      // PERMISSION: exporting a dataset requires the owning module's export permission.
+      if (!assertExportTypePermission(req, res, datasetType)) {
+        return;
+      }
+
       const { fileName, buffer, rowCount } = await ExportService.exportDataset(
         businessId,
         datasetType,
@@ -541,6 +636,11 @@ router.get(
 
       const datasetType = (req.params.type || '').toUpperCase() as ExportDatasetType;
       const filters = req.query || {};
+
+      // PERMISSION: exporting a dataset requires the owning module's export permission.
+      if (!assertExportTypePermission(req, res, datasetType)) {
+        return;
+      }
 
       const { fileName, buffer, rowCount } = await ExportService.exportDataset(
         businessId,

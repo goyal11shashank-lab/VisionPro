@@ -4,6 +4,7 @@ import { users, userBusinessAccess, userRoles, roles, businesses } from '../db/s
 import { authenticateToken } from '../middleware/auth.js';
 import { requirePermission } from '../middleware/permission.js';
 import { hashPassword } from '../auth/password.js';
+import { findExceedingPermissions, findRoleTenantScopeViolation } from '../services/roleCeilingService.js';
 import { recordAuditLog } from '../services/auditService.js';
 import { eq, and } from 'drizzle-orm';
 import { z } from 'zod';
@@ -217,7 +218,20 @@ router.get('/:id', authenticateToken, requirePermission('admin:manage_users'), a
       ORDER BY uba.created_at ASC
     `, [targetUserId]);
 
-    const authorizedBusinesses = accessQuery.rows.map(row => ({
+    // TENANT BOUNDARY: a non-Super Admin viewer only sees the target's memberships inside
+    // their own authorized businesses. Memberships in businesses outside the actor's scope
+    // (other tenant trees) are hidden, including their names, roles and default flag.
+    let visibleAccessRows = accessQuery.rows;
+    if (!req.user?.isSuperAdmin) {
+      const actorAccessRes = await pool.query(
+        `SELECT business_id FROM user_business_access WHERE user_id = $1`,
+        [req.user!.id]
+      );
+      const actorBusinessIds = new Set(actorAccessRes.rows.map((r: any) => r.business_id));
+      visibleAccessRows = accessQuery.rows.filter((row: any) => actorBusinessIds.has(row.businessId));
+    }
+
+    const authorizedBusinesses = visibleAccessRows.map(row => ({
       businessId: row.businessId,
       businessName: row.businessName,
       tradeName: row.tradeName,
@@ -310,6 +324,38 @@ router.post('/', authenticateToken, requirePermission('admin:manage_users'), asy
     } else if (!isSuperAdmin) {
       res.status(400).json({ error: 'At least one business and role assignment is required.' });
       return;
+    }
+
+    // TENANT BOUNDARY: non-Super Admin actors may only grant access to businesses
+    // they themselves are authorized for. This blocks cross-tenant user provisioning
+    // (e.g. a Dealer manager creating users inside the Main Warehouse or a peer Dealer).
+    if (!req.user!.isSuperAdmin && finalAssignments.length > 0) {
+      const actorAccess = await db
+        .select({ businessId: userBusinessAccess.businessId })
+        .from(userBusinessAccess)
+        .where(eq(userBusinessAccess.userId, req.user!.id));
+      const actorBusinessIds = new Set(actorAccess.map(a => a.businessId));
+      const hasUnauthorizedAssignment = finalAssignments.some(a => !actorBusinessIds.has(a.businessId));
+      if (hasUnauthorizedAssignment) {
+        res.status(403).json({ error: 'You cannot assign users to businesses outside your own authorized access.' });
+        return;
+      }
+      // ROLE TENANT SCOPE + CEILING: the actor may only assign roles that belong to the
+      // target business's tenant (system roles, the business's own custom roles, or the
+      // owning Main Warehouse's custom roles for its Dealers), and may not grant a role
+      // whose permissions exceed their own effective permissions in the target business.
+      for (const a of finalAssignments) {
+        const scopeViolation = await findRoleTenantScopeViolation(a.roleId, a.businessId);
+        if (scopeViolation) {
+          res.status(403).json({ error: scopeViolation });
+          return;
+        }
+        const exceeding = await findExceedingPermissions(req.user!.id, a.businessId, a.roleId);
+        if (exceeding.length > 0) {
+          res.status(403).json({ error: 'You cannot grant a role with permissions you do not hold in the target business.' });
+          return;
+        }
+      }
     }
 
     const passwordHash = await hashPassword(password);
@@ -410,6 +456,29 @@ router.put('/:id', authenticateToken, requirePermission('admin:manage_users'), a
       return;
     }
 
+    // TENANT BOUNDARY: non-Super Admin actors may only modify users who belong to their
+    // current business, and may never modify Super Administrator accounts.
+    if (!req.user!.isSuperAdmin) {
+      const [membership] = await db
+        .select({ businessId: userBusinessAccess.businessId })
+        .from(userBusinessAccess)
+        .where(
+          and(
+            eq(userBusinessAccess.userId, targetUserId),
+            eq(userBusinessAccess.businessId, req.user!.currentBusinessId)
+          )
+        )
+        .limit(1);
+      if (!membership) {
+        res.status(403).json({ error: 'You cannot modify a user who does not belong to your current business.' });
+        return;
+      }
+      if (targetUser.isSuperAdmin) {
+        res.status(403).json({ error: 'Only a Super Administrator can modify a Super Administrator account.' });
+        return;
+      }
+    }
+
     const { fullName, email, mobile, status, isSuperAdmin } = parseResult.data;
 
     // Prevent self-deactivation
@@ -502,6 +571,50 @@ router.put('/:id/business-access', authenticateToken, requirePermission('admin:m
     }
     const targetUser = userRes.rows[0];
 
+    // TENANT BOUNDARY: non-Super Admin actors may only manage members of their current business,
+    // may never rewrite access for Super Administrator accounts, and may only grant access to
+    // businesses they themselves are authorized for.
+    let actorBusinessIds: Set<string> | null = null;
+    if (!req.user!.isSuperAdmin) {
+      const membershipRes = await client.query(
+        `SELECT business_id FROM user_business_access WHERE user_id = $1 AND business_id = $2 LIMIT 1`,
+        [targetUserId, req.user!.currentBusinessId]
+      );
+      if (membershipRes.rows.length === 0) {
+        res.status(403).json({ error: 'You cannot manage access for a user who does not belong to your current business.' });
+        return;
+      }
+      if (targetUser.is_super_admin) {
+        res.status(403).json({ error: 'Only a Super Administrator can change access for a Super Administrator account.' });
+        return;
+      }
+      const actorAccessRes = await client.query(
+        `SELECT business_id FROM user_business_access WHERE user_id = $1`,
+        [req.user!.id]
+      );
+      actorBusinessIds = new Set(actorAccessRes.rows.map((r: any) => r.business_id));
+      const hasUnauthorizedAssignment = assignments.some(a => !actorBusinessIds!.has(a.businessId));
+      if (hasUnauthorizedAssignment) {
+        res.status(403).json({ error: 'You cannot grant access to businesses outside your own authorized access.' });
+        return;
+      }
+      // ROLE TENANT SCOPE + CEILING: the actor may only assign roles that belong to the
+      // target business's tenant, and may not grant a role whose permissions exceed their
+      // own effective permissions in the target business.
+      for (const a of assignments) {
+        const scopeViolation = await findRoleTenantScopeViolation(a.roleId, a.businessId);
+        if (scopeViolation) {
+          res.status(403).json({ error: scopeViolation });
+          return;
+        }
+        const exceeding = await findExceedingPermissions(req.user!.id, a.businessId, a.roleId);
+        if (exceeding.length > 0) {
+          res.status(403).json({ error: 'You cannot grant a role with permissions you do not hold in the target business.' });
+          return;
+        }
+      }
+    }
+
     // Non-superadmin cannot have 0 business assignments
     if (!targetUser.is_super_admin && assignments.length === 0) {
       res.status(400).json({ error: 'Standard users must be assigned to at least one business.' });
@@ -521,9 +634,27 @@ router.put('/:id/business-access', authenticateToken, requirePermission('admin:m
 
     await client.query('BEGIN');
 
-    // Remove existing roles and business accesses for this user
-    await client.query(`DELETE FROM user_roles WHERE user_id = $1`, [targetUserId]);
-    await client.query(`DELETE FROM user_business_access WHERE user_id = $1`, [targetUserId]);
+    if (actorBusinessIds) {
+      // SCOPED REPLACEMENT (non-Super Admin): only memberships inside the actor's own authorized
+      // businesses are replaced. Memberships outside the actor's scope, their roles, and their
+      // default flag are preserved untouched.
+      const scopedIds = Array.from(actorBusinessIds);
+      const preservedDefaultRes = await client.query(
+        `SELECT business_id FROM user_business_access WHERE user_id = $1 AND is_default = true AND NOT (business_id = ANY($2::uuid[])) LIMIT 1`,
+        [targetUserId, scopedIds]
+      );
+      if (preservedDefaultRes.rows.length > 0) {
+        // The user's default business lives outside the actor's scope: it stays the default,
+        // so none of the actor's new in-scope rows may claim default.
+        resolvedDefaultBusinessId = null;
+      }
+      await client.query(`DELETE FROM user_roles WHERE user_id = $1 AND business_id = ANY($2::uuid[])`, [targetUserId, scopedIds]);
+      await client.query(`DELETE FROM user_business_access WHERE user_id = $1 AND business_id = ANY($2::uuid[])`, [targetUserId, scopedIds]);
+    } else {
+      // Super Admin: full replacement (existing behavior).
+      await client.query(`DELETE FROM user_roles WHERE user_id = $1`, [targetUserId]);
+      await client.query(`DELETE FROM user_business_access WHERE user_id = $1`, [targetUserId]);
+    }
 
     // Insert new business access rows (at most one is_default = true)
     for (const a of assignments) {
@@ -599,6 +730,11 @@ router.put('/:id/status', authenticateToken, requirePermission('admin:manage_use
         res.status(403).json({ error: 'Access denied: Target user does not belong to your business' });
         return;
       }
+      // TENANT BOUNDARY: non-Super Admin actors may never change status of a Super Administrator account.
+      if (targetUser.isSuperAdmin) {
+        res.status(403).json({ error: 'Only a Super Administrator can manage a Super Administrator account.' });
+        return;
+      }
     }
 
     if (targetUser.id === req.user!.id && status !== 'ACTIVE') {
@@ -657,6 +793,11 @@ router.post('/:id/reset-password', authenticateToken, requirePermission('admin:m
 
       if (!userAccess) {
         res.status(403).json({ error: 'Access denied: Target user does not belong to your business' });
+        return;
+      }
+      // TENANT BOUNDARY: non-Super Admin actors may never reset credentials of a Super Administrator account.
+      if (targetUser.isSuperAdmin) {
+        res.status(403).json({ error: 'Only a Super Administrator can manage a Super Administrator account.' });
         return;
       }
     }

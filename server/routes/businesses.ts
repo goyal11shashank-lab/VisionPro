@@ -1,7 +1,15 @@
+import {DEFAULT_APP_SETTINGS} from '../services/businessSettingsService.js';
+import {hiddenFromSuperAdmin,setBusinessAdminVisibility,BusinessVisibilityError} from '../services/businessVisibilityService.js';
+import {PROTECTED_OPERATING_BUSINESS_ID} from '../services/businessDeletionSafetyService.js';
+import {inspectBusinessDeletion} from '../services/businessDeletionSafetyService.js';
+import { canonicalBusinessFor } from '../services/canonicalLoginService.js';
+import { BusinessIdentityService } from '../services/businessIdentityService.js';
+import { BusinessRelationshipService, supplierBusinessId } from '../services/businessRelationshipService.js';
 import { Router, Request, Response } from 'express';
 import { db, pool } from '../db/index.js';
 import { businesses, userBusinessAccess, userRoles, roles, businessSettings } from '../db/schema.js';
 import { authenticateToken } from '../middleware/auth.js';
+import { findExceedingPermissions, findRoleTenantScopeViolation, getUserAccessibleBusinessIds, findOutOfScopeDefaultBusinessId } from '../services/roleCeilingService.js';
 import { requirePermission, requireSuperAdmin } from '../middleware/permission.js';
 import { recordAuditLog } from '../services/auditService.js';
 import { eq, and, sql } from 'drizzle-orm';
@@ -48,6 +56,9 @@ router.get('/', authenticateToken, async (req: Request, res: Response): Promise<
       bizList = access.map(a => a.business);
     }
 
+    const canonicalId=await canonicalBusinessFor(req.user!);
+    if(canonicalId)bizList=bizList.filter(b=>b.id===canonicalId);
+
     // Query distinct user count per business
     const userCountsQuery = await pool.query(`
       SELECT business_id, COUNT(DISTINCT user_id)::int as user_count
@@ -68,6 +79,11 @@ router.get('/', authenticateToken, async (req: Request, res: Response): Promise<
 
     const enriched = bizList.map(b => ({
       ...b,
+      entityKind: 'BUSINESS',
+      hiddenFromSuperAdmin: hiddenFromSuperAdmin(b),
+      adminVisibilityLocked: b.id===PROTECTED_OPERATING_BUSINESS_ID,
+      supplierBusinessId: supplierBusinessId(b),
+      supplierBusinessName: parentMap.get(supplierBusinessId(b)||'') || null,
       businessType: b.businessType || 'MAIN',
       parentBusinessId: b.parentBusinessId || null,
       parentBusinessName: b.parentBusinessId ? (parentMap.get(b.parentBusinessId) || null) : null,
@@ -79,6 +95,14 @@ router.get('/', authenticateToken, async (req: Request, res: Response): Promise<
   } catch (error: any) {
     res.status(500).json({ error: error.message || 'Failed to fetch businesses' });
   }
+});
+
+/** Reversible Super Admin clutter control, independent of operational status. */
+router.post('/admin-visibility',authenticateToken,requireSuperAdmin,async(req:Request,res:Response):Promise<void>=>{
+ const parsed=z.object({ids:z.array(z.string().uuid()).min(1).max(500),hidden:z.boolean()}).strict().safeParse(req.body);
+ if(!parsed.success){res.status(400).json({error:'Provide Business IDs and a hidden boolean.'});return;}
+ try{res.json(await setBusinessAdminVisibility([...new Set(parsed.data.ids)],parsed.data.hidden,req.user!.id,req));}
+ catch(error:any){res.status(error instanceof BusinessVisibilityError?error.status:500).json({error:error.message||'Could not change Business visibility.'});}
 });
 
 /**
@@ -151,8 +175,22 @@ router.post(
  * GET /api/businesses/:id
  * Retrieve specific business details
  */
+router.get('/unification-plan',authenticateToken,requireSuperAdmin,async(_req:Request,res:Response)=>{
+  try {res.json(await BusinessIdentityService.inspectUnification({isSuperAdmin:true}));}
+  catch(error:any){res.status(500).json({error:error.message});}
+});
+
+router.put('/:id/relationships',authenticateToken,requireSuperAdmin,async(req:Request,res:Response)=>{
+  const parsed=z.object({supplierBusinessId:z.string().uuid().nullable()}).safeParse(req.body);
+  if(!parsed.success){res.status(400).json({error:'Select a supplier Business or null.'});return;}
+  try {res.json(await BusinessRelationshipService.setSupplier(req.params.id,parsed.data.supplierBusinessId,{isSuperAdmin:true,userId:req.user!.id}));}
+  catch(error:any){res.status(400).json({error:error.message});}
+});
+
 router.get('/:id', authenticateToken, async (req: Request, res: Response): Promise<void> => {
   try {
+    const canonicalId=await canonicalBusinessFor(req.user!);
+    if(canonicalId&&req.params.id!==canonicalId){res.status(403).json({error:'This login is assigned to one Business.'});return;}
     if (!req.user?.isSuperAdmin) {
       const [access] = await db
         .select()
@@ -199,7 +237,7 @@ router.get('/:id', authenticateToken, async (req: Request, res: Response): Promi
 /**
  * POST /api/businesses
  * Create new business (Super Admin only)
- * Automatically initializes business_settings and assigns super admin access
+ * Atomically creates a generic Business, defaults and audit. Super Admin access is intrinsic; no account rows change.
  */
 router.post('/', authenticateToken, requireSuperAdmin, async (req: Request, res: Response): Promise<void> => {
   const client = await pool.connect();
@@ -211,25 +249,10 @@ router.post('/', authenticateToken, requireSuperAdmin, async (req: Request, res:
     }
 
     const data = parseResult.data;
-    const businessType = data.businessType || 'MAIN';
-    let parentBusinessId: string | null = null;
-
-    if (businessType === 'DEALER') {
-      if (!data.parentBusinessId) {
-        res.status(400).json({ error: 'Parent Main Warehouse business is required for Dealer entities.' });
-        return;
-      }
-      const parentCheck = await client.query(`SELECT id, name, business_type, status FROM businesses WHERE id = $1`, [data.parentBusinessId]);
-      if (parentCheck.rows.length === 0) {
-        res.status(400).json({ error: 'Selected Parent Main Warehouse does not exist.' });
-        return;
-      }
-      if (parentCheck.rows[0].business_type !== 'MAIN') {
-        res.status(400).json({ error: 'Selected Parent must be a MAIN warehouse entity, not another Dealer.' });
-        return;
-      }
-      parentBusinessId = parentCheck.rows[0].id;
-    }
+    // Historical classification remains storage-compatible, never a new identity hierarchy.
+    if(data.businessType==='DEALER'||data.parentBusinessId){res.status(400).json({error:'Create a Business without a legacy dealer/warehouse hierarchy. Configure its supplier link separately.'});return;}
+    const businessType='MAIN';
+    const parentBusinessId=null;
 
     await client.query('BEGIN');
 
@@ -267,32 +290,8 @@ router.post('/', authenticateToken, requireSuperAdmin, async (req: Request, res:
 
     const created = insertRes.rows[0];
 
-    // Give super admin access to this new business (not default to preserve existing default)
-    await client.query(`
-      INSERT INTO user_business_access (user_id, business_id, is_default, created_at)
-      VALUES ($1, $2, false, NOW())
-      ON CONFLICT (user_id, business_id) DO NOTHING
-    `, [req.user!.id, created.id]);
-
-    // Assign Super Admin role for this business
-    const roleRes = await client.query(`SELECT id FROM roles WHERE code = 'SUPER_ADMIN' LIMIT 1`);
-    if (roleRes.rows.length > 0) {
-      await client.query(`
-        INSERT INTO user_roles (user_id, business_id, role_id, assigned_by, created_at)
-        VALUES ($1, $2, $3, $4, NOW())
-        ON CONFLICT (user_id, business_id, role_id) DO NOTHING
-      `, [req.user!.id, created.id, roleRes.rows[0].id, req.user!.id]);
-    }
-
-    await client.query('COMMIT');
-
-    // Initialize business settings with standard optical defaults
-    try {
-      const { BusinessSettingsService } = await import('../services/businessSettingsService.js');
-      await BusinessSettingsService.restoreDefaults(created.id, req.user!.id, req);
-    } catch (settingsErr) {
-      console.warn('[Create Business] Warning initializing business settings defaults:', settingsErr);
-    }
+    // Super Admin already has cross-Business authority. Do not add memberships, roles or defaults.
+    await client.query(`INSERT INTO business_settings(business_id,low_stock_threshold,config) VALUES($1,1,$2::jsonb)`,[created.id,JSON.stringify({settings:DEFAULT_APP_SETTINGS})]);
 
     await recordAuditLog({
       businessId: created.id,
@@ -303,7 +302,8 @@ router.post('/', authenticateToken, requireSuperAdmin, async (req: Request, res:
       entityId: created.id,
       newValue: created,
       req,
-    });
+    },client);
+    await client.query('COMMIT');
 
     res.status(201).json({ success: true, business: created });
   } catch (error: any) {
@@ -338,6 +338,19 @@ router.put('/:id', authenticateToken, requirePermission('admin:manage_settings')
     }
 
     const updatedData = { ...parseResult.data };
+    if (req.body.businessType === undefined) updatedData.businessType = existing.businessType as 'MAIN' | 'DEALER';
+    if (req.body.parentBusinessId === undefined) updatedData.parentBusinessId = existing.parentBusinessId;
+    if (!req.user!.isSuperAdmin) {
+      const changesType = req.body.businessType !== undefined && req.body.businessType !== existing.businessType;
+      const changesParent = req.body.parentBusinessId !== undefined && (req.body.parentBusinessId || null) !== (existing.parentBusinessId || null);
+      if (changesType || changesParent) {
+        res.status(403).json({ error: 'Business relationships require platform-owner approval. You may edit your own business profile, not grant yourself access to another business.' });
+        return;
+      }
+      // Omitted legacy fields must not reset a linked business on ordinary profile save.
+      updatedData.businessType = existing.businessType as 'MAIN' | 'DEALER';
+      updatedData.parentBusinessId = existing.parentBusinessId;
+    }
 
     // Validate Dealer / Main assignment logic
     if (updatedData.businessType === 'DEALER') {
@@ -476,98 +489,19 @@ router.post('/:id/deactivate', authenticateToken, requireSuperAdmin, async (req:
 /**
  * Helper: Check if business has operational dependencies or is active session
  */
-async function checkBusinessDeletionSafety(
-  queryable: any,
-  bizId: string,
-  currentBusinessId: string,
-  allDeletingIds: Set<string> = new Set()
-) {
-  if (bizId === currentBusinessId) {
-    return {
-      canDelete: false,
-      reason: 'Cannot delete the business you are currently logged into. Please switch to another business first.',
-      dependencies: [] as Array<{ table: string; label: string; count: number }>,
-    };
-  }
-
-  // Check if any other business references this business as its parent warehouse
-  const childBranchesQuery = await queryable.query(
-    `SELECT id, name FROM businesses WHERE parent_business_id = $1`,
-    [bizId]
-  );
-  const nonDeletingChildren = childBranchesQuery.rows.filter((row: any) => !allDeletingIds.has(row.id));
-  if (nonDeletingChildren.length > 0) {
-    return {
-      canDelete: false,
-      reason: `Referenced as parent warehouse by ${nonDeletingChildren.length} dealer branch(es): ${nonDeletingChildren.map((r: any) => r.name).join(', ')}. Delete or reassign those branches first.`,
-      dependencies: [{ table: 'businesses', label: 'Associated Dealer Branches', count: nonDeletingChildren.length }],
-    };
-  }
-
-  // Perform exhaustive dependency check across operational tables
-  const checkTables = [
-    { table: 'unique_items', label: 'Stock Items' },
-    { table: 'optical_batches', label: 'Optical Batches' },
-    { table: 'stock_ledger', label: 'Stock Ledger Entries' },
-    { table: 'stock_reservations', label: 'Stock Reservations' },
-    { table: 'parties', label: 'Parties / Customers / Suppliers' },
-    { table: 'sales_orders', label: 'Sales Orders' },
-    { table: 'sales_invoices', label: 'Sales Invoices' },
-    { table: 'sales_returns', label: 'Sales Returns' },
-    { table: 'purchase_orders', label: 'Purchase Orders' },
-    { table: 'purchase_invoices', label: 'Purchase Invoices' },
-    { table: 'purchase_returns', label: 'Purchase Returns' },
-    { table: 'payments', label: 'Payment Records' },
-    { table: 'customer_ledgers', label: 'Customer Ledgers' },
-    { table: 'supplier_ledgers', label: 'Supplier Ledgers' },
-    { table: 'dealer_order_history', label: 'Dealer Warehouse Orders' },
-    { table: 'payment_advices', label: 'Payment Advices' },
-  ];
-
-  const dependenciesFound: Array<{ table: string; label: string; count: number }> = [];
-
-  for (const item of checkTables) {
-    try {
-      let countRes;
-      if (item.table === 'dealer_order_history' || item.table === 'payment_advices') {
-        countRes = await queryable.query(
-          `SELECT COUNT(*)::int as cnt FROM "${item.table}" WHERE main_business_id = $1 OR dealer_business_id = $1`,
-          [bizId]
-        );
-      } else {
-        countRes = await queryable.query(
-          `SELECT COUNT(*)::int as cnt FROM "${item.table}" WHERE business_id = $1`,
-          [bizId]
-        );
-      }
-      const cnt = countRes.rows[0]?.cnt || 0;
-      if (cnt > 0) {
-        dependenciesFound.push({ table: item.table, label: item.label, count: cnt });
-      }
-    } catch {
-      // Table might not exist or schema variation; continue safely
-    }
-  }
-
-  if (dependenciesFound.length > 0) {
-    return {
-      canDelete: false,
-      reason: 'This business contains accounting, inventory, party, or transaction records and cannot be permanently deleted. Deactivate the business instead.',
-      dependencies: dependenciesFound,
-    };
-  }
-
-  return {
-    canDelete: true,
-    reason: null,
-    dependencies: [] as Array<{ table: string; label: string; count: number }>,
-  };
+async function checkBusinessDeletionSafety(queryable:any,bizId:string,currentBusinessId:string,_allDeletingIds:Set<string>=new Set()) {
+  return inspectBusinessDeletion(queryable,bizId,currentBusinessId);
 }
 
 /**
  * Helper: Safely delete business entity and its access records in a transaction
  */
 async function executeDeleteBusiness(client: any, bizId: string, bizName: string, req: Request) {
+  // Serialize non-FK JSON and counterpart-note references with their writers too.
+  await client.query('LOCK TABLE businesses,parties IN SHARE ROW EXCLUSIVE MODE');
+  await client.query('SELECT id FROM businesses WHERE id=$1 FOR UPDATE',[bizId]);
+  const safety=await inspectBusinessDeletion(client,bizId,req.user!.currentBusinessId);
+  if(!safety.canDelete)throw new Error(safety.reason||'Business deletion protection failed.');
   await client.query(`DELETE FROM role_permissions WHERE role_id IN (SELECT id FROM roles WHERE business_id = $1)`, [bizId]);
   await client.query(`DELETE FROM user_roles WHERE business_id = $1`, [bizId]);
   await client.query(`DELETE FROM roles WHERE business_id = $1`, [bizId]);
@@ -584,7 +518,7 @@ async function executeDeleteBusiness(client: any, bizId: string, bizName: string
     entityId: bizId,
     previousValue: { id: bizId, name: bizName },
     req,
-  });
+  },client);
 }
 
 /**
@@ -826,6 +760,13 @@ router.post('/:id/users', authenticateToken, requirePermission('admin:manage_use
   const client = await pool.connect();
   try {
     const bizId = req.params.id;
+
+    // TENANT BOUNDARY: non-Super Admin actors may only manage users of their current business.
+    if (!req.user?.isSuperAdmin && req.user?.currentBusinessId !== bizId) {
+      res.status(403).json({ error: 'Access denied' });
+      return;
+    }
+
     const { userId, roleId, isDefault } = req.body;
 
     if (!userId || !roleId) {
@@ -859,6 +800,24 @@ router.post('/:id/users', authenticateToken, requirePermission('admin:manage_use
       return;
     }
 
+    // ROLE TENANT SCOPE + CEILING: non-Super Admin actors may only assign roles belonging
+    // to this business's tenant, and may not grant a role exceeding their own effective
+    // permissions in this business.
+    if (!req.user?.isSuperAdmin) {
+      const scopeViolation = await findRoleTenantScopeViolation(roleId, bizId);
+      if (scopeViolation) {
+        res.status(403).json({ error: scopeViolation });
+        await client.query('ROLLBACK');
+        return;
+      }
+      const exceeding = await findExceedingPermissions(req.user!.id, bizId, roleId);
+      if (exceeding.length > 0) {
+        res.status(403).json({ error: 'You cannot grant a role with permissions you do not hold in this business.' });
+        await client.query('ROLLBACK');
+        return;
+      }
+    }
+
     // Check if user already has access
     const accessRes = await client.query(
       `SELECT id FROM user_business_access WHERE user_id = $1 AND business_id = $2`,
@@ -880,6 +839,18 @@ router.post('/:id/users', authenticateToken, requirePermission('admin:manage_use
     const shouldBeDefault = Boolean(isDefault) || existingDefaultRes.rows.length === 0;
 
     if (shouldBeDefault) {
+      // TENANT BOUNDARY: never clear a default membership that lives outside the actor's
+      // own authorized businesses. If the user's current default is out of scope, reject
+      // instead of silently stripping it.
+      if (!req.user?.isSuperAdmin) {
+        const actorBusinessIds = await getUserAccessibleBusinessIds(req.user!.id);
+        const outOfScopeDefault = await findOutOfScopeDefaultBusinessId(userId, actorBusinessIds);
+        if (outOfScopeDefault) {
+          res.status(403).json({ error: 'Setting this business as default would remove a default business outside your authorized access.' });
+          await client.query('ROLLBACK');
+          return;
+        }
+      }
       await client.query(`
         UPDATE user_business_access
         SET is_default = false
@@ -936,6 +907,13 @@ router.put('/:id/users/:userId/role', authenticateToken, requirePermission('admi
   try {
     const bizId = req.params.id;
     const userId = req.params.userId;
+
+    // TENANT BOUNDARY: non-Super Admin actors may only manage users of their current business.
+    if (!req.user?.isSuperAdmin && req.user?.currentBusinessId !== bizId) {
+      res.status(403).json({ error: 'Access denied' });
+      return;
+    }
+
     const { roleId } = req.body;
 
     if (!roleId) {
@@ -951,6 +929,31 @@ router.put('/:id/users/:userId/role', authenticateToken, requirePermission('admi
       res.status(404).json({ error: 'Role not found' });
       await client.query('ROLLBACK');
       return;
+    }
+
+    // TENANT BOUNDARY + ROLE TENANT SCOPE + CEILING: non-Super Admin actors may not
+    // change roles of Super Administrator accounts, may only assign roles belonging to
+    // this business's tenant, and may not grant a role exceeding their own effective
+    // permissions in this business.
+    if (!req.user?.isSuperAdmin) {
+      const targetFlagRes = await client.query(`SELECT is_super_admin FROM users WHERE id = $1 LIMIT 1`, [userId]);
+      if (targetFlagRes.rows[0]?.is_super_admin) {
+        res.status(403).json({ error: 'Only a Super Administrator can manage a Super Administrator account.' });
+        await client.query('ROLLBACK');
+        return;
+      }
+      const scopeViolation = await findRoleTenantScopeViolation(roleId, bizId);
+      if (scopeViolation) {
+        res.status(403).json({ error: scopeViolation });
+        await client.query('ROLLBACK');
+        return;
+      }
+      const exceeding = await findExceedingPermissions(req.user!.id, bizId, roleId);
+      if (exceeding.length > 0) {
+        res.status(403).json({ error: 'You cannot grant a role with permissions you do not hold in this business.' });
+        await client.query('ROLLBACK');
+        return;
+      }
     }
 
     // Update user role
@@ -997,6 +1000,12 @@ router.delete('/:id/users/:userId', authenticateToken, requirePermission('admin:
     const bizId = req.params.id;
     const userId = req.params.userId;
 
+    // TENANT BOUNDARY: non-Super Admin actors may only manage users of their current business.
+    if (!req.user?.isSuperAdmin && req.user?.currentBusinessId !== bizId) {
+      res.status(403).json({ error: 'Access denied' });
+      return;
+    }
+
     await client.query('BEGIN');
 
     // Check if this was the default business
@@ -1011,18 +1020,42 @@ router.delete('/:id/users/:userId', authenticateToken, requirePermission('admin:
       return;
     }
 
+    // TENANT BOUNDARY: non-Super Admin actors may not remove a Super Administrator's access.
+    if (!req.user?.isSuperAdmin) {
+      const targetFlagRes = await client.query(`SELECT is_super_admin FROM users WHERE id = $1 LIMIT 1`, [userId]);
+      if (targetFlagRes.rows[0]?.is_super_admin) {
+        res.status(403).json({ error: 'Only a Super Administrator can manage a Super Administrator account.' });
+        await client.query('ROLLBACK');
+        return;
+      }
+    }
+
     const wasDefault = accessRes.rows[0].is_default;
 
     // Delete access and role
     await client.query(`DELETE FROM user_roles WHERE user_id = $1 AND business_id = $2`, [userId, bizId]);
     await client.query(`DELETE FROM user_business_access WHERE user_id = $1 AND business_id = $2`, [userId, bizId]);
 
-    // If it was default, promote another remaining business to default if available
+    // If it was default, promote another remaining business to default if available.
+    // TENANT BOUNDARY: a non-Super Admin actor may only promote a membership inside their
+    // own authorized businesses; if none remain in scope, the user is left with no default
+    // rather than the actor writing to a membership outside their scope.
     if (wasDefault) {
-      const remainingRes = await client.query(
-        `SELECT id, business_id FROM user_business_access WHERE user_id = $1 ORDER BY created_at ASC LIMIT 1`,
-        [userId]
-      );
+      let remainingRes;
+      if (req.user?.isSuperAdmin) {
+        remainingRes = await client.query(
+          `SELECT id, business_id FROM user_business_access WHERE user_id = $1 ORDER BY created_at ASC LIMIT 1`,
+          [userId]
+        );
+      } else {
+        remainingRes = await client.query(
+          `SELECT uba.id, uba.business_id FROM user_business_access uba
+           WHERE uba.user_id = $1
+             AND EXISTS (SELECT 1 FROM user_business_access actor WHERE actor.user_id = $2 AND actor.business_id = uba.business_id)
+           ORDER BY uba.created_at ASC LIMIT 1`,
+          [userId, req.user!.id]
+        );
+      }
       if (remainingRes.rows.length > 0) {
         await client.query(
           `UPDATE user_business_access SET is_default = true WHERE id = $1`,

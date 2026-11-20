@@ -10,6 +10,7 @@
  */
 
 import { pool } from '../db/index.js';
+import { createHash } from 'node:crypto';
 import { PoolClient } from 'pg';
 import { BarcodeService } from './opticalMasterService.js';
 import { PurchaseService, PurchaseLineInput } from './purchaseService.js';
@@ -51,6 +52,7 @@ export interface GoodsReceiptLineInput {
 }
 
 export interface ConfirmGoodsReceiptInput {
+  requestId?: string;
   dealerBusinessId: string;
   dealerShipmentId: string;
   receiptDate?: string | Date;
@@ -876,8 +878,24 @@ export class DealerLogisticsService {
    * - Purchase Invoice creation and Supplier ledger posting against Main Warehouse
    * - Updates shipment line received/damaged/short counters and overall shipment status
    */
+  static async getReceiptAttempt(dealerBusinessId:string, shipmentId:string, requestId:string) {
+    if (!/^[0-9a-f]{8}-[0-9a-f-]{27}$/i.test(requestId)) throw new Error('Valid receipt request ID required.');
+    const client=await pool.connect();
+    try {
+      await client.query('BEGIN');
+      // Wait for any in-flight posting on this shipment before reporting its result.
+      const shipment=await client.query(`SELECT id FROM dealer_shipments WHERE id=$1 AND dealer_business_id=$2 FOR UPDATE`,[shipmentId,dealerBusinessId]);
+      if(!shipment.rows.length)throw new Error('Shipment not found or access denied.');
+      const prior=await client.query(`SELECT new_value FROM audit_logs WHERE business_id=$1 AND module='BUSINESS_RECEIVING' AND entity_type='dealer_goods_receipts' AND new_value->>'shipmentId'=$2 AND new_value->>'receiptRequestId'=$3 LIMIT 1`,[dealerBusinessId,shipmentId,requestId]);
+      await client.query('COMMIT');
+      return prior.rows.length?{posted:true,result:prior.rows[0].new_value.result}:{posted:false};
+    }catch(error){await client.query('ROLLBACK');throw error;}finally{client.release();}
+  }
+
   static async confirmDealerGoodsReceipt(input: ConfirmGoodsReceiptInput) {
     const client = await pool.connect();
+    let commitAttempted = false;
+    let priorAttemptFound = false;
     try {
       await client.query('BEGIN');
 
@@ -885,6 +903,14 @@ export class DealerLogisticsService {
 
       if (!lines || lines.length === 0) {
         throw new Error('At least one item must be inspected to confirm goods receipt.');
+      }
+
+      if (input.autoCreatePurchaseInvoice === false) {
+        throw new Error('Dealer goods receipt requires authoritative purchase posting.');
+      }
+      const lineIds = lines.map(line => line.shipmentLineId);
+      if (new Set(lineIds).size !== lineIds.length) {
+        throw new Error('Each shipment line may be inspected only once per goods receipt.');
       }
 
       // 1. Lock shipment record and verify recipient
@@ -905,6 +931,25 @@ export class DealerLogisticsService {
 
       if (shipment.dealer_business_id !== dealerBusinessId) {
         throw new Error('Unauthorized: This shipment was not dispatched to your dealer business.');
+      }
+
+      // A stable attempt ID makes partial-receipt retries safe after a lost response.
+      // The shipment lock serializes matching attempts; audit and posting commit together.
+      const requestId = input.requestId;
+      if (requestId !== undefined && !/^[0-9a-f]{8}-[0-9a-f-]{27}$/i.test(requestId)) throw new Error('Valid receipt request ID required.');
+      const requestDigest = createHash('sha256').update(JSON.stringify({
+        receiptDate: input.receiptDate || null, remarks: remarks || null,
+        lines: lines.map(line => ({id:line.shipmentLineId,good:Number(line.receivedQuantity),damaged:Number(line.damagedQuantity || 0),short:Number(line.shortQuantity || 0)})).sort((a,b)=>a.id.localeCompare(b.id)),
+      })).digest('hex');
+      if (requestId) {
+        const prior = await client.query(`SELECT new_value FROM audit_logs WHERE business_id=$1 AND module='BUSINESS_RECEIVING' AND entity_type='dealer_goods_receipts' AND new_value->>'shipmentId'=$2 AND new_value->>'receiptRequestId'=$3 LIMIT 1`,[dealerBusinessId,dealerShipmentId,requestId]);
+        if (prior.rows.length) {
+          priorAttemptFound = true;
+          const previous = prior.rows[0].new_value;
+          if (previous.requestDigest !== requestDigest) throw new Error('Receipt attempt already used with different inspection values. Refresh before starting a new inspection.');
+          await client.query('COMMIT');
+          return {...previous.result,replayed:true};
+        }
       }
 
       if (shipment.status === 'RECEIVED') {
@@ -941,8 +986,8 @@ export class DealerLogisticsService {
         const dmg = Number(inpLine.damagedQuantity || 0);
         const shrt = Number(inpLine.shortQuantity || 0);
 
-        if (recv < 0 || dmg < 0 || shrt < 0) {
-          throw new Error('Received, damaged, and short quantities cannot be negative.');
+        if (![recv, dmg, shrt].every(n => Number.isFinite(n) && n >= 0 && Math.abs(n * 2 - Math.round(n * 2)) < 0.0001)) {
+          throw new Error('Received, damaged, and short quantities must be finite non-negative multiples of 0.5.');
         }
 
         const lineSum = round2(recv + dmg + shrt);
@@ -1044,8 +1089,8 @@ export class DealerLogisticsService {
         const dmg = Number(inpLine.damagedQuantity || 0);
         const shrt = Number(inpLine.shortQuantity || 0);
 
-        if (recv < 0 || dmg < 0 || shrt < 0) {
-          throw new Error('Received, damaged, and short quantities cannot be negative.');
+        if (![recv, dmg, shrt].every(n => Number.isFinite(n) && n >= 0 && Math.abs(n * 2 - Math.round(n * 2)) < 0.0001)) {
+          throw new Error('Received, damaged, and short quantities must be finite non-negative multiples of 0.5.');
         }
 
         for (const [val, label] of [[recv, 'Received'], [dmg, 'Damaged'], [shrt, 'Short']] as const) {
@@ -1138,18 +1183,17 @@ export class DealerLogisticsService {
         shipment.main_business_id
       );
 
-      // Commit the GRN and shipment update
-      await client.query('COMMIT');
-      client.release();
+      // Keep GRN, shipment counters, purchase posting and linkage in one transaction.
 
       // 8. DEALER PURCHASE INVOICE & ACCOUNTING
       // Stock increases ONLY through the authoritative Purchase Invoice posting mechanism!
       let createdPurchaseInvoice: any = null;
-      if (input.autoCreatePurchaseInvoice !== false && processedGoodLines.length > 0) {
+      if (processedGoodLines.length > 0) {
         // Group items for PurchaseInvoice lines
         const poItemsMap = new Map<string, PurchaseLineInput>();
         for (const pgl of processedGoodLines) {
-          const existing = poItemsMap.get(pgl.dealerUniqueItemId);
+          const commercialKey = `${pgl.dealerUniqueItemId}:${pgl.rate}:${pgl.gstRate}`;
+          const existing = poItemsMap.get(commercialKey);
           if (existing) {
             existing.quantity = round2(existing.quantity + pgl.quantity);
             existing.batches!.push({
@@ -1158,7 +1202,7 @@ export class DealerLogisticsService {
               rate: pgl.rate,
             });
           } else {
-            poItemsMap.set(pgl.dealerUniqueItemId, {
+            poItemsMap.set(commercialKey, {
               uniqueItemId: pgl.dealerUniqueItemId,
               quantity: pgl.quantity,
               rate: pgl.rate,
@@ -1185,7 +1229,7 @@ export class DealerLogisticsService {
         // Check if main sales invoice has an invoice number
         let supplierInvoiceNumber = shipment.shipment_number;
         if (shipment.main_sales_invoice_id) {
-          const siRes = await pool.query(
+          const siRes = await client.query(
             `SELECT invoice_number FROM sales_invoices WHERE id = $1`,
             [shipment.main_sales_invoice_id]
           );
@@ -1198,6 +1242,7 @@ export class DealerLogisticsService {
           dealerBusinessId,
           {
             supplierPartyId: mainSupplierPartyId,
+            status: 'POSTED',
             purchaseOrderId: dealerPurchaseOrderId || undefined,
             invoiceDate: receiptDate,
             supplierInvoiceNumber,
@@ -1206,44 +1251,38 @@ export class DealerLogisticsService {
             notes: `Auto-generated from Goods Receipt ${receiptNumber} (Main Shipment ${shipment.shipment_number})`,
             lines: Array.from(poItemsMap.values()),
           },
-          userId || undefined
-        );
-
-        // Post the Purchase Invoice authoritatively so it creates purchase lots,
-        // increases physical stock, posts to stock_ledger, and updates supplier_ledger
-        await PurchaseService.postPurchaseInvoice(
-          dealerBusinessId,
-          createdPurchaseInvoice.id,
-          userId || undefined
-        );
-
-        createdPurchaseInvoice = await PurchaseService.getPurchaseInvoiceById(
-          dealerBusinessId,
-          createdPurchaseInvoice.id
+          userId || undefined,
+          { client, goodsReceiptId: goodsReceipt.id }
         );
 
         // Update dealer_goods_receipts with dealer_purchase_invoice_id
-        await pool.query(
+        await client.query(
           `UPDATE dealer_goods_receipts SET dealer_purchase_invoice_id = $1 WHERE id = $2`,
           [createdPurchaseInvoice.id, goodsReceipt.id]
         );
       }
 
-      return {
-        success: true,
-        receiptNumber,
-        goodsReceiptId: goodsReceipt.id,
-        purchaseInvoiceId: createdPurchaseInvoice ? createdPurchaseInvoice.id : null,
+      const result = {
+        success: true, receiptNumber, goodsReceiptId: goodsReceipt.id,
+        purchaseInvoiceId: createdPurchaseInvoice?.id || null,
         purchaseInvoice: createdPurchaseInvoice || null,
-        shipmentStatus: newStatus,
-        totalGoodReceived,
-        totalDamaged,
-        totalShort,
+        shipmentStatus: newStatus, totalGoodReceived, totalDamaged, totalShort,
       };
+      await client.query(`INSERT INTO audit_logs(business_id,user_id,action,module,entity_type,entity_id,new_value) VALUES($1,$2,'CREATE','BUSINESS_RECEIVING','dealer_goods_receipts',$3,$4::jsonb)`,[
+        dealerBusinessId,userId || null,goodsReceipt.id,
+        JSON.stringify({shipmentId:dealerShipmentId,receiptRequestId:requestId || null,requestDigest,result:{...result,purchaseInvoice:null}}),
+      ]);
+      commitAttempted = true;
+      await client.query('COMMIT');
+      // No post-commit read can turn a durable posting into an apparent failure.
+      return result;
     } catch (error) {
+      let rolledBack = false;
       try {
         await client.query('ROLLBACK');
+        rolledBack = true;
       } catch (_) {}
+      (error as any).receiptOutcome = priorAttemptFound ? 'REFERENCE_ALREADY_POSTED' : !commitAttempted && rolledBack ? 'NOT_POSTED' : 'UNKNOWN';
       throw error;
     } finally {
       try {

@@ -113,6 +113,9 @@ export const SalesInvoicesPage: React.FC<{
   onNavigate,
 }) => {
   const { currentBusiness, hasPermission } = useAuth();
+  const canShareInvoice = hasPermission('admin:manage_settings');
+  const canDeleteInvoice = ['sales:delete','sales.delete','sales:invoice:delete','sales.invoice.delete'].some(hasPermission);
+  const canCancelInvoice = ['sales:cancel','sales.cancel','sales:invoice:cancel','sales.invoice.cancel'].some(hasPermission);
   const { settings } = useBusinessSettings();
   const { settings: appSettings } = useSettings();
   const enablePos = appSettings?.sales?.enablePos ?? true;
@@ -1286,7 +1289,7 @@ export const SalesInvoicesPage: React.FC<{
             <Printer className="w-4 h-4 text-slate-500" />
             Print Tax Invoice
           </button>
-          <button
+          {canShareInvoice && (<button
             onClick={() => {
               setContextMenu({ visible: false, x: 0, y: 0, invoice: null });
               setWhatsappModalInvoice(contextMenu.invoice);
@@ -1295,7 +1298,7 @@ export const SalesInvoicesPage: React.FC<{
           >
             <MessageSquare className="w-4 h-4 text-emerald-600" />
             Share on WhatsApp
-          </button>
+          </button>)}
           {contextMenu.invoice.status !== 'CANCELLED' && (
             <button
               onClick={() => {
@@ -1309,7 +1312,7 @@ export const SalesInvoicesPage: React.FC<{
             </button>
           )}
           <div className="my-1 border-t border-slate-100"></div>
-          <button
+          {canDeleteInvoice && (<button
             onClick={() => {
               setContextMenu({ visible: false, x: 0, y: 0, invoice: null });
               promptDeleteInvoice(contextMenu.invoice!);
@@ -1318,7 +1321,7 @@ export const SalesInvoicesPage: React.FC<{
           >
             <Trash2 className="w-4 h-4 text-rose-500" />
             Delete Tax Invoice
-          </button>
+          </button>)}
         </div>
       )}
       </div>
@@ -2095,7 +2098,7 @@ export const SalesInvoicesPage: React.FC<{
                     Edit Invoice
                   </button>
                 )}
-                {selectedInvoice.status === 'POSTED' && (
+                {canCancelInvoice && selectedInvoice.status === 'POSTED' && (
                   <button
                     id="btn-cancel-posted-invoice"
                     onClick={() => promptCancelInvoice(selectedInvoice)}
@@ -2105,7 +2108,7 @@ export const SalesInvoicesPage: React.FC<{
                     Cancel Invoice (Reverse Stock & Ledger)
                   </button>
                 )}
-                <button
+                {canDeleteInvoice && (<button
                   id="btn-delete-invoice-modal"
                   onClick={() => promptDeleteInvoice(selectedInvoice)}
                   disabled={deleteLoading || cancelLoading}
@@ -2113,7 +2116,7 @@ export const SalesInvoicesPage: React.FC<{
                 >
                   <Trash2 className="w-3.5 h-3.5" />
                   Delete Invoice
-                </button>
+                </button>)}
               </div>
 
               <button
