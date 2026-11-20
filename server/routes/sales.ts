@@ -567,4 +567,32 @@ router.get(
   }
 );
 
+/**
+ * POST /api/sales/barcode-lookup-batch  { codes: string[] }
+ * One authenticated round trip for a burst of scans. Same permission and same per-code lookup as the
+ * single route; results are returned per code (ok data or error message). Read-only.
+ */
+router.post(
+  '/barcode-lookup-batch',
+  requireAnyPermission(['sales:view', 'sales.view', 'inventory:view']),
+  async (req: Request, res: Response) => {
+    const businessId = req.user!.currentBusinessId;
+    const codes: string[] = Array.isArray(req.body?.codes)
+      ? req.body.codes.filter((c: any) => typeof c === 'string').slice(0, 50)
+      : [];
+    const unique = Array.from(new Set(codes));
+    const results: Record<string, { data?: any; error?: string }> = {};
+    await Promise.all(
+      unique.map(async code => {
+        try {
+          results[code] = { data: await SalesService.getBarcodeDetailsForSale(businessId, code) };
+        } catch (err: any) {
+          results[code] = { error: err.message || 'Barcode not found' };
+        }
+      })
+    );
+    res.json({ results });
+  }
+);
+
 export default router;
