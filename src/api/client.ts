@@ -215,6 +215,16 @@ export async function apiRequest<T = any>(
           continue;
         }
         const errorMsg = data.message || data.error || `HTTP ${response.status}: Request failed`;
+        if (
+          response.status === 403 &&
+          (data.error === 'BUSINESS_INACTIVE' || data.error === 'PARENT_BUSINESS_INACTIVE') &&
+          !endpoint.includes('/api/auth/login')
+        ) {
+          // Business was deactivated while signed in: end the session with a clear message.
+          try { sessionStorage.setItem('erp_session_notice', errorMsg); } catch { /* ignore */ }
+          removeStoredToken();
+          if (typeof window !== 'undefined') window.dispatchEvent(new CustomEvent('erp:business-inactive'));
+        }
         const err: any = new Error(errorMsg);
         err.status = response.status;
         err.data = data;

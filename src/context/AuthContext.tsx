@@ -65,6 +65,18 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   }, []);
 
   useEffect(() => {
+    const onInactive = () => {
+      setUser(null);
+      setCurrentBusiness(null);
+      setAccessibleBusinesses([]);
+      setRoles([]);
+      setPermissions([]);
+    };
+    window.addEventListener('erp:business-inactive', onInactive);
+    return () => window.removeEventListener('erp:business-inactive', onInactive);
+  }, []);
+
+  useEffect(() => {
     fetchCurrentUser();
   }, [fetchCurrentUser]);
 
