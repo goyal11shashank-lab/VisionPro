@@ -2,6 +2,7 @@ import { db, pool } from '../db/index.js';
 import { parties, businesses } from '../db/schema.js';
 import { eq, and, or, ilike, desc, count, sql } from 'drizzle-orm';
 import { AuditService } from './auditService.js';
+import { BusinessSettingsService } from './businessSettingsService.js';
 
 export interface CreatePartyDTO {
   partyCode?: string;
@@ -105,6 +106,9 @@ export class PartyService {
       throw new Error(`Invalid party type: ${data.partyType}. Must be CUSTOMER, SUPPLIER, or BOTH`);
     }
 
+    const { settings } = await BusinessSettingsService.getSettings(businessId);
+    const defaultCreditLimit = data.partyType === 'SUPPLIER' ? 0 : settings.party.defaultCreditLimit;
+
     // Auto-generate code if missing
     let partyCode = data.partyCode?.trim();
     if (!partyCode) {
@@ -142,7 +146,7 @@ export class PartyService {
         country: data.country?.trim() || 'India',
         gstin: data.gstin?.trim()?.toUpperCase() || null,
         pan: data.pan?.trim()?.toUpperCase() || null,
-        creditLimit: String(data.creditLimit || '0.00'),
+        creditLimit: String(data.creditLimit ?? defaultCreditLimit ?? '0.00'),
         creditDays: String(data.creditDays || '0'),
         status: data.status || 'ACTIVE',
         whatsappOptIn: data.whatsappOptIn !== undefined ? data.whatsappOptIn : true,
