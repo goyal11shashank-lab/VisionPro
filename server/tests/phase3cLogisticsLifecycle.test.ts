@@ -1,3 +1,5 @@
+import { assertSyntheticDatabase } from './assertSyntheticDatabase.js';
+assertSyntheticDatabase();
 /**
  * Phase 3C — Physical Movement & Accounting Lifecycle Test Suite
  * (Phase 3C Revision: Purchase Order -> Goods Receipt -> Purchase Invoice Workflow)
@@ -356,7 +358,51 @@ export async function runPhase3cTests() {
 
   // 9. TEST 6: Goods Receipt Note & Authoritative PO -> PI Conversion
   console.log(`\n[Test 6] Confirming Dealer Goods Receipt (8 Good, 1 Damaged, 1 Short)...`);
-  const grnResult = await DealerLogisticsService.confirmDealerGoodsReceipt({
+  // Failure injection: an accounting error must roll back every receipt-side write.
+  const receiptTableHashes = async () => {
+    const tables = await pool.query(`SELECT tablename FROM pg_tables WHERE schemaname='public' ORDER BY tablename`);
+    const result: Record<string, string> = {};
+    for (const { tablename } of tables.rows) {
+      const escaped = tablename.replace(/"/g, '""');
+      const rows = await pool.query(`SELECT md5(COALESCE(string_agg(row_to_json(t)::text, E'\\n' ORDER BY row_to_json(t)::text), '')) AS hash FROM public."${escaped}" t`);
+      result[tablename] = rows.rows[0].hash;
+    }
+    return JSON.stringify(result);
+  };
+  for (const invalid of [
+    { lines: [{ shipmentLineId: shipmentLine.id, receivedQuantity: 0.25 }] },
+    { lines: [{ shipmentLineId: shipmentLine.id, receivedQuantity: Number.NaN }] },
+    { lines: [{ shipmentLineId: shipmentLine.id, receivedQuantity: Number.POSITIVE_INFINITY }] },
+    { autoCreatePurchaseInvoice: false, lines: [{ shipmentLineId: shipmentLine.id, receivedQuantity: 1 }] },
+    { lines: [{ shipmentLineId: shipmentLine.id, receivedQuantity: 6 }, { shipmentLineId: shipmentLine.id, receivedQuantity: 6 }] },
+  ]) {
+    const before = await receiptTableHashes();
+    let rejected = false;
+    try { await DealerLogisticsService.confirmDealerGoodsReceipt({ dealerBusinessId: dealerA.id, dealerShipmentId: shipment.id, ...invalid }); }
+    catch { rejected = true; }
+    if (!rejected || before !== await receiptTableHashes()) throw new Error('Unsafe GRN input changed stored rows.');
+  }
+  console.log('PASS duplicate receipt lines and bypass-posting flag rejected without row changes.');
+  const beforeFailedReceipt = await receiptTableHashes();
+  const originalPost = (PurchaseService as any)._postPurchaseInvoiceInternal;
+  let injectedFailure = false;
+  try {
+    (PurchaseService as any)._postPurchaseInvoiceInternal = async () => { throw new Error('ISOLATED_ACCOUNTING_FAILURE'); };
+    await DealerLogisticsService.confirmDealerGoodsReceipt({
+      dealerBusinessId: dealerA.id, dealerShipmentId: shipment.id,
+      lines: [{ shipmentLineId: shipmentLine.id, receivedQuantity: 8, damagedQuantity: 1, shortQuantity: 1 }],
+    });
+  } catch (error: any) {
+    if (!String(error.message).includes('ISOLATED_ACCOUNTING_FAILURE')) throw error;
+    injectedFailure = true;
+  } finally {
+    (PurchaseService as any)._postPurchaseInvoiceInternal = originalPost;
+  }
+  if (!injectedFailure || beforeFailedReceipt !== await receiptTableHashes()) {
+    throw new Error('Failed GRN accounting changed database rows instead of rolling back atomically.');
+  }
+  console.log('PASS injected accounting failure rolls back every public table, retry follows.');
+  const concurrentReceipts = await Promise.allSettled([1,2].map(() => DealerLogisticsService.confirmDealerGoodsReceipt({
     dealerBusinessId: dealerA.id,
     dealerShipmentId: shipment.id,
     remarks: 'Box inspected. 1 lens cracked in transit, 1 lens missing in package.',
@@ -368,7 +414,11 @@ export async function runPhase3cTests() {
         shortQuantity: 1,
       },
     ],
-  });
+  })));
+  const successes = concurrentReceipts.filter(r=>r.status==='fulfilled');
+  if (successes.length !== 1) throw new Error('Concurrent completed receipts must post exactly once.');
+  const grnResult = (successes[0] as PromiseFulfilledResult<any>).value;
+  console.log('PASS concurrent receipt duplicate posts exactly once.');
 
   console.log(`✅ Goods Receipt confirmed: ${grnResult.receiptNumber}`);
   console.log(`   Status: ${grnResult.shipmentStatus}`);
@@ -448,6 +498,27 @@ export async function runPhase3cTests() {
     throw new Error('Supplier ledger entry not found in Dealer business for Purchase Invoice.');
   }
   console.log(`✅ Dealer Accounts Payable Verified: Credit of ${supLedgerRes.rows[0].credit} recorded in Supplier Ledger.`);
+
+  const afterPostedReceipt = await receiptTableHashes();
+  let duplicateRejected = false;
+  try {
+    await DealerLogisticsService.confirmDealerGoodsReceipt({
+      dealerBusinessId: dealerA.id, dealerShipmentId: shipment.id,
+      lines: [{ shipmentLineId: shipmentLine.id, receivedQuantity: 8, damagedQuantity: 1, shortQuantity: 1 }],
+    });
+  } catch { duplicateRejected = true; }
+  if (!duplicateRejected || afterPostedReceipt !== await receiptTableHashes()) throw new Error('Completed receipt retry changed accounting.');
+  const postedInvoice = await PurchaseService.getPurchaseInvoiceById(dealerA.id, grnResult.purchaseInvoiceId!);
+  let directConversionRejected = false;
+  try {
+    await PurchaseService.createPurchaseInvoice(dealerA.id, {
+      supplierPartyId: postedInvoice.supplierPartyId,
+      purchaseOrderId: postedInvoice.purchaseOrderId!, invoiceDate: new Date(),
+      lines: postedInvoice.lines.map((line: any) => ({ uniqueItemId: line.uniqueItemId, quantity: Number(line.quantity), rate: Number(line.rate), batches: line.batches.map((batch: any) => ({ batchId: batch.batchId, quantity: Number(batch.quantity) })) })),
+    });
+  } catch (error: any) { directConversionRejected = /Dealer-linked purchase orders/.test(error.message); }
+  if (!directConversionRejected || afterPostedReceipt !== await receiptTableHashes()) throw new Error('Direct dealer PO conversion bypassed GRN or changed rows.');
+  console.log('PASS completed receipt retry and direct PO conversion rejected without accounting changes.');
 
   console.log('\n============================================================');
   console.log('ALL PHASE 3C REVISED PO-FIRST LIFECYCLE TESTS PASSED! ✅');

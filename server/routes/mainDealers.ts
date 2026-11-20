@@ -2,7 +2,7 @@ import { Router, Request, Response } from 'express';
 import { db } from '../db/index.js';
 import { businesses } from '../db/schema.js';
 import { authenticateToken } from '../middleware/auth.js';
-import { requireAnyPermission } from '../middleware/permission.js';
+import { requireAnyPermission, requireSuperAdmin } from '../middleware/permission.js';
 import { eq } from 'drizzle-orm';
 import { DealerControlService } from '../services/dealerControlService.js';
 import { DealerReturnService } from '../services/dealerReturnService.js';
@@ -13,7 +13,9 @@ import { DealerUserService } from '../services/dealerUserService.js';
 const router = Router();
 
 // Authentication required on all routes
-router.use(authenticateToken);
+// Linked-company financial/stock reads and account/catalogue provisioning are
+// cross-business administration, never implied by ordinary sales/master grants.
+router.use(authenticateToken, requireSuperAdmin);
 
 /**
  * Helper: Resolve and verify MAIN business context
@@ -418,7 +420,7 @@ router.get(
       }
 
       const { dealerId } = req.params;
-      const stock = await DealerControlService.getDealerStock(context.mainBusiness.id, dealerId);
+      const stock = await DealerControlService.getDealerStock(context.mainBusiness.id, dealerId, { isSuperAdmin: req.user!.isSuperAdmin });
 
       res.json({
         success: true,
@@ -1070,7 +1072,7 @@ router.get(
       }
 
       const { dealerId } = req.params;
-      const data = await DealerUserService.getDealerUsers(dealerId);
+      const data = await DealerUserService.getDealerUsers(context.mainBusiness.id, dealerId);
 
       res.json({ success: true, ...data });
     } catch (error: any) {
@@ -1097,7 +1099,7 @@ router.get(
 
       const { dealerId } = req.params;
       const q = req.query.q as string;
-      const candidates = await DealerUserService.searchCandidateUsers(dealerId, q);
+      const candidates = await DealerUserService.searchCandidateUsers(context.mainBusiness.id, dealerId, q);
 
       res.json({ success: true, candidates });
     } catch (error: any) {
@@ -1145,6 +1147,7 @@ router.post(
       const isSuperAdmin = Boolean(req.user!.isSuperAdmin);
 
       const result = await DealerUserService.createDealerUser(
+        context.mainBusiness.id,
         dealerId,
         actorUserId,
         isSuperAdmin,
@@ -1184,6 +1187,7 @@ router.post(
       const isSuperAdmin = Boolean(req.user!.isSuperAdmin);
 
       const result = await DealerUserService.assignExistingUser(
+        context.mainBusiness.id,
         dealerId,
         actorUserId,
         isSuperAdmin,
@@ -1220,6 +1224,7 @@ router.put(
       const isSuperAdmin = Boolean(req.user!.isSuperAdmin);
 
       const result = await DealerUserService.updateUserRole(
+        context.mainBusiness.id,
         dealerId,
         userId,
         roleId,
@@ -1255,8 +1260,9 @@ router.put(
       const actorUserId = req.user!.id;
 
       const result = await DealerUserService.setUserDefaultBusiness(
-        userId,
+        context.mainBusiness.id,
         dealerId,
+        userId,
         actorUserId,
         req
       );
@@ -1284,7 +1290,7 @@ router.put(
         return;
       }
 
-      const { userId } = req.params;
+      const { dealerId, userId } = req.params;
       const { status } = req.body;
       const actorUserId = req.user!.id;
 
@@ -1294,6 +1300,8 @@ router.put(
       }
 
       const result = await DealerUserService.toggleUserStatus(
+        context.mainBusiness.id,
+        dealerId,
         userId,
         status,
         actorUserId,
@@ -1323,10 +1331,12 @@ router.put(
         return;
       }
 
-      const { userId } = req.params;
+      const { dealerId, userId } = req.params;
       const actorUserId = req.user!.id;
 
       const result = await DealerUserService.updateUserProfile(
+        context.mainBusiness.id,
+        dealerId,
         userId,
         req.body,
         actorUserId,
@@ -1356,8 +1366,8 @@ router.get(
         return;
       }
 
-      const { userId } = req.params;
-      const data = await DealerUserService.getUserAccessSummary(userId);
+      const { dealerId, userId } = req.params;
+      const data = await DealerUserService.getUserAccessSummary(context.mainBusiness.id, dealerId, userId);
 
       res.json({ success: true, ...data });
     } catch (error: any) {
@@ -1386,6 +1396,7 @@ router.delete(
       const actorUserId = req.user!.id;
 
       const result = await DealerUserService.removeDealerUserAccess(
+        context.mainBusiness.id,
         dealerId,
         userId,
         actorUserId,

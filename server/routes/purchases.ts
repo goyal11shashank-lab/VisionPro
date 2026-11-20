@@ -259,8 +259,8 @@ const numberPreviewHandler = async (req: Request, res: Response) => {
   }
 };
 
-router.get('/invoices/number-preview', numberPreviewHandler);
-router.get('/number-preview', numberPreviewHandler);
+router.get('/invoices/number-preview', requireAnyPermission(['purchase:view', 'purchase.view']), numberPreviewHandler);
+router.get('/number-preview', requireAnyPermission(['purchase:view', 'purchase.view']), numberPreviewHandler);
 
 /**
  * GET /api/purchases/lots
@@ -392,8 +392,8 @@ const updateInvoiceHandler = async (req: Request, res: Response): Promise<void> 
   }
 };
 
-router.put('/invoices/:id', requireAnyPermission(['purchase:edit', 'purchase.edit', 'purchase:create', 'purchase.create']), updateInvoiceHandler);
-router.put('/:id', requireAnyPermission(['purchase:edit', 'purchase.edit', 'purchase:create', 'purchase.create']), updateInvoiceHandler);
+router.put('/invoices/:id', requireAnyPermission(['purchase:edit','purchase.edit','purchase:invoice:edit','purchase.invoice.edit']), updateInvoiceHandler);
+router.put('/:id', requireAnyPermission(['purchase:edit','purchase.edit','purchase:invoice:edit','purchase.invoice.edit']), updateInvoiceHandler);
 
 /**
  * POST /api/purchases/invoices/:id/post and POST /api/purchases/:id/post
@@ -473,52 +473,12 @@ const deleteInvoiceHandler = async (req: Request, res: Response): Promise<void> 
 
 router.delete(
   '/invoices/:id',
-  requireAnyPermission([
-    'purchase:delete_draft',
-    'purchase:delete',
-    'purchase.delete',
-    'purchases:delete',
-    'purchases.delete',
-    'purchase:cancel',
-    'purchase.cancel',
-    'purchase:edit',
-    'purchase.edit',
-    'purchases:edit',
-    'purchases.edit',
-    'purchase:create',
-    'purchase.create',
-    'purchases:create',
-    'purchases.create',
-    'purchase:view',
-    'purchase.view',
-    'purchases:view',
-    'purchases.view',
-  ]),
+  requireAnyPermission(['purchase:delete', 'purchase.delete', 'purchase:invoice:delete', 'purchase.invoice.delete']),
   deleteInvoiceHandler
 );
 router.delete(
   '/:id',
-  requireAnyPermission([
-    'purchase:delete_draft',
-    'purchase:delete',
-    'purchase.delete',
-    'purchases:delete',
-    'purchases.delete',
-    'purchase:cancel',
-    'purchase.cancel',
-    'purchase:edit',
-    'purchase.edit',
-    'purchases:edit',
-    'purchases.edit',
-    'purchase:create',
-    'purchase.create',
-    'purchases:create',
-    'purchases.create',
-    'purchase:view',
-    'purchase.view',
-    'purchases:view',
-    'purchases.view',
-  ]),
+  requireAnyPermission(['purchase:delete', 'purchase.delete', 'purchase:invoice:delete', 'purchase.invoice.delete']),
   deleteInvoiceHandler
 );
 

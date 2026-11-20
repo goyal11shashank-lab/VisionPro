@@ -274,7 +274,9 @@ router.get(
  * GET /api/payments/number-preview
  * Returns auto-generated next payment number preview
  */
-router.get('/number-preview', async (req: Request, res: Response) => {
+router.get('/number-preview',
+  requireAnyPermission(['accounts:view', 'accounts.view']),
+  async (req: Request, res: Response) => {
   try {
     const businessId = req.user!.currentBusinessId;
     const paymentType = (req.query.paymentType as 'RECEIPT' | 'PAYMENT') || 'RECEIPT';

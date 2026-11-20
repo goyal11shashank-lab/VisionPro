@@ -1,3 +1,4 @@
+import {assertSyntheticDatabase} from './assertSyntheticDatabase.js';assertSyntheticDatabase();
 import { pool } from '../db/index.js';
 import { GodownService } from '../services/godownService.js';
 import { StockService } from '../services/stockService.js';
@@ -311,10 +312,11 @@ async function runTests() {
     assert(g1Balances.length > 0 && g1Balances[0].physicalStock === 17.00, 'Godown 1 balance reflects 17.00 pairs');
 
     // ------------------------------------------------------------------------
-    // SCENARIO 12 & 13: Read-Only Main Warehouse Stock Search (Zero price leakage)
+    // SCENARIO 12 & 13: Intentional Super Admin raw stock inspection
     // ------------------------------------------------------------------------
-    console.log('\n--- Scenario 12 & 13: Read-Only Main Warehouse Feed (Zero Leakage) ---');
+    console.log('\n--- Scenario 12 & 13: Super Admin Raw Stock Inspection ---');
     const searchResults = await GodownService.searchMainWarehouseStock(businessId, {
+      isSuperAdmin: true,
       sph: -2.50,
       cyl: -1.00,
     });
@@ -322,10 +324,10 @@ async function runTests() {
     const feedItem = searchResults.items[0];
     assert(feedItem.physicalStock === 50.00, 'Physical stock projected accurately');
     assert(feedItem.availableStock === 45.00, 'Available stock projected accurately');
-    assert((feedItem as any).purchasePrice === undefined, 'Zero leakage: purchasePrice omitted');
-    assert((feedItem as any).sellingPrice === undefined, 'Zero leakage: sellingPrice omitted');
-    assert((feedItem as any).mrp === undefined, 'Zero leakage: mrp omitted');
-    assert((feedItem as any).supplierPartyId === undefined, 'Zero leakage: supplierPartyId omitted');
+    assert((feedItem as any).purchasePrice === undefined, 'Super Admin feed: purchasePrice omitted');
+    assert((feedItem as any).sellingPrice === undefined, 'Super Admin feed: sellingPrice omitted');
+    assert((feedItem as any).mrp === undefined, 'Super Admin feed: mrp omitted');
+    assert((feedItem as any).supplierPartyId === undefined, 'Super Admin feed: supplierPartyId omitted');
 
     // ------------------------------------------------------------------------
     // SCENARIO 14: Denied admin settings and financial reports

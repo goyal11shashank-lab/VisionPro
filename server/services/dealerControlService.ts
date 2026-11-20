@@ -1014,9 +1014,10 @@ export class DealerControlService {
   }
 
   /**
-   * 9. GET Dealer Stock (Optional Sharing - Strictly Privacy Preserving)
+   * 9. Super Admin stock inspection, subject to the legacy sharing toggle
    */
-  static async getDealerStock(mainBusinessId: string, dealerBusinessId: string) {
+  static async getDealerStock(mainBusinessId: string, dealerBusinessId: string, actor?: { isSuperAdmin: boolean }) {
+    if (!actor?.isSuperAdmin) throw new Error('Cross-business stock inspection requires Super Administrator authority.');
     const client = await pool.connect();
     try {
       // 1. Verify tenant relationship
@@ -1092,8 +1093,8 @@ export class DealerControlService {
     }
   }
 
-  static async getDealerStockSharing(mainBusinessId: string, dealerBusinessId: string) {
-    return this.getDealerStock(mainBusinessId, dealerBusinessId);
+  static async getDealerStockSharing(mainBusinessId: string, dealerBusinessId: string, actor?: { isSuperAdmin: boolean }) {
+    return this.getDealerStock(mainBusinessId, dealerBusinessId, actor);
   }
 
   /**

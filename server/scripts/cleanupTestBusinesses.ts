@@ -31,6 +31,7 @@ export interface CleanupResult {
 }
 
 export async function runCleanup(options: { dryRun?: boolean } = {}): Promise<CleanupResult> {
+  if(!options.dryRun)throw new Error('Legacy bulk cleanup execution is retired. Use a reviewed reference-free Business deletion plan; protected records and Super Admin access must remain unchanged.');
   const client = await pool.connect();
 
   try {

@@ -1,3 +1,5 @@
+import { legacyScopeRouteAllowed } from '../services/legacyScopeSafetyService.js';
+import { canonicalBusinessFor, restrictBusinessChoices } from '../services/canonicalLoginService.js';
 import { Request, Response, NextFunction } from 'express';
 import { verifyAuthToken, AuthJwtPayload } from '../auth/jwt.js';
 import { db, pool } from '../db/index.js';
@@ -104,6 +106,8 @@ export async function authenticateToken(req: Request, res: Response, next: NextF
       return;
     }
 
+    const canonicalBusinessId=await canonicalBusinessFor(userRecord);
+
     // 1B. Godown Staff Isolation Enforcement
     let assignedGodownRecord: typeof godowns.$inferSelect | undefined;
     if (userRecord.assignedGodownId) {
@@ -157,7 +161,7 @@ export async function authenticateToken(req: Request, res: Response, next: NextF
       const explicitlyRequestedId = cleanHeaderBizId || tokenBizId;
 
       // Check user's authorized businesses
-      const accessibleBusinesses = await db
+      let accessibleBusinesses = await db
         .select({
           businessId: userBusinessAccess.businessId,
           isDefault: userBusinessAccess.isDefault,
@@ -166,6 +170,8 @@ export async function authenticateToken(req: Request, res: Response, next: NextF
         .from(userBusinessAccess)
         .innerJoin(businesses, eq(userBusinessAccess.businessId, businesses.id))
         .where(eq(userBusinessAccess.userId, userRecord.id));
+
+      accessibleBusinesses=restrictBusinessChoices(accessibleBusinesses,canonicalBusinessId);
 
       if (accessibleBusinesses.length === 0 && !userRecord.isSuperAdmin) {
         res.status(403).json({
@@ -314,6 +320,7 @@ export async function authenticateToken(req: Request, res: Response, next: NextF
       permissions: userPermissionsList,
     };
 
+    if(!await legacyScopeRouteAllowed(req)){res.status(403).json({error:'LEGACY_SCOPE_ADAPTER_REQUIRED',message:'This historical stock-assigned login cannot open unscoped Business data. Its existing assignment is preserved pending reviewed Business conversion.'});return;}
     next();
   } catch (error: any) {
     res.status(401).json({

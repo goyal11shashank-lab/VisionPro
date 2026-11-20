@@ -46,7 +46,9 @@ router.get(
  * GET /api/purchases/returns/number-preview
  * Get preview of next auto-generated return number
  */
-router.get('/number-preview', async (req: Request, res: Response) => {
+router.get('/number-preview',
+  requireAnyPermission(['purchase:view', 'purchase.view', 'purchase:return:view']),
+  async (req: Request, res: Response) => {
   try {
     const businessId = req.user!.currentBusinessId;
     const nextNum = await PurchaseReturnService.generateReturnNumber(businessId);
@@ -93,8 +95,6 @@ router.post(
   requireAnyPermission([
     'purchase:return:create',
     'purchase.return.create',
-    'purchase:create',
-    'purchase.create',
   ]),
   async (req: Request, res: Response) => {
     try {
@@ -202,8 +202,6 @@ router.delete(
     'purchase.return.delete',
     'purchase:delete',
     'purchase.delete',
-    'purchase:cancel',
-    'purchase:edit',
   ]),
   async (req: Request, res: Response) => {
     try {

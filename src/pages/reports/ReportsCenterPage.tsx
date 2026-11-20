@@ -616,7 +616,7 @@ export const ReportsCenterPage: React.FC<{ initialTab?: ReportTab; initialStockS
             Reports & Operational Registers
           </h2>
           <p className="text-xs text-slate-500 mt-1">
-            Live PostgreSQL aggregated registers with multi-attribute optical power filters and one-click Excel XLSX export.
+            Review your stock, sales, purchases and payments. Filter by item and optical power, then print or export the results.
           </p>
         </div>
 
@@ -705,7 +705,7 @@ export const ReportsCenterPage: React.FC<{ initialTab?: ReportTab; initialStockS
         <div className="flex flex-wrap items-center gap-3">
           {/* Date range for date-based reports */}
           {['stock-ledger', 'sales', 'purchases', 'party-statement', 'payments', 'analytics'].includes(activeTab) && (
-            <div className="flex items-center gap-2">
+            <div className="flex flex-wrap items-center gap-2 max-w-full">
               <div className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl border border-slate-200 bg-slate-50 text-xs">
                 <Calendar className="w-3.5 h-3.5 text-slate-500" />
                 <input
@@ -730,7 +730,7 @@ export const ReportsCenterPage: React.FC<{ initialTab?: ReportTab; initialStockS
 
           {/* Inventory stock filter status */}
           {activeTab === 'inventory' && (
-            <div className="flex items-center gap-1.5">
+            <div className="flex flex-wrap items-center gap-1.5 max-w-full">
               <label className="text-xs font-semibold text-slate-600">Stock Status:</label>
               <select
                 value={inventoryStatus}
@@ -766,7 +766,7 @@ export const ReportsCenterPage: React.FC<{ initialTab?: ReportTab; initialStockS
 
           {/* Sales sub-tabs */}
           {activeTab === 'sales' && (
-            <div className="flex items-center gap-1 bg-slate-100 p-1 rounded-xl">
+            <div className="flex flex-wrap items-center gap-1 bg-slate-100 p-1 rounded-xl max-w-full">
               <button
                 onClick={() => { if (salesSubTab !== 'SUMMARY') { setSalesSubTab('SUMMARY'); setReportData(null); setPage(1); } }}
                 className={`px-3 py-1 rounded-lg text-xs font-semibold transition-all ${
@@ -796,7 +796,7 @@ export const ReportsCenterPage: React.FC<{ initialTab?: ReportTab; initialStockS
 
           {/* Purchase sub-tabs */}
           {activeTab === 'purchases' && (
-            <div className="flex items-center gap-1 bg-slate-100 p-1 rounded-xl">
+            <div className="flex flex-wrap items-center gap-1 bg-slate-100 p-1 rounded-xl max-w-full">
               <button
                 onClick={() => { if (purchaseSubTab !== 'SUMMARY') { setPurchaseSubTab('SUMMARY'); setReportData(null); setPage(1); } }}
                 className={`px-3 py-1 rounded-lg text-xs font-semibold transition-all ${
@@ -826,7 +826,7 @@ export const ReportsCenterPage: React.FC<{ initialTab?: ReportTab; initialStockS
 
           {/* Outstanding party type */}
           {activeTab === 'outstanding' && (
-            <div className="flex items-center gap-1 bg-slate-100 p-1 rounded-xl">
+            <div className="flex flex-wrap items-center gap-1 bg-slate-100 p-1 rounded-xl max-w-full">
               <button
                 onClick={() => { if (outstandingType !== 'CUSTOMER') { setOutstandingType('CUSTOMER'); setReportData(null); setPage(1); } }}
                 className={`px-3 py-1 rounded-lg text-xs font-semibold transition-all ${
@@ -920,7 +920,7 @@ export const ReportsCenterPage: React.FC<{ initialTab?: ReportTab; initialStockS
         {loading ? (
           <div className="py-20 text-center text-slate-400 space-y-3">
             <RefreshCw className="w-8 h-8 mx-auto animate-spin text-blue-600" />
-            <p className="text-sm font-medium">Aggregating PostgreSQL records...</p>
+            <p className="text-sm font-medium">Loading your report...</p>
           </div>
         ) : error ? (
           <div className="py-16 text-center text-rose-500 space-y-2">

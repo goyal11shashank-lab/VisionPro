@@ -1,3 +1,4 @@
+import {inspectBusinessDeletion} from './businessDeletionSafetyService.js';
 import { pool } from '../db/index.js';
 import { recordAuditLog } from './auditService.js';
 import { PartyService } from './partyService.js';
@@ -1028,83 +1029,15 @@ export class DealerCreationService {
       }
       const dealer = dealerRes.rows[0];
 
-      // Operational tables check
-      const dependencyChecks = [
-        { table: 'dealer_orders', col: 'dealer_business_id', label: 'Dealer Orders' },
-        { table: 'dealer_shipments', col: 'dealer_business_id', label: 'Shipments' },
-        { table: 'dealer_goods_receipts', col: 'dealer_business_id', label: 'Goods Receipts' },
-        { table: 'dealer_returns', col: 'dealer_business_id', label: 'Dealer Returns' },
-        { table: 'dealer_payment_advices', col: 'dealer_business_id', label: 'Payment Advices' },
-        { table: 'sales_orders', col: 'business_id', label: 'Sales Orders' },
-        { table: 'sales_invoices', col: 'business_id', label: 'Sales Invoices' },
-        { table: 'purchase_orders', col: 'business_id', label: 'Purchase Orders' },
-        { table: 'purchase_invoices', col: 'business_id', label: 'Purchase Invoices' },
-        { table: 'unique_items', col: 'business_id', label: 'Inventory Stock' },
-        { table: 'user_business_access', col: 'business_id', label: 'Assigned Users' },
-      ];
-
-      const foundDependencies: { label: string; count: number }[] = [];
-      for (const chk of dependencyChecks) {
-        try {
-          const q = await client.query(
-            `SELECT COUNT(*)::int as cnt FROM "${chk.table}" WHERE "${chk.col}" = $1`,
-            [dealerBusinessId]
-          );
-          const cnt = q.rows[0]?.cnt || 0;
-          if (cnt > 0) {
-            foundDependencies.push({ label: chk.label, count: cnt });
-          }
-        } catch (e) {
-          // table might not exist in some environments, ignore
-        }
-      }
-
-      if (foundDependencies.length > 0) {
-        throw new Error(
-          `Cannot delete dealer '${dealer.name}'. It contains active records: ${foundDependencies.map(d => `${d.label} (${d.count})`).join(', ')}. Deactivate the dealer instead.`
-        );
-      }
-
-      // Safe to delete empty dealer
       await client.query('BEGIN');
-
-      // 1. Remove parties inside Dealer business
-      await client.query(`DELETE FROM parties WHERE business_id = $1`, [dealerBusinessId]);
-
-      // 2. Remove settings
-      await client.query(`DELETE FROM business_settings WHERE business_id = $1`, [dealerBusinessId]);
-
-      // 3. Remove dealer business
-      await client.query(`DELETE FROM businesses WHERE id = $1`, [dealerBusinessId]);
-
-      // 4. Clean up Main customer party if it was solely auto-provisioned for this dealer and has 0 invoices/orders
-      const linkedCustRes = await client.query(
-        `SELECT id FROM parties WHERE business_id = $1 AND notes LIKE $2`,
-        [mainBusinessId, `%[DEALER_BIZ:${dealerBusinessId}]%`]
-      );
-      if (linkedCustRes.rows.length > 0) {
-        const custId = linkedCustRes.rows[0].id;
-        const invCheck = await client.query(
-          `SELECT COUNT(*)::int as cnt FROM sales_invoices WHERE business_id = $1 AND party_id = $2`,
-          [mainBusinessId, custId]
-        );
-        if ((invCheck.rows[0]?.cnt || 0) === 0) {
-          await client.query(`DELETE FROM parties WHERE id = $1 AND business_id = $2`, [custId, mainBusinessId]);
-        }
-      }
-
+      await client.query('LOCK TABLE businesses,parties IN SHARE ROW EXCLUSIVE MODE');
+      await client.query('SELECT id FROM businesses WHERE id=$1 FOR UPDATE',[dealerBusinessId]);
+      const safety=await inspectBusinessDeletion(client,dealerBusinessId,mainBusinessId);
+      if(!safety.canDelete)throw new Error('Cannot delete Business. '+safety.reason);
+      await client.query('DELETE FROM businesses WHERE id=$1',[dealerBusinessId]);
+      // Counterpart parties are never deleted as a side effect of Business cleanup.
+      await recordAuditLog({businessId:mainBusinessId,userId,action:'DEALER_BUSINESS_DELETED',module:'DEALER_ADMINISTRATION',entityType:'Business',entityId:dealerBusinessId,previousValue:dealer,req},client);
       await client.query('COMMIT');
-
-      await recordAuditLog({
-        businessId: mainBusinessId,
-        userId,
-        action: 'DEALER_BUSINESS_DELETED',
-        module: 'DEALER_ADMINISTRATION',
-        entityType: 'Business',
-        entityId: dealerBusinessId,
-        previousValue: dealer,
-        req,
-      });
 
       return {
         success: true,

@@ -45,6 +45,8 @@ export const BusinessesPage: React.FC = () => {
   const [allRoles, setAllRoles] = useState<Role[]>([]);
   const [allUsers, setAllUsers] = useState<User[]>([]);
   const [loading, setLoading] = useState<boolean>(true);
+  const [visibilityFilter,setVisibilityFilter]=useState<'VISIBLE'|'HIDDEN'|'ALL'>('VISIBLE');
+  const [visibilityBusy,setVisibilityBusy]=useState(false);
   const [search, setSearch] = useState<string>('');
   const [statusFilter, setStatusFilter] = useState<'ALL' | 'ACTIVE' | 'INACTIVE'>('ALL');
   const [error, setError] = useState<string | null>(null);
@@ -114,6 +116,18 @@ export const BusinessesPage: React.FC = () => {
   } | null>(null);
 
   const isSuperAdmin = Boolean(currentUser?.isSuperAdmin);
+  const [relationshipSource,setRelationshipSource]=useState('');
+  const [relationshipBusy,setRelationshipBusy]=useState(false);
+  const [relationshipMessage,setRelationshipMessage]=useState('');
+  const saveRelationship=async()=>{
+    if(!editingBiz||!isSuperAdmin||relationshipBusy)return;
+    if(!window.confirm('Change the supplier Business link? This enables linked ordering and exact availability lookup, but does not grant access to the supplier accounts or settings. Existing documents are unchanged.'))return;
+    setRelationshipBusy(true);setRelationshipMessage('');
+    try {await apiRequest(`/api/businesses/${editingBiz.id}/relationships`,{method:'PUT',body:JSON.stringify({supplierBusinessId:relationshipSource||null})});setRelationshipMessage('Supplier Business link saved. Existing documents and stock were not moved.');await fetchBusinessesAndData();}
+    catch(error:any){setRelationshipMessage(error.message||'Could not save Business relationship.');}
+    finally{setRelationshipBusy(false);}
+  };
+
 
   const fetchBusinessesAndData = async () => {
     setLoading(true);
@@ -137,6 +151,14 @@ export const BusinessesPage: React.FC = () => {
   useEffect(() => {
     fetchBusinessesAndData();
   }, []);
+
+  const changeVisibility=async(ids:string[],hidden:boolean)=>{
+    if(!ids.length||visibilityBusy)return;
+    if(!window.confirm(hidden?'Hide these Businesses from your normal list and top dropdown? Data, staff login, memberships and operational status stay unchanged.':'Show these Businesses in your normal list and top dropdown again?'))return;
+    setVisibilityBusy(true);setError(null);
+    try{const result=await apiRequest('/api/businesses/admin-visibility',{method:'POST',body:JSON.stringify({ids,hidden})});setSuccessMsg(result.message);setSelectedBizIds(new Set());await fetchBusinessesAndData();await refreshUser();}
+    catch(error:any){setError(error.message||'Could not update Business visibility.');}finally{setVisibilityBusy(false);}
+  };
 
   const openCreateModal = () => {
     setEditingBiz(null);
@@ -165,6 +187,7 @@ export const BusinessesPage: React.FC = () => {
   };
 
   const openEditModal = (biz: Business) => {
+    setRelationshipSource(biz.supplierBusinessId ?? biz.parentBusinessId ?? '');setRelationshipMessage('');
     setEditingBiz(biz);
     setFormData({
       name: biz.name || '',
@@ -197,18 +220,11 @@ export const BusinessesPage: React.FC = () => {
       return;
     }
 
-    if (formData.businessType === 'DEALER' && !formData.parentBusinessId) {
-      setError('Please select a Parent Main Warehouse for this Dealer business.');
-      return;
-    }
-
     setIsSaving(true);
     setError(null);
     try {
-      const payload = {
-        ...formData,
-        parentBusinessId: formData.businessType === 'DEALER' ? (formData.parentBusinessId || null) : null,
-      };
+      // Type/parent are legacy attribution and never changed by a profile form.
+      const {businessType:_legacyType,parentBusinessId:_legacyParent,...payload}=formData;
 
       if (editingBiz) {
         await apiRequest(`/api/businesses/${editingBiz.id}`, {
@@ -339,7 +355,8 @@ export const BusinessesPage: React.FC = () => {
         ? b.status === 'ACTIVE'
         : b.status !== 'ACTIVE';
 
-    return matchesSearch && matchesStatus;
+    const matchesVisibility=!isSuperAdmin||visibilityFilter==='ALL'||(visibilityFilter==='HIDDEN'?b.hiddenFromSuperAdmin:!b.hiddenFromSuperAdmin);
+    return matchesSearch && matchesStatus && matchesVisibility;
   });
 
   // Selectable businesses on the current view (cannot select currently logged-in business)
@@ -449,7 +466,7 @@ export const BusinessesPage: React.FC = () => {
     const ids = Array.from(selectedBizIds);
     if (ids.length === 0) return;
 
-    if (!window.confirm(`Are you sure you want to deactivate ${ids.length} selected business(es)? Users will have their access paused.`)) {
+    if (!window.confirm(`Are you sure you want to deactivate ${ids.length} selected business(es)? This changes operational status, not just list visibility.`)) {
       return;
     }
 
@@ -562,6 +579,14 @@ export const BusinessesPage: React.FC = () => {
           </button>
         )}
       </div>
+
+      {isSuperAdmin&&<section className="rounded-xl border border-blue-200 bg-blue-50 p-3 space-y-3" aria-label="Business visibility">
+        <div className="text-xs text-slate-700">Hidden Businesses stay available here. Hiding only clears your normal list and top dropdown; staff login, access, records and operational status do not change.</div>
+        <div className="flex flex-wrap gap-2">
+          {(['VISIBLE','HIDDEN','ALL'] as const).map(filter=><button key={filter} onClick={()=>{setVisibilityFilter(filter);setSelectedBizIds(new Set());}} className={`px-3 py-2 text-xs rounded-lg border ${visibilityFilter===filter?'bg-blue-700 text-white border-blue-700':'bg-white text-slate-700 border-slate-300'}`}>{filter==='VISIBLE'?'Normal view':filter==='HIDDEN'?'Hidden Businesses':'All Businesses'} ({businessesList.filter(b=>filter==='ALL'||(filter==='HIDDEN'?b.hiddenFromSuperAdmin:!b.hiddenFromSuperAdmin)).length})</button>)}
+          {selectedBizIds.size>0&&<button disabled={visibilityBusy} onClick={()=>changeVisibility(Array.from(selectedBizIds),visibilityFilter!=='HIDDEN')} className="px-3 py-2 text-xs rounded-lg border border-blue-400 bg-white text-blue-800 disabled:opacity-50">{visibilityFilter==='HIDDEN'?'Show selected':'Hide selected'}</button>}
+        </div>
+      </section>}
 
       {/* Metric Cards Banner */}
       <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
@@ -729,7 +754,7 @@ export const BusinessesPage: React.FC = () => {
                   </th>
                 )}
                 <th className="px-5 py-3.5">Business Name & Trade Name</th>
-                <th className="px-5 py-3.5">Type & Hierarchy</th>
+                <th className="px-5 py-3.5">Business & Supplier Link</th>
                 <th className="px-5 py-3.5">Tax / GSTIN / PAN</th>
                 <th className="px-5 py-3.5">Location & Contact</th>
                 <th className="px-5 py-3.5">Status</th>
@@ -806,21 +831,21 @@ export const BusinessesPage: React.FC = () => {
                         </div>
                       </td>
 
-                      {/* Type & Hierarchy */}
+                      {/* Business & Supplier Link */}
                       <td className="px-5 py-3.5">
                         {isDealer ? (
                           <div className="space-y-1">
                             <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-[10px] font-bold bg-purple-100 text-purple-800 border border-purple-200">
-                              DEALER
+                              BUSINESS
                             </span>
                             <div className="text-[10px] text-slate-500 flex items-center gap-1">
-                              <span>Warehouse:</span>
-                              <span className="font-medium text-slate-700">{b.parentBusinessName || 'Unassigned'}</span>
+                              <span>Supplier:</span>
+                              <span className="font-medium text-slate-700">{b.supplierBusinessName || b.parentBusinessName || 'Unassigned'}</span>
                             </div>
                           </div>
                         ) : (
                           <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-[10px] font-bold bg-blue-100 text-blue-800 border border-blue-200">
-                            MAIN WAREHOUSE
+                            BUSINESS
                           </span>
                         )}
                       </td>
@@ -860,7 +885,7 @@ export const BusinessesPage: React.FC = () => {
                           }`}
                         >
                           <span className={`w-1.5 h-1.5 rounded-full ${isActive ? 'bg-emerald-500' : 'bg-amber-500'}`} />
-                          {b.status}
+                          {b.status}{b.hiddenFromSuperAdmin&&<span className="ml-1 text-slate-500"> · Hidden</span>}
                         </span>
                       </td>
 
@@ -897,6 +922,7 @@ export const BusinessesPage: React.FC = () => {
 
                           {isSuperAdmin && (
                             <>
+                              <button disabled={visibilityBusy||b.adminVisibilityLocked} onClick={()=>changeVisibility([b.id],!b.hiddenFromSuperAdmin)} className="px-2 py-1.5 text-xs rounded-lg border border-blue-200 text-blue-800 disabled:opacity-40" title={b.adminVisibilityLocked?'Lumina stays visible':b.hiddenFromSuperAdmin?'Show in normal view':'Hide from normal view'}>{b.hiddenFromSuperAdmin?'Show':'Hide'}</button>
                               <button
                                 onClick={() => handleToggleStatus(b)}
                                 className={`p-1.5 rounded-lg border border-slate-200 hover:bg-slate-100 ${
@@ -946,64 +972,20 @@ export const BusinessesPage: React.FC = () => {
 
             <form onSubmit={handleSaveBusiness} className="p-6 space-y-4 overflow-y-auto flex-1 text-xs">
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                {/* Business Role & Hierarchy */}
-                <div className="sm:col-span-2 p-3 bg-slate-50 border border-slate-200 rounded-xl space-y-3">
-                  <div className="font-semibold text-slate-800 text-xs flex items-center justify-between">
-                    <span>Business Role & Hierarchy</span>
-                    <span className={`px-2 py-0.5 rounded text-[10px] font-bold ${
-                      formData.businessType === 'DEALER' ? 'bg-purple-100 text-purple-800' : 'bg-blue-100 text-blue-800'
-                    }`}>
-                      {formData.businessType === 'DEALER' ? 'Dealer Entity' : 'Main Warehouse'}
-                    </span>
-                  </div>
-
-                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                    <div>
-                      <label className="block text-slate-700 font-medium mb-1">
-                        Business Type <span className="text-red-500">*</span>
-                      </label>
-                      <select
-                        value={formData.businessType}
-                        onChange={(e) => setFormData({
-                          ...formData,
-                          businessType: e.target.value as 'MAIN' | 'DEALER',
-                          parentBusinessId: e.target.value === 'MAIN' ? '' : formData.parentBusinessId,
-                        })}
-                        className="w-full px-3 py-2 bg-white border border-slate-200 rounded-xl focus:ring-2 focus:ring-blue-500 font-medium text-slate-800"
-                      >
-                        <option value="MAIN">Main Warehouse (HQ / Primary Inventory)</option>
-                        <option value="DEALER">Dealer (Retailer / Franchise with Parent Warehouse feed)</option>
-                      </select>
-                    </div>
-
-                    {formData.businessType === 'DEALER' ? (
-                      <div>
-                        <label className="block text-purple-900 font-medium mb-1">
-                          Designated Parent Main Warehouse <span className="text-red-500">*</span>
-                        </label>
-                        <select
-                          required
-                          value={formData.parentBusinessId}
-                          onChange={(e) => setFormData({ ...formData, parentBusinessId: e.target.value })}
-                          className="w-full px-3 py-2 bg-white border border-purple-300 rounded-xl focus:ring-2 focus:ring-purple-500 font-medium text-slate-800"
-                        >
-                          <option value="">-- Select Main Warehouse --</option>
-                          {businessesList
-                            .filter((b) => b.businessType !== 'DEALER' && (!editingBiz || b.id !== editingBiz.id))
-                            .map((mainBiz) => (
-                              <option key={mainBiz.id} value={mainBiz.id}>
-                                {mainBiz.name} ({mainBiz.city || 'No City'})
-                              </option>
-                            ))}
-                        </select>
-                      </div>
-                    ) : (
-                      <div className="flex items-center text-[11px] text-slate-500 pt-5">
-                        <span>Provides central catalog & real-time stock feed to registered dealers.</span>
-                      </div>
-                    )}
-                  </div>
+                <div className="sm:col-span-2 p-3 bg-blue-50 border border-blue-100 rounded-xl text-sm text-blue-900">
+                  Independent Business. Stock, accounts, items and settings stay separate. Editing this profile does not merge old stock scopes or change existing supplier links.
                 </div>
+
+                {editingBiz&&isSuperAdmin&&<section className="sm:col-span-2 border rounded-xl p-3 space-y-2">
+                  <label className="block text-sm font-medium">Supplier Business
+                    <select aria-label="Supplier Business" value={relationshipSource} onChange={e=>setRelationshipSource(e.target.value)} className="w-full mt-1 min-h-11 p-2 border rounded-lg">
+                      <option value="">No supplier Business</option>{businessesList.filter(b=>b.id!==editingBiz.id&&b.status==='ACTIVE').map(b=><option key={b.id} value={b.id}>{b.name}</option>)}
+                    </select>
+                  </label>
+                  <p className="text-xs text-slate-500">A link enables ordering and exact item/power availability, not access to another Business's accounts or settings. No stock is moved.</p>
+                  <button type="button" disabled={relationshipBusy} onClick={saveRelationship} className="min-h-11 px-4 border rounded-lg text-blue-700">Save supplier link separately</button>
+                  {relationshipMessage&&<p role="status" className="text-sm">{relationshipMessage}</p>}
+                </section>}
 
                 <div className="sm:col-span-2">
                   <label className="block text-slate-700 font-medium mb-1">
@@ -1365,7 +1347,7 @@ export const BusinessesPage: React.FC = () => {
               <div className="flex justify-between items-center">
                 <span className="font-semibold text-slate-500">Entity Type:</span>
                 <span className="font-medium text-slate-700">
-                  {singleDeleteCandidate.businessType === 'DEALER' ? 'Dealer Branch' : 'Main Warehouse'}
+                  {singleDeleteCandidate.businessType === 'DEALER' ? 'Business' : 'Business'}
                 </span>
               </div>
               <div className="flex justify-between items-center">
@@ -1454,7 +1436,7 @@ export const BusinessesPage: React.FC = () => {
                           <div>
                             <div className="font-semibold text-slate-900">{b.name}</div>
                             <div className="text-[10px] text-slate-500">
-                              {b.businessType === 'DEALER' ? 'Dealer Branch' : 'Main Warehouse'} • {b.city || 'No city'}
+                              {b.businessType === 'DEALER' ? 'Business' : 'Business'} • {b.city || 'No city'}
                             </div>
                           </div>
                           <span className={`px-2 py-0.5 rounded-full text-[10px] font-semibold ${
@@ -1623,7 +1605,7 @@ export const BusinessesPage: React.FC = () => {
             </div>
 
             <div className="text-[11px] text-slate-500">
-              Under Indian GST, tax audit and ERP integrity rules, businesses with posted invoices, ledger journals, or inventory batches cannot be deleted. You can safely deactivate this business instead to prevent any future transactions.
+              Linked records block permanent deletion to preserve data and access. Use Hide to remove clutter without changing staff login, data or operational status.
             </div>
 
             <div className="flex items-center justify-end gap-2 pt-2 border-t border-slate-100">

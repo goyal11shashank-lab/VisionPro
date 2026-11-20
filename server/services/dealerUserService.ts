@@ -1,7 +1,9 @@
 import { Request } from 'express';
+import type { PoolClient } from 'pg';
 import { pool } from '../db/index.js';
 import { hashPassword } from '../auth/password.js';
 import { recordAuditLog } from './auditService.js';
+import { findExceedingPermissions, findRoleTenantScopeViolation, getUserAccessibleBusinessIds, findOutOfScopeDefaultBusinessId } from './roleCeilingService.js';
 
 export interface DealerUserRecord {
   id: string;
@@ -45,14 +47,55 @@ export interface UpdateUserProfileInput {
 
 export class DealerUserService {
   /**
+   * TENANT BOUNDARY GUARD: verify the target Dealer business belongs to the given Main Warehouse.
+   * Every Dealer user-management operation must run under a verified parent relationship so a
+   * Main business actor can never manage users of an unrelated Dealer or of a non-Dealer business.
+   */
+  private static async assertDealerUnderMain(
+    client: PoolClient,
+    mainBusinessId: string,
+    dealerBusinessId: string
+  ): Promise<void> {
+    const res = await client.query(
+      `SELECT id FROM businesses WHERE id = $1 AND parent_business_id = $2 AND business_type = 'DEALER' LIMIT 1`,
+      [dealerBusinessId, mainBusinessId]
+    );
+    if (res.rows.length === 0) {
+      throw new Error('Dealer business not found under this Main Warehouse.');
+    }
+  }
+
+  /**
+   * TENANT BOUNDARY GUARD: verify the target user is a member of the given Dealer business.
+   */
+  private static async assertUserMemberOfDealer(
+    client: PoolClient,
+    dealerBusinessId: string,
+    targetUserId: string
+  ): Promise<void> {
+    const res = await client.query(
+      `SELECT id FROM user_business_access WHERE user_id = $1 AND business_id = $2 LIMIT 1`,
+      [targetUserId, dealerBusinessId]
+    );
+    if (res.rows.length === 0) {
+      throw new Error('User does not have access to this dealer business.');
+    }
+  }
+
+  /**
    * List all users assigned to a specific Dealer business
    */
-  static async getDealerUsers(dealerBusinessId: string): Promise<{
+  static async getDealerUsers(
+    mainBusinessId: string,
+    dealerBusinessId: string
+  ): Promise<{
     users: DealerUserRecord[];
     stats: { total: number; active: number; inactive: number };
   }> {
     const client = await pool.connect();
     try {
+      await this.assertDealerUnderMain(client, mainBusinessId, dealerBusinessId);
+
       const query = `
         SELECT 
           u.id,
@@ -104,11 +147,14 @@ export class DealerUserService {
    * Search users across the system who are NOT yet assigned to this Dealer business
    */
   static async searchCandidateUsers(
+    mainBusinessId: string,
     dealerBusinessId: string,
     searchQuery: string
   ): Promise<any[]> {
     const client = await pool.connect();
     try {
+      await this.assertDealerUnderMain(client, mainBusinessId, dealerBusinessId);
+
       const q = (searchQuery || '').trim().toLowerCase();
       const searchParam = `%${q}%`;
 
@@ -246,6 +292,7 @@ export class DealerUserService {
    * Create a new User and atomically assign access and role to the Dealer business
    */
   static async createDealerUser(
+    mainBusinessId: string,
     dealerBusinessId: string,
     actorUserId: string,
     isSuperAdminActor: boolean,
@@ -289,6 +336,9 @@ export class DealerUserService {
 
     const client = await pool.connect();
     try {
+      // 0. TENANT BOUNDARY: Dealer must belong to the actor's Main Warehouse
+      await this.assertDealerUnderMain(client, mainBusinessId, dealerBusinessId);
+
       // 2. Validate role
       const roleRes = await client.query(`SELECT id, code, name FROM roles WHERE id = $1`, [roleId]);
       if (roleRes.rows.length === 0) {
@@ -299,6 +349,24 @@ export class DealerUserService {
       // Block normal admin from assigning SUPER_ADMIN
       if (role.code === 'SUPER_ADMIN' && !isSuperAdminActor) {
         throw new Error('Unauthorized: SUPER_ADMIN role cannot be assigned to dealer users');
+      }
+
+      // ROLE TENANT SCOPE: only system roles, the Dealer's own custom roles, or the owning
+      // Main Warehouse's custom roles may be assigned in this Dealer.
+      if (!isSuperAdminActor) {
+        const scopeViolation = await findRoleTenantScopeViolation(role.id, dealerBusinessId);
+        if (scopeViolation) {
+          throw new Error(scopeViolation);
+        }
+      }
+
+      // ROLE CEILING: the actor may not grant a role exceeding their own effective
+      // permissions in the Main Warehouse they operate from.
+      if (!isSuperAdminActor) {
+        const exceeding = await findExceedingPermissions(actorUserId, mainBusinessId, role.id);
+        if (exceeding.length > 0) {
+          throw new Error('You cannot grant a role with permissions you do not hold.');
+        }
       }
 
       // 3. Verify dealer business exists
@@ -431,6 +499,7 @@ export class DealerUserService {
    * Assign an existing active user to a Dealer business
    */
   static async assignExistingUser(
+    mainBusinessId: string,
     dealerBusinessId: string,
     actorUserId: string,
     isSuperAdminActor: boolean,
@@ -448,6 +517,9 @@ export class DealerUserService {
 
     const client = await pool.connect();
     try {
+      // 0. TENANT BOUNDARY: Dealer must belong to the actor's Main Warehouse
+      await this.assertDealerUnderMain(client, mainBusinessId, dealerBusinessId);
+
       // 1. Verify user exists and is ACTIVE
       const userRes = await client.query(
         `SELECT id, username, full_name, email, mobile, status, is_super_admin, last_login_at, created_at
@@ -471,6 +543,24 @@ export class DealerUserService {
 
       if (role.code === 'SUPER_ADMIN' && !isSuperAdminActor) {
         throw new Error('Unauthorized: SUPER_ADMIN role cannot be assigned to dealer users');
+      }
+
+      // ROLE TENANT SCOPE: only system roles, the Dealer's own custom roles, or the owning
+      // Main Warehouse's custom roles may be assigned in this Dealer.
+      if (!isSuperAdminActor) {
+        const scopeViolation = await findRoleTenantScopeViolation(role.id, dealerBusinessId);
+        if (scopeViolation) {
+          throw new Error(scopeViolation);
+        }
+      }
+
+      // ROLE CEILING: the actor may not grant a role exceeding their own effective
+      // permissions in the Main Warehouse they operate from.
+      if (!isSuperAdminActor) {
+        const exceeding = await findExceedingPermissions(actorUserId, mainBusinessId, role.id);
+        if (exceeding.length > 0) {
+          throw new Error('You cannot grant a role with permissions you do not hold.');
+        }
       }
 
       // 3. Verify dealer business
@@ -501,6 +591,15 @@ export class DealerUserService {
       await client.query('BEGIN');
 
       if (willBeDefault) {
+        // TENANT BOUNDARY: never clear a default membership outside the actor's own
+        // authorized businesses; reject instead of silently stripping it.
+        if (!isSuperAdminActor) {
+          const actorBusinessIds = await getUserAccessibleBusinessIds(actorUserId);
+          const outOfScopeDefault = await findOutOfScopeDefaultBusinessId(userId, actorBusinessIds);
+          if (outOfScopeDefault) {
+            throw new Error('Setting this Dealer as default would remove a default business outside your authorized access.');
+          }
+        }
         // Clear other defaults first to respect partial unique index
         await client.query(
           `UPDATE user_business_access SET is_default = false WHERE user_id = $1`,
@@ -580,6 +679,7 @@ export class DealerUserService {
    * Update role for a user in this specific Dealer business
    */
   static async updateUserRole(
+    mainBusinessId: string,
     dealerBusinessId: string,
     targetUserId: string,
     roleId: string,
@@ -589,6 +689,9 @@ export class DealerUserService {
   ): Promise<{ success: boolean; message: string; role: { id: string; code: string; name: string } }> {
     const client = await pool.connect();
     try {
+      // 0. TENANT BOUNDARY: Dealer must belong to the actor's Main Warehouse
+      await this.assertDealerUnderMain(client, mainBusinessId, dealerBusinessId);
+
       // 1. Verify access exists
       const accessRes = await client.query(
         `SELECT id FROM user_business_access WHERE user_id = $1 AND business_id = $2`,
@@ -607,6 +710,24 @@ export class DealerUserService {
 
       if (role.code === 'SUPER_ADMIN' && !isSuperAdminActor) {
         throw new Error('Unauthorized: SUPER_ADMIN role cannot be assigned');
+      }
+
+      // ROLE TENANT SCOPE: only system roles, the Dealer's own custom roles, or the owning
+      // Main Warehouse's custom roles may be assigned in this Dealer.
+      if (!isSuperAdminActor) {
+        const scopeViolation = await findRoleTenantScopeViolation(role.id, dealerBusinessId);
+        if (scopeViolation) {
+          throw new Error(scopeViolation);
+        }
+      }
+
+      // ROLE CEILING: the actor may not grant a role exceeding their own effective
+      // permissions in the Main Warehouse they operate from.
+      if (!isSuperAdminActor) {
+        const exceeding = await findExceedingPermissions(actorUserId, mainBusinessId, role.id);
+        if (exceeding.length > 0) {
+          throw new Error('You cannot grant a role with permissions you do not hold.');
+        }
       }
 
       await client.query('BEGIN');
@@ -663,17 +784,21 @@ export class DealerUserService {
    * Set Dealer business as default for a user (transactionally updates other memberships)
    */
   static async setUserDefaultBusiness(
+    mainBusinessId: string,
+    dealerBusinessId: string,
     targetUserId: string,
-    targetBusinessId: string,
     actorUserId: string,
     req?: Request
   ): Promise<{ success: boolean; message: string }> {
     const client = await pool.connect();
     try {
+      // 0. TENANT BOUNDARY: Dealer must belong to the actor's Main Warehouse
+      await this.assertDealerUnderMain(client, mainBusinessId, dealerBusinessId);
+
       // 1. Verify access exists
       const accessRes = await client.query(
         `SELECT id FROM user_business_access WHERE user_id = $1 AND business_id = $2`,
-        [targetUserId, targetBusinessId]
+        [targetUserId, dealerBusinessId]
       );
       if (accessRes.rows.length === 0) {
         throw new Error('User does not have access to this business');
@@ -690,13 +815,13 @@ export class DealerUserService {
       // Set target business as default
       await client.query(
         `UPDATE user_business_access SET is_default = true WHERE user_id = $1 AND business_id = $2`,
-        [targetUserId, targetBusinessId]
+        [targetUserId, dealerBusinessId]
       );
 
       await client.query('COMMIT');
 
       await recordAuditLog({
-        businessId: targetBusinessId,
+        businessId: dealerBusinessId,
         userId: actorUserId,
         action: 'USER_DEFAULT_BUSINESS_CHANGED',
         module: 'DEALER_ADMINISTRATION',
@@ -704,7 +829,7 @@ export class DealerUserService {
         entityId: targetUserId,
         newValue: {
           targetUserId,
-          defaultBusinessId: targetBusinessId,
+          defaultBusinessId: dealerBusinessId,
         },
         req,
       });
@@ -727,6 +852,7 @@ export class DealerUserService {
    * Promotes another remaining business to default if this was default.
    */
   static async removeDealerUserAccess(
+    mainBusinessId: string,
     dealerBusinessId: string,
     targetUserId: string,
     actorUserId: string,
@@ -734,6 +860,9 @@ export class DealerUserService {
   ): Promise<{ success: boolean; message: string; remainingBusinessesCount: number }> {
     const client = await pool.connect();
     try {
+      // 0. TENANT BOUNDARY: Dealer must belong to the actor's Main Warehouse
+      await this.assertDealerUnderMain(client, mainBusinessId, dealerBusinessId);
+
       // 1. Check access
       const accessRes = await client.query(
         `SELECT id, is_default FROM user_business_access WHERE user_id = $1 AND business_id = $2`,
@@ -743,6 +872,13 @@ export class DealerUserService {
         throw new Error('User does not have access to this business');
       }
       const wasDefault = accessRes.rows[0].is_default;
+
+      // TENANT BOUNDARY: only a Super Administrator may remove a Super Administrator's access
+      const actorFlagRes = await client.query(`SELECT is_super_admin FROM users WHERE id = $1 LIMIT 1`, [actorUserId]);
+      const targetFlagRes = await client.query(`SELECT is_super_admin FROM users WHERE id = $1 LIMIT 1`, [targetUserId]);
+      if (targetFlagRes.rows[0]?.is_super_admin && !actorFlagRes.rows[0]?.is_super_admin) {
+        throw new Error('Only a Super Administrator can manage a Super Administrator account.');
+      }
 
       await client.query('BEGIN');
 
@@ -807,6 +943,8 @@ export class DealerUserService {
    * Activate or Deactivate a user
    */
   static async toggleUserStatus(
+    mainBusinessId: string,
+    dealerBusinessId: string,
     targetUserId: string,
     status: 'ACTIVE' | 'INACTIVE',
     actorUserId: string,
@@ -814,6 +952,10 @@ export class DealerUserService {
   ): Promise<{ success: boolean; message: string; status: string }> {
     const client = await pool.connect();
     try {
+      // TENANT BOUNDARY: Dealer must belong to the actor's Main Warehouse and the user must be its member
+      await this.assertDealerUnderMain(client, mainBusinessId, dealerBusinessId);
+      await this.assertUserMemberOfDealer(client, dealerBusinessId, targetUserId);
+
       const userRes = await client.query(
         `SELECT id, username, full_name, status, is_super_admin FROM users WHERE id = $1`,
         [targetUserId]
@@ -861,6 +1003,8 @@ export class DealerUserService {
    * Update user master profile details (Full name, email, mobile)
    */
   static async updateUserProfile(
+    mainBusinessId: string,
+    dealerBusinessId: string,
     targetUserId: string,
     input: UpdateUserProfileInput,
     actorUserId: string,
@@ -873,6 +1017,17 @@ export class DealerUserService {
 
     const client = await pool.connect();
     try {
+      // TENANT BOUNDARY: Dealer must belong to the actor's Main Warehouse and the user must be its member
+      await this.assertDealerUnderMain(client, mainBusinessId, dealerBusinessId);
+      await this.assertUserMemberOfDealer(client, dealerBusinessId, targetUserId);
+
+      // TENANT BOUNDARY: only a Super Administrator may edit a Super Administrator's profile
+      const actorFlagRes = await client.query(`SELECT is_super_admin FROM users WHERE id = $1 LIMIT 1`, [actorUserId]);
+      const targetFlagRes = await client.query(`SELECT is_super_admin FROM users WHERE id = $1 LIMIT 1`, [targetUserId]);
+      if (targetFlagRes.rows[0]?.is_super_admin && !actorFlagRes.rows[0]?.is_super_admin) {
+        throw new Error('Only a Super Administrator can manage a Super Administrator account.');
+      }
+
       const cleanEmail = email?.trim().toLowerCase() || null;
       const cleanMobile = mobile?.trim() || null;
 
@@ -938,7 +1093,11 @@ export class DealerUserService {
   /**
    * Get all business memberships and roles for a specific user (for the "Manage Access" modal)
    */
-  static async getUserAccessSummary(targetUserId: string): Promise<{
+  static async getUserAccessSummary(
+    mainBusinessId: string,
+    dealerBusinessId: string,
+    targetUserId: string
+  ): Promise<{
     user: any;
     businesses: Array<{
       businessId: string;
@@ -953,6 +1112,10 @@ export class DealerUserService {
   }> {
     const client = await pool.connect();
     try {
+      // TENANT BOUNDARY: Dealer must belong to the actor's Main Warehouse and the user must be its member
+      await this.assertDealerUnderMain(client, mainBusinessId, dealerBusinessId);
+      await this.assertUserMemberOfDealer(client, dealerBusinessId, targetUserId);
+
       const userRes = await client.query(
         `SELECT id, username, full_name as "fullName", email, mobile, status, is_super_admin as "isSuperAdmin"
          FROM users WHERE id = $1`,

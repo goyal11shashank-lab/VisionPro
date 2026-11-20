@@ -674,9 +674,8 @@ export class GodownService {
   }
 
   /**
-   * 10. RESTRICTED MAIN WAREHOUSE STOCK SEARCH FEED
-   * Dedicated read-only stock lookup of parent business Main Warehouse stock.
-   * STRICT SECURITY: Zero exposure of cost prices, purchase rates, supplier info, or customer data.
+   * 10. Legacy raw-stock inspection for intentional Super Admin use only.
+   * Ordinary users use exact item/power booleans, never this quantity feed.
    */
   static async searchMainWarehouseStock(
     mainBusinessId: string,
@@ -691,8 +690,10 @@ export class GodownService {
       side?: string;
       limit?: number;
       offset?: number;
+      isSuperAdmin?: boolean;
     }
   ) {
+    if (!options?.isSuperAdmin) throw new Error('Raw cross-business stock inspection requires Super Administrator authority.');
     const client = await pool.connect();
     try {
       const limit = Math.min(options?.limit ? parseInt(String(options.limit), 10) : 50, 100);

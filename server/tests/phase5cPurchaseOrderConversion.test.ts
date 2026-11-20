@@ -1,3 +1,5 @@
+import { assertSyntheticDatabase } from './assertSyntheticDatabase.js';
+assertSyntheticDatabase();
 /**
  * Phase 5C — Purchase Order to Purchase Invoice Parity & Lifecycle Test Suite
  *
@@ -26,7 +28,7 @@ async function runTests() {
   let failed = 0;
 
   try {
-    const allBusinesses = await db.select().from(businesses).limit(1);
+    const allBusinesses = await db.select().from(businesses).where(eq(businesses.businessType, 'MAIN')).orderBy(businesses.createdAt).limit(1);
     if (allBusinesses.length === 0) {
       throw new Error('No business found in database. Run db:seed first.');
     }
@@ -46,7 +48,8 @@ async function runTests() {
 
     let supplierId: string;
     if (allSuppliers.length === 0) {
-      throw new Error('No supplier party available.');
+      const [fixtureSupplier] = await db.insert(parties).values({ businessId, partyCode: `SYNTH-SUP-${Date.now()}`, name: 'Synthetic purchase conversion supplier', partyType: 'SUPPLIER', status: 'ACTIVE', state: allBusinesses[0].state || 'Delhi' }).returning();
+      supplierId = fixtureSupplier.id;
     } else {
       supplierId = allSuppliers[0].id;
       if (!allSuppliers[0].state) {

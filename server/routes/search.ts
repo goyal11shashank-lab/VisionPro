@@ -15,7 +15,7 @@ router.get('/', authenticateToken, async (req: Request, res: Response): Promise<
     const businessId = req.user!.currentBusinessId;
     const query = String(req.query.q || '').trim();
     const userPermissions = (req.user as any)?.permissions || [];
-    const isSuperAdmin = Boolean((req.user as any)?.role?.isSuperAdmin || (req.user as any)?.role?.code === 'SUPER_ADMIN');
+    const isSuperAdmin = Boolean(req.user?.isSuperAdmin);
 
     if (!query) {
       res.json({

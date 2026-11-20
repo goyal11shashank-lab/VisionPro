@@ -13,6 +13,7 @@
     "test:phase2": "tsx server/tests/phase2AdminAdministration.test.ts",
     "test:phase3": "tsx server/tests/phase3StockOperations.test.ts",
     "test:phase4": "tsx server/tests/phase4SalesEngine.test.ts",
+    "test:tenant-isolation": "tsx server/tests/tenantIsolationUserAccess.test.ts",
     "test:phase5": "tsx server/tests/phase5ReturnsEngine.test.ts",
     "test:phase5c": "tsx server/tests/phase5cPurchaseOrderConversion.test.ts",
     "test:phase5d": "tsx server/tests/phase5dInventoryStockReporting.test.ts",
@@ -26,7 +27,8 @@
     "test:whatsapp:lifecycle": "tsx server/tests/whatsappQrLifecycle.test.ts",
     "preview": "vite preview",
     "clean": "rm -rf dist server.js",
-    "lint": "tsc --noEmit"
+    "lint": "tsc --noEmit",
+    "test:permission-enforcement": "tsx server/tests/permissionEnforcement.test.ts"
   },
   "dependencies": {
     "@google/genai": "^2.4.0",

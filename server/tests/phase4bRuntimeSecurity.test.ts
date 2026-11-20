@@ -1,3 +1,5 @@
+import { assertSyntheticDatabase } from './assertSyntheticDatabase.js';
+assertSyntheticDatabase();
 /**
  * Phase 4B — Dealer Users, Business Access & Role Assignment
  * Comprehensive Runtime & Security Verification Test Suite
@@ -206,6 +208,7 @@ export async function runPhase4BVerification() {
     const testUsername1 = `user_dlra_${runId}`;
     const rawPassword1 = 'DealerSecure@2026';
     const user1Created = await DealerUserService.createDealerUser(
+      mainBiz.id,
       dealerA.id,
       mainAdminUser.id,
       false,
@@ -252,6 +255,7 @@ export async function runPhase4BVerification() {
     console.log('\n--- ITEM 2: Single Default Business ---');
     // Assign user1 to Dealer B as well
     await DealerUserService.assignExistingUser(
+      mainBiz.id,
       dealerB.id,
       mainAdminUser.id,
       false,
@@ -263,7 +267,7 @@ export async function runPhase4BVerification() {
     );
 
     // Now set Dealer B as default
-    await DealerUserService.setUserDefaultBusiness(user1Created.user.id, dealerB.id, mainAdminUser.id);
+    await DealerUserService.setUserDefaultBusiness(mainBiz.id, dealerB.id, user1Created.user.id, mainAdminUser.id);
 
     // Verify Dealer A is_default = false and Dealer B is_default = true
     const defaultsRes = await client.query(
@@ -367,6 +371,7 @@ export async function runPhase4BVerification() {
     const dealerOnlyUsername = `dlr_only_${runId}`;
     const dealerOnlyPassword = 'DealerOnlyPass@2026';
     const dealerOnlyUser = await DealerUserService.createDealerUser(
+      mainBiz.id,
       dealerA.id,
       mainAdminUser.id,
       false,
@@ -478,6 +483,7 @@ export async function runPhase4BVerification() {
 
     // Authorize dealerOnlyUser for Dealer B as well
     await DealerUserService.assignExistingUser(
+      mainBiz.id,
       dealerB.id,
       mainAdminUser.id,
       false,
@@ -562,6 +568,7 @@ export async function runPhase4BVerification() {
     console.log('\n--- ITEM 9: No Dealer Network Access ---');
     // Create another clean user authorized strictly for Dealer B only
     const dealerBOnlyUser = await DealerUserService.createDealerUser(
+      mainBiz.id,
       dealerB.id,
       mainAdminUser.id,
       false,
@@ -603,6 +610,7 @@ export async function runPhase4BVerification() {
     console.log('\n--- ITEM 10: Existing User Assignment ---');
     // Create user with Dealer A -> MANAGER
     const multiUser = await DealerUserService.createDealerUser(
+      mainBiz.id,
       dealerA.id,
       mainAdminUser.id,
       false,
@@ -619,6 +627,7 @@ export async function runPhase4BVerification() {
 
     // Now assign to Dealer B -> VIEWER
     await DealerUserService.assignExistingUser(
+      mainBiz.id,
       dealerB.id,
       mainAdminUser.id,
       false,
@@ -645,6 +654,7 @@ export async function runPhase4BVerification() {
     // Test role modification: update role in Dealer B to SALES_USER
     const [salesRole] = await db.select().from(roles).where(eq(roles.code, 'SALES_USER')).limit(1);
     await DealerUserService.updateUserRole(
+      mainBiz.id,
       dealerB.id,
       multiUser.user.id,
       salesRole.id,
@@ -670,6 +680,7 @@ export async function runPhase4BVerification() {
     console.log('\n--- ITEM 11: Remove Access ---');
     // Remove Dealer A access for multiUser
     const removeRes = await DealerUserService.removeDealerUserAccess(
+      mainBiz.id,
       dealerA.id,
       multiUser.user.id,
       mainAdminUser.id
@@ -712,7 +723,7 @@ export async function runPhase4BVerification() {
     // -------------------------------------------------------------
     console.log('\n--- ITEM 12: User Deactivation ---');
     // Deactivate multiUser
-    await DealerUserService.toggleUserStatus(multiUser.user.id, 'INACTIVE', mainAdminUser.id);
+    await DealerUserService.toggleUserStatus(mainBiz.id, dealerB.id, multiUser.user.id, 'INACTIVE', mainAdminUser.id);
 
     // 1. New login is rejected with 401 / 403
     const deactivatedLoginRes = await apiRequest('/api/auth/login', {
@@ -739,7 +750,7 @@ export async function runPhase4BVerification() {
     const existingSessionRejected = sessionRes.status === 401;
 
     // 3. Reactivate user and verify normal login returns
-    await DealerUserService.toggleUserStatus(multiUser.user.id, 'ACTIVE', mainAdminUser.id);
+    await DealerUserService.toggleUserStatus(mainBiz.id, dealerB.id, multiUser.user.id, 'ACTIVE', mainAdminUser.id);
     const reactivatedLoginRes = await apiRequest('/api/auth/login', {
       method: 'POST',
       body: {
@@ -767,6 +778,7 @@ export async function runPhase4BVerification() {
     let superAdminAssignBlocked = false;
     try {
       await DealerUserService.createDealerUser(
+        mainBiz.id,
         dealerA.id,
         mainAdminUser.id,
         false, // NOT super admin
@@ -860,6 +872,7 @@ export async function runPhase4BVerification() {
 
     // Run first submission
     const firstSub = await DealerUserService.createDealerUser(
+      mainBiz.id,
       dealerA.id,
       mainAdminUser.id,
       false,
@@ -870,6 +883,7 @@ export async function runPhase4BVerification() {
     let secondSubCaught = false;
     try {
       await DealerUserService.createDealerUser(
+        mainBiz.id,
         dealerA.id,
         mainAdminUser.id,
         false,
@@ -949,7 +963,7 @@ export async function runPhase4BVerification() {
       17,
       'REGRESSION',
       priorAllPassed,
-      `Phase 4A regression suite passed (45/45), Phase 3G passed (30/30), zero broken contracts`
+      `All preceding ${verificationMatrix.length} runtime checks passed. Other regression suites must be executed independently; this checkpoint does not run them.`
     );
 
   } finally {

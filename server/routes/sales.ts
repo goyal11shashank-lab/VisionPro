@@ -46,7 +46,9 @@ router.get(
  * GET /api/sales/orders/number-preview
  * Get preview of next auto-generated sales order number
  */
-router.get('/orders/number-preview', async (req: Request, res: Response) => {
+router.get('/orders/number-preview',
+  requireAnyPermission(['sales:view', 'sales.view', 'sales:create', 'sales.create']),
+  async (req: Request, res: Response) => {
   try {
     const businessId = req.user!.currentBusinessId;
     const nextNum = await SalesService.previewOrderNumber(businessId);
@@ -166,22 +168,7 @@ router.post(
  */
 router.post(
   '/orders/bulk-delete',
-  requireAnyPermission([
-    'sales:delete',
-    'sales.delete',
-    'sales:order:delete',
-    'sales.order.delete',
-    'sales:cancel',
-    'sales.cancel',
-    'sales:order:cancel',
-    'sales.order.cancel',
-    'sales:edit',
-    'sales.edit',
-    'sales:order:edit',
-    'sales.order.edit',
-    'sales:create',
-    'sales.create',
-  ]),
+  requireAnyPermission(['sales:delete', 'sales.delete', 'sales:order:delete', 'sales.order.delete']),
   async (req: Request, res: Response) => {
     try {
       const businessId = req.user!.currentBusinessId;
@@ -208,22 +195,7 @@ router.post(
  */
 router.delete(
   '/orders/:id',
-  requireAnyPermission([
-    'sales:delete',
-    'sales.delete',
-    'sales:order:delete',
-    'sales.order.delete',
-    'sales:cancel',
-    'sales.cancel',
-    'sales:order:cancel',
-    'sales.order.cancel',
-    'sales:edit',
-    'sales.edit',
-    'sales:order:edit',
-    'sales.order.edit',
-    'sales:create',
-    'sales.create',
-  ]),
+  requireAnyPermission(['sales:delete', 'sales.delete', 'sales:order:delete', 'sales.order.delete']),
   async (req: Request, res: Response) => {
     try {
       const businessId = req.user!.currentBusinessId;
@@ -300,7 +272,9 @@ router.get(
  * GET /api/sales/invoices/number-preview
  * Get preview of next auto-generated sales invoice number
  */
-router.get('/invoices/number-preview', async (req: Request, res: Response) => {
+router.get('/invoices/number-preview',
+  requireAnyPermission(['sales:view', 'sales.view', 'sales:create', 'sales.create']),
+  async (req: Request, res: Response) => {
   try {
     const businessId = req.user!.currentBusinessId;
     const nextNum = await SalesService.previewInvoiceNumber(businessId);
@@ -374,7 +348,7 @@ router.get(
  */
 router.put(
   '/invoices/:id',
-  requireAnyPermission(['sales:edit', 'sales.edit', 'sales:invoice:create', 'sales.invoice.create', 'sales:create', 'sales.create']),
+  requireAnyPermission(['sales:edit','sales.edit','sales:invoice:edit','sales.invoice.edit']),
   async (req: Request, res: Response) => {
     try {
       const businessId = req.user!.currentBusinessId;
@@ -438,7 +412,7 @@ router.post(
  */
 router.delete(
   '/invoices/:id',
-  requireAnyPermission(['sales:delete', 'sales.delete', 'sales:invoice:delete', 'sales.invoice.delete', 'sales:cancel', 'sales:edit']),
+  requireAnyPermission(['sales:delete', 'sales.delete', 'sales:invoice:delete', 'sales.invoice.delete']),
   async (req: Request, res: Response) => {
     try {
       const businessId = req.user!.currentBusinessId;

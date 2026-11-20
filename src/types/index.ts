@@ -78,6 +78,8 @@ export interface B2bOrderSyncLog {
 }
 
 export interface Business {
+  hiddenFromSuperAdmin?: boolean;
+  adminVisibilityLocked?: boolean;
   id: string;
   name: string;
   tradeName?: string | null;
@@ -97,6 +99,8 @@ export interface Business {
   businessType?: 'MAIN' | 'DEALER';
   parentBusinessId?: string | null;
   parentBusinessName?: string | null;
+  supplierBusinessId?: string | null;
+  supplierBusinessName?: string | null;
   isDefault?: boolean;
   onboardingCompleted?: boolean;
   onboardingCompletedAt?: string | null;
