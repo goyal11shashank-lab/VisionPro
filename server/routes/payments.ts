@@ -360,6 +360,22 @@ router.get(
       const isDate = (v: any) => typeof v === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(v);
       const from = isDate(req.query.from) ? (req.query.from as string) : null;
       const to = isDate(req.query.to) ? (req.query.to as string) : null;
+      // Cash opening balance (CASH mode only), configured in Settings > Accounts.
+      // Opening as of `from` = configured opening + all POSTED CASH movement
+      // from the configured opening date up to `from` (exclusive).
+      // The configured opening is a physical cash count on the opening date, so it
+      // already contains every earlier cash movement: periods never extend before
+      // the opening date (effectiveFrom clamps `from` up to it), otherwise that
+      // movement would be counted twice and the closing balance would be false.
+      const { settings } = await BusinessSettingsService.getSettings(businessId);
+      const rawOpening = Number(settings.accounts?.cashOpeningBalance ?? 0);
+      const cashOpening = Number.isFinite(rawOpening) ? rawOpening : 0;
+      const rawDate = settings.accounts?.cashOpeningDate;
+      const cashOpeningDate =
+        typeof rawDate === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(rawDate) ? rawDate : null;
+      const openingBalanceConfigured = cashOpeningDate !== null;
+      const effectiveFrom =
+        openingBalanceConfigured && (!from || from < cashOpeningDate!) ? cashOpeningDate : from;
       const rows = (await pool.query(
         `SELECT p.id, p.payment_number AS "paymentNumber", p.payment_date AS "paymentDate", p.payment_type AS "paymentType",
                 p.payment_mode AS "paymentMode", p.amount, p.reference_number AS "referenceNumber", p.notes, pr.name AS "partyName"
@@ -369,7 +385,7 @@ router.get(
             AND ($3::date IS NULL OR p.payment_date < ($3::date + INTERVAL '1 day'))
           ORDER BY p.payment_date DESC, p.payment_number DESC
           LIMIT 1000`,
-        [businessId, from, to]
+        [businessId, effectiveFrom, to]
       )).rows;
       const modes: Record<string, { receipts: number; payments: number; net: number; count: number }> = {};
       for (const r of rows) {
@@ -384,17 +400,6 @@ router.get(
         modes[m].payments = Math.round(modes[m].payments * 100) / 100;
         modes[m].net = Math.round((modes[m].receipts - modes[m].payments) * 100) / 100;
       }
-      // Cash opening balance (CASH mode only), configured in Settings > Accounts.
-      // Opening as of `from` = configured opening + all POSTED CASH movement
-      // from the configured opening date up to `from` (exclusive).
-      const { settings } = await BusinessSettingsService.getSettings(businessId);
-      const rawOpening = Number(settings.accounts?.cashOpeningBalance ?? 0);
-      const cashOpening = Number.isFinite(rawOpening) ? rawOpening : 0;
-      const rawDate = settings.accounts?.cashOpeningDate;
-      const cashOpeningDate =
-        typeof rawDate === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(rawDate) ? rawDate : null;
-      const openingBalanceConfigured = cashOpeningDate !== null;
-
       let openingBalance: number | null = null;
       let closingBalance: number | null = null;
       if (openingBalanceConfigured) {
@@ -406,7 +411,7 @@ router.get(
               AND payment_date >= $2::date
               AND payment_date < $3::date
             GROUP BY payment_type`,
-          [businessId, cashOpeningDate, from ?? cashOpeningDate]
+          [businessId, cashOpeningDate, effectiveFrom ?? cashOpeningDate]
         )).rows;
         let preNet = 0;
         for (const r of pre) {
@@ -421,6 +426,7 @@ router.get(
         success: true,
         openingBalanceConfigured,
         cashOpeningDate,
+        effectiveFrom,
         openingBalance,
         closingBalance,
         caveat: openingBalanceConfigured
