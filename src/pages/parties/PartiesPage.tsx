@@ -24,11 +24,13 @@ import {
 import { apiRequest } from '../../api/client.js';
 import { Party } from '../../types/index.js';
 import { useAuth } from '../../context/AuthContext.js';
+import { useBusinessSettings } from '../../context/SettingsContext.js';
 
 export const PartiesPage: React.FC<{ initialType?: 'ALL' | 'SUPPLIER' | 'CUSTOMER' | 'BOTH' }> = ({
   initialType = 'ALL',
 }) => {
   const { hasPermission } = useAuth();
+  const { settings } = useBusinessSettings();
   const [parties, setParties] = useState<Party[]>([]);
   const [loading, setLoading] = useState<boolean>(true);
   const [error, setError] = useState<string | null>(null);
@@ -46,7 +48,7 @@ export const PartiesPage: React.FC<{ initialType?: 'ALL' | 'SUPPLIER' | 'CUSTOME
 
   // Filters & Pagination
   const [search, setSearch] = useState<string>('');
-  const [typeFilter, setTypeFilter] = useState<'ALL' | 'SUPPLIER' | 'CUSTOMER' | 'BOTH'>('ALL');
+  const [typeFilter, setTypeFilter] = useState<'ALL' | 'SUPPLIER' | 'CUSTOMER' | 'BOTH'>(initialType);
   const [statusFilter, setStatusFilter] = useState<string>('ALL');
 
   // Modal State
@@ -98,12 +100,14 @@ export const PartiesPage: React.FC<{ initialType?: 'ALL' | 'SUPPLIER' | 'CUSTOME
     }
   };
 
+  useEffect(() => { setTypeFilter(initialType); }, [initialType]);
+
   useEffect(() => {
     const timer = setTimeout(() => {
       fetchParties();
     }, 200);
     return () => clearTimeout(timer);
-  }, [search, statusFilter]);
+  }, [search, statusFilter, typeFilter]);
 
   const handleSearchSubmit = (e: React.FormEvent) => {
     e.preventDefault();
@@ -122,12 +126,12 @@ export const PartiesPage: React.FC<{ initialType?: 'ALL' | 'SUPPLIER' | 'CUSTOME
       addressLine1: '',
       addressLine2: '',
       city: '',
-      state: 'Karnataka',
+      state: settings.party.defaultState || '',
       pincode: '',
       country: 'India',
       gstin: '',
       pan: '',
-      creditLimit: '0',
+      creditLimit: typeFilter === 'CUSTOMER' ? String(settings.party.defaultCreditLimit ?? 0) : '0',
       creditDays: '30',
       status: 'ACTIVE',
       whatsappOptIn: true,
@@ -709,7 +713,12 @@ export const PartiesPage: React.FC<{ initialType?: 'ALL' | 'SUPPLIER' | 'CUSTOME
                       </label>
                       <select
                         value={formData.partyType}
-                        onChange={e => setFormData({ ...formData, partyType: e.target.value as any })}
+                        onChange={e => setFormData({
+                          ...formData,
+                          partyType: e.target.value as any,
+                          ...(!selectedParty && formData.creditLimit === '0' && e.target.value !== 'SUPPLIER'
+                            ? { creditLimit: String(settings.party.defaultCreditLimit ?? 0) } : {}),
+                        })}
                         className="w-full px-3.5 py-2 text-sm bg-slate-50 border border-slate-200 rounded-xl focus:bg-white focus:ring-2 focus:ring-purple-500/20 focus:border-purple-600"
                       >
                         <option value="SUPPLIER">SUPPLIER (Vendor / Distributor / Lab)</option>
