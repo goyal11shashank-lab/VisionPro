@@ -5,6 +5,7 @@ import { verifyAuthToken, AuthJwtPayload } from '../auth/jwt.js';
 import { db, pool } from '../db/index.js';
 import { users, userBusinessAccess, businesses, userRoles, roles, rolePermissions, permissions, godowns } from '../db/schema.js';
 import { eq, and, inArray } from 'drizzle-orm';
+import { businessUsableByStaff, businessInactiveBody } from '../services/businessStatusPolicy.js';
 
 export interface AuthenticatedUser {
   id: string;
@@ -224,6 +225,14 @@ export async function authenticateToken(req: Request, res: Response, next: NextF
         error: 'UNAUTHORIZED_BUSINESS_ACCESS',
         message: 'You do not have authorization to access this business.',
       });
+      return;
+    }
+
+    // Owner rule (Nov 20, 2026): an inactive business stops its staff's access -
+    // no entries and no continued session use. Super Administrator keeps access
+    // for management and history. Applies to existing tokens, not only fresh logins.
+    if (!userRecord.isSuperAdmin && !businessUsableByStaff(currentBusiness)) {
+      res.status(403).json(businessInactiveBody(currentBusiness));
       return;
     }
 
