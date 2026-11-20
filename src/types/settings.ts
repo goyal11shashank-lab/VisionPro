@@ -111,6 +111,10 @@ export interface AppSettings {
     requireNarration: boolean;
     showSuccessModalAfterSave?: boolean;
   };
+  ui: {
+    rightClickRowActions?: boolean;
+    hideStockItemMasterColumns?: boolean;
+  };
   print: {
     invoiceTitle?: string;
     signatoryLabel?: string;
@@ -314,6 +318,10 @@ export const DEFAULT_APP_SETTINGS: AppSettings = {
     enableNarration: true,
     requireNarration: false,
     showSuccessModalAfterSave: false,
+  },
+  ui: {
+    rightClickRowActions: true,
+    hideStockItemMasterColumns: true,
   },
   print: {
     invoiceTitle: 'TAX INVOICE',

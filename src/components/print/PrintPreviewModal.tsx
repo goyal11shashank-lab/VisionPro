@@ -19,6 +19,7 @@ import {
 import { exportToPdf } from '../../utils/pdfExporter.js';
 import { printDocument } from '../../utils/printService.js';
 import { useEscapeKey } from '../../hooks/useEscapeKey.js';
+import { useBusinessSettings } from '../../context/BusinessSettingsContext.js';
 
 export interface PrintPreviewModalProps {
   isOpen: boolean;
@@ -50,7 +51,13 @@ export const PrintPreviewModal: React.FC<PrintPreviewModalProps> = ({
   children,
 }) => {
   useEscapeKey(isOpen, onClose);
-  const [orientation, setOrientation] = useState<'portrait' | 'landscape'>(defaultOrientation);
+  // A5 half-sheet jobs follow the Settings-controlled default orientation
+  // (print.defaultOrientation, Super Admin settings); A4 jobs keep the caller default.
+  const { settings } = useBusinessSettings();
+  const a5SettingsDefault = (settings?.print?.defaultOrientation ?? 'PORTRAIT').toLowerCase() === 'landscape' ? 'landscape' : 'portrait';
+  const [orientation, setOrientation] = useState<'portrait' | 'landscape'>(
+    paperSize === 'A5' ? a5SettingsDefault : defaultOrientation
+  );
   const [zoom, setZoom] = useState<number>(100);
   const [isExportingPdf, setIsExportingPdf] = useState(false);
   const [isPrinting, setIsPrinting] = useState(false);

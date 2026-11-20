@@ -52,12 +52,14 @@ interface NavItem {
   path: string;
   isUpcoming?: boolean;
   permission?: string;
+  superAdminOnly?: boolean;
   subItems?: {
     id: string;
     label: string;
     icon: React.ElementType;
     path: string;
     permission?: string;
+    superAdminOnly?: boolean;
   }[];
 }
 
@@ -191,10 +193,11 @@ export const Sidebar: React.FC<SidebarProps> = ({
         { id: 'admin-businesses', label: 'Businesses', icon: Building2, path: '/admin/businesses', permission: 'admin:manage_settings' },
         { id: 'admin-users', label: 'Users', icon: Users, path: '/admin/users', permission: 'admin:manage_users' },
         { id: 'admin-roles', label: 'Roles & Permissions', icon: KeyRound, path: '/admin/roles', permission: 'admin:manage_roles' },
-        { id: 'admin-business', label: 'Business Settings', icon: Settings, path: '/admin/business-settings', permission: 'admin:manage_settings' },
-        { id: 'admin-transaction-message', label: 'Transaction Message', icon: MessageSquare, path: '/admin/transaction-message-settings', permission: 'admin:manage_settings' },
-        { id: 'admin-gst', label: 'GST Settings', icon: Percent, path: '/admin/gst-settings', permission: 'admin:manage_settings' },
-        { id: 'admin-barcode', label: 'Barcode Settings', icon: Barcode, path: '/admin/barcode-settings', permission: 'admin:manage_settings' },
+        { id: 'admin-business', label: 'Business Settings', icon: Settings, path: '/admin/business-settings', permission: 'admin:manage_settings', superAdminOnly: true },
+        { id: 'admin-transaction-message', label: 'Transaction Message', icon: MessageSquare, path: '/admin/transaction-message-settings', permission: 'admin:manage_settings', superAdminOnly: true },
+        { id: 'admin-gst', label: 'GST Settings', icon: Percent, path: '/admin/gst-settings', permission: 'admin:manage_settings', superAdminOnly: true },
+        { id: 'admin-barcode', label: 'Barcode Settings', icon: Barcode, path: '/admin/barcode-settings', permission: 'admin:manage_settings', superAdminOnly: true },
+        { id: 'admin-interface', label: 'Interface & Printing', icon: Settings, path: '/admin/interface-settings', superAdminOnly: true },
         { id: 'admin-audit', label: 'Audit Logs', icon: History, path: '/admin/audit-logs', permission: 'admin:view_audit_logs' },
       ],
     },
@@ -347,6 +350,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
                       if (item.permission && !hasPermission(item.permission)) {
                         return null;
                       }
+                      if (item.superAdminOnly && !user?.isSuperAdmin) return null;
 
                       if (hasSub) {
                         return (
@@ -377,6 +381,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
                                   const SubIcon = sub.icon;
                                   const isSubActive = currentPath === sub.path;
                                   if (sub.permission && !hasPermission(sub.permission)) return null;
+                                  if (sub.superAdminOnly && !user?.isSuperAdmin) return null;
 
                                   return (
                                     <button
