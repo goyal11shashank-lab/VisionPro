@@ -1,4 +1,4 @@
-import { resolveUniquePartyByName } from '../../lib/partyNameMatch.js';
+import { resolveConfirmedPartyByName, type ServerNameCheck } from '../../lib/partyNameMatch.js';
 import { localDateInput } from '../../utils/localDateInput.js';
 import { normalizePaymentVoucher, normalizeUnpaidInvoices } from '../../utils/paymentResponse.js';
 import React, { useState, useEffect, useMemo, useRef } from 'react';
@@ -156,11 +156,13 @@ export const CustomerReceiptsPage: React.FC = () => {
     setPartyId(item.id);
   };
 
+  const [nameCheck, setNameCheck] = useState<ServerNameCheck<any> | null>(null);
   // The server caps a party list at 200 rows (newest first). Search the server for typed text so a
   // valid party outside the first page can still be found and linked by name.
   useEffect(() => {
     const q = contextualSearch.trim();
     if (partyId || q.length < 2 || !currentBusiness) return;
+    let cancelled = false;
     const timer = setTimeout(async () => {
       try {
         const res = await fetch(`/api/parties?partyType=CUSTOMER&limit=50&search=${encodeURIComponent(q)}`, {
@@ -172,6 +174,8 @@ export const CustomerReceiptsPage: React.FC = () => {
         if (!res.ok) return;
         const data = await res.json();
         const found = (data.parties || []).filter((p: any) => p.partyType === 'CUSTOMER' || p.partyType === 'BOTH');
+        if (cancelled) return;
+        setNameCheck({ query: q, complete: Number(data.total) <= (data.parties || []).length, parties: found });
         if (found.length === 0) return;
         setCustomers((prev: any[]) => {
           const seen = new Set(prev.map((c: any) => c.id));
@@ -182,15 +186,15 @@ export const CustomerReceiptsPage: React.FC = () => {
         console.error(err);
       }
     }, 300);
-    return () => clearTimeout(timer);
+    return () => { cancelled = true; clearTimeout(timer); };
   }, [contextualSearch, partyId, currentBusiness]);
 
   // Typing a party's exact name links that party directly (no invoice is picked automatically).
   useEffect(() => {
     if (partyId) return;
-    const hit = resolveUniquePartyByName(customers, contextualSearch);
+    const hit = resolveConfirmedPartyByName(customers, contextualSearch, nameCheck);
     if (hit) setPartyId(hit.id);
-  }, [contextualSearch, customers, partyId]);
+  }, [contextualSearch, customers, partyId, nameCheck]);
 
   // Keyboard navigation for side panel in Create Modal
   useEffect(() => {
@@ -1080,9 +1084,9 @@ export const CustomerReceiptsPage: React.FC = () => {
                       </span>
                     </label>
                     {selectedCustomer ? (
-                      <div className="p-2.5 bg-emerald-50/80 border border-emerald-300 rounded-xl flex items-center justify-between">
-                        <div className="min-w-0 pr-2">
-                          <div className="text-xs font-bold text-slate-900 truncate">
+                      <div className="p-2.5 bg-emerald-50/80 border border-emerald-300 rounded-xl flex flex-col gap-2">
+                        <div className="min-w-0">
+                          <div className="text-xs font-bold text-slate-900 break-words">
                             {selectedCustomer.name}
                           </div>
                           <div className="text-[11px] text-slate-500 truncate flex items-center gap-1.5">
@@ -1090,7 +1094,7 @@ export const CustomerReceiptsPage: React.FC = () => {
                             {selectedCustomer.gstin && <span>• GST: {selectedCustomer.gstin}</span>}
                           </div>
                         </div>
-                        <div className="flex items-center gap-1.5 shrink-0">
+                        <div className="flex items-center justify-between gap-1.5 flex-wrap">
                           {Number(selectedCustomer.balance ?? selectedCustomer.currentBalance ?? 0) !== 0 ? (
                             <span className={`px-2 py-0.5 rounded text-[11px] font-mono font-bold border ${
                               Number(selectedCustomer.balance ?? selectedCustomer.currentBalance ?? 0) > 0
