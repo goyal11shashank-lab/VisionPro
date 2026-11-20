@@ -20,6 +20,8 @@ interface VoucherFooterProps {
   // Narration
   narration: string;
   onNarrationChange: (val: string) => void;
+  /** Optional scan box shown right below the narration box. */
+  scanBox?: React.ReactNode;
   // Editable Invoice-Level Controls
   courierCharges?: number;
   onCourierChargesChange?: (val: number) => void;
@@ -51,6 +53,7 @@ export const VoucherFooter: React.FC<VoucherFooterProps> = ({
   onGstModeChange,
   narration,
   onNarrationChange,
+  scanBox,
   courierCharges = 0,
   onCourierChargesChange,
   discount = 0,
@@ -130,6 +133,8 @@ export const VoucherFooter: React.FC<VoucherFooterProps> = ({
               className="flex-1 min-w-0 p-1 text-xs font-bold text-slate-900 font-sans border border-slate-300 rounded bg-white focus:bg-white focus:ring-1 focus:ring-blue-600 placeholder:text-slate-400 placeholder:font-normal custom-scrollbar resize-none shadow-2xs"
             />
           </div>
+
+          {scanBox}
 
           <div className="flex items-center gap-6 pl-18 text-[11px] text-slate-700">
             <div>
@@ -408,11 +413,11 @@ export const VoucherFooter: React.FC<VoucherFooterProps> = ({
               type="button"
               onClick={onPrint}
               className="px-2.5 py-0.5 text-[11px] font-bold text-slate-200 bg-white/10 hover:bg-white/20 hover:text-white rounded border border-white/20 transition-colors flex items-center gap-1.5 cursor-pointer"
-              title="Print Preview Voucher (Ctrl+P)"
+              title="Save Voucher and Print (Ctrl+P)"
             >
               <kbd className="px-1.5 py-0.2 bg-black/50 text-cyan-300 font-bold border border-cyan-500/30 rounded text-[9px]">Ctrl+P</kbd>
               <Printer className="w-3 h-3" />
-              <span>Print Preview</span>
+              <span>Save &amp; Print</span>
             </button>
           )}
 
