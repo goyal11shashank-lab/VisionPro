@@ -2,6 +2,7 @@ import {StrictMode} from 'react';
 import {createRoot} from 'react-dom/client';
 import App from './App.tsx';
 import './index.css';
+import { initGlobalRowActions } from './lib/globalRowActions';
 
 // Pre-set AI Studio iframe test cookie to ensure cross-origin/iframe proxy requests pass through
 if (typeof document !== 'undefined') {
@@ -11,6 +12,8 @@ if (typeof document !== 'undefined') {
     // Non-fatal
   }
 }
+
+initGlobalRowActions();
 
 createRoot(document.getElementById('root')!).render(
   <StrictMode>
