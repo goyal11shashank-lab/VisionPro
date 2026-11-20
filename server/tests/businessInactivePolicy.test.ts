@@ -115,8 +115,8 @@ function partC() {
   );
   check('C4 login block is audited', /LOGIN_BLOCKED_BUSINESS_INACTIVE/.test(login));
   check(
-    'C5 login prefers an ACTIVE business when picking a default',
-    /business\?\.status === 'ACTIVE'/.test(login)
+    'C5 login has no silent fallthrough to another ACTIVE business',
+    !/business\?\.status === 'ACTIVE'/.test(login) && /no silent fallthrough/.test(login)
   );
   check(
     'C6 staff dropdown shows only ACTIVE businesses',
