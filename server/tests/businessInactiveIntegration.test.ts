@@ -81,11 +81,17 @@ async function main() {
     const mExplicit = await login('multi_user', B.id);
     check('I4 explicit pick of INACTIVE business is blocked', mExplicit.status === 403 && mExplicit.body?.error === 'BUSINESS_INACTIVE', mExplicit);
 
-    // 4. Default-inactive multi-business staff: current behavior = falls to ACTIVE business.
+    // 4. Owner rule: staff belong to one business; if it is inactive they are blocked, with no
+    //    silent fallthrough to another business, even when they also have an ACTIVE access row.
     const mDefault = await login('multi_user');
-    check('I5 default-INACTIVE user lands on an ACTIVE business, never the inactive one',
-      mDefault.status === 200 && mDefault.body?.currentBusiness?.id === A.id, mDefault);
-    check('I5b token issued by fallthrough works', mDefault.status === 200 && (await me(mDefault.body.token)).status === 200);
+    check('I5 default-INACTIVE multi-access staff is blocked, no fallthrough to another business',
+      mDefault.status === 403 && mDefault.body?.error === 'BUSINESS_INACTIVE' && !mDefault.body?.token, mDefault);
+
+    // 4b. One staff, one business: a multi-access login cannot pick a non-default business.
+    const twoOther = await login('multi_two_active', C.id);
+    check('I5c multi-access staff cannot pick a non-default business at login', twoOther.status === 403 && twoOther.body?.error === 'STAFF_SINGLE_BUSINESS' && !twoOther.body?.token, twoOther);
+    const twoOwn = await login('multi_two_active', A.id);
+    check('I5d multi-access staff may sign in to the default business explicitly', twoOwn.status === 200 && twoOwn.body?.currentBusiness?.id === A.id, twoOwn);
 
     // 5. Existing session: token minted while B was ACTIVE must die once B goes INACTIVE.
     await db.update(businesses).set({ status: 'ACTIVE' }).where(eq(businesses.id, B.id));
