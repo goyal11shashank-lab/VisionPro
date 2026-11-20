@@ -144,16 +144,15 @@ export function isVoucherDirty(current: VoucherFormState, baseline: VoucherFormS
 }
 
 /**
- * Checks if the voucher has any entered data at all (useful for deciding whether to auto-save a draft).
+ * Decides whether a draft is worth keeping. Owner rule (Nov 20): a draft is kept only when the
+ * party, an item or a batch is present. Quantity, rate, amount, narration, reference, discount,
+ * GST and courier charges alone never justify a draft.
  */
-export function hasEnteredVoucherData(state: VoucherFormState): boolean {
-  const norm = normalizeVoucherSnapshot(state);
-  return (
-    norm.partyId !== '' ||
-    norm.referenceNumber !== '' ||
-    norm.notes !== '' ||
-    norm.courierCharges > 0 ||
-    norm.invoiceDiscount > 0 ||
-    norm.lines.length > 0
+export function hasEnteredVoucherData(state?: VoucherFormState | null): boolean {
+  if (!state) return false;
+  if ((state.partyId || '').trim() !== '') return true;
+  return (state.lines || []).some(line =>
+    String(line?.uniqueItemId ?? '').trim() !== '' ||
+    (line?.batches || []).some(b => String(b?.batchId ?? '').trim() !== '')
   );
 }
