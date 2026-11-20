@@ -1,3 +1,4 @@
+import { resolveUniquePartyByName } from '../../lib/partyNameMatch.js';
 import { localDateInput } from '../../utils/localDateInput.js';
 import { normalizePaymentVoucher, normalizeUnpaidInvoices } from '../../utils/paymentResponse.js';
 import React, { useState, useEffect, useMemo } from 'react';
@@ -148,6 +149,42 @@ export const SupplierPaymentsPage: React.FC = () => {
   const handleSelectSupplier = (item: ContextualPanelItem) => {
     setPartyId(item.id);
   };
+
+  // The server caps a party list at 200 rows (newest first). Search the server for typed text so a
+  // valid party outside the first page can still be found and linked by name.
+  useEffect(() => {
+    const q = contextualSearch.trim();
+    if (partyId || q.length < 2 || !currentBusiness) return;
+    const timer = setTimeout(async () => {
+      try {
+        const res = await fetch(`/api/parties?partyType=SUPPLIER&limit=50&search=${encodeURIComponent(q)}`, {
+          headers: {
+            Authorization: `Bearer ${getStoredToken()}`,
+            'X-Business-Id': currentBusiness.id,
+          },
+        });
+        if (!res.ok) return;
+        const data = await res.json();
+        const found = (data.parties || []).filter((p: any) => p.partyType === 'SUPPLIER' || p.partyType === 'BOTH');
+        if (found.length === 0) return;
+        setSuppliers((prev: any[]) => {
+          const seen = new Set(prev.map((c: any) => c.id));
+          const extra = found.filter((p: any) => !seen.has(p.id));
+          return extra.length ? [...prev, ...extra] : prev;
+        });
+      } catch (err) {
+        console.error(err);
+      }
+    }, 300);
+    return () => clearTimeout(timer);
+  }, [contextualSearch, partyId, currentBusiness]);
+
+  // Typing a party's exact name links that party directly (no invoice is picked automatically).
+  useEffect(() => {
+    if (partyId) return;
+    const hit = resolveUniquePartyByName(suppliers, contextualSearch);
+    if (hit) setPartyId(hit.id);
+  }, [contextualSearch, suppliers, partyId]);
 
   // Keyboard navigation for side panel in Create Modal
   useEffect(() => {
