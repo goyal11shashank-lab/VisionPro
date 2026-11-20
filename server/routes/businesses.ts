@@ -143,7 +143,8 @@ router.put(
       );
       res.json({ success: true, settings: updated.settings, lowStockThreshold: updated.lowStockThreshold });
     } catch (err: any) {
-      res.status(500).json({ error: err.message || 'Failed to update business settings' });
+      const status = err?.code === 'SETTINGS_VALIDATION' ? 400 : 500;
+      res.status(status).json({ error: err.message || 'Failed to update business settings' });
     }
   }
 );
