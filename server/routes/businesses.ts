@@ -126,7 +126,7 @@ router.get('/settings', authenticateToken, async (req: Request, res: Response): 
 router.put(
   '/settings',
   authenticateToken,
-  requirePermission('admin:manage_settings'),
+  requireSuperAdmin,
   async (req: Request, res: Response): Promise<void> => {
     try {
       const { BusinessSettingsService } = await import('../services/businessSettingsService.js');
@@ -155,7 +155,7 @@ router.put(
 router.post(
   '/settings/restore-defaults',
   authenticateToken,
-  requirePermission('admin:manage_settings'),
+  requireSuperAdmin,
   async (req: Request, res: Response): Promise<void> => {
     try {
       const { BusinessSettingsService } = await import('../services/businessSettingsService.js');
