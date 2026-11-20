@@ -170,6 +170,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
         { id: 'accounts-receipts', label: 'Receipts', icon: ArrowDownLeft, path: '/accounts/receipts', permission: 'payment.receipt.view' },
         { id: 'accounts-payments', label: 'Payments', icon: ArrowUpRight, path: '/accounts/payments', permission: 'payment.supplier.view' },
         { id: 'accounts-outstanding', label: 'Outstanding Aging', icon: Clock, path: '/accounts/outstanding', permission: 'accounts:view' },
+        { id: 'accounts-cash-book', label: 'Cash Book', icon: ArrowDownLeft, path: '/accounts/cash-book', permission: 'accounts:view' },
       ],
     },
     {
