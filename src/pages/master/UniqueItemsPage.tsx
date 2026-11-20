@@ -487,7 +487,7 @@ export const UniqueItemsPage: React.FC = () => {
                               setLedgerItemName(item.name);
                             }}
                             className="text-left font-semibold text-slate-900 hover:text-indigo-600 hover:underline transition-colors cursor-pointer inline-flex items-center gap-1.5 group"
-                            title="Click to view Tally-style monthly purchases, sales & stock ledger"
+                            title="View Stock Ledger"
                           >
                             <span>{item.name}</span>
                             <BookOpen className="h-3.5 w-3.5 text-indigo-400 opacity-0 group-hover:opacity-100 transition-opacity" />
@@ -568,7 +568,7 @@ export const UniqueItemsPage: React.FC = () => {
                                 setLedgerItemName(item.name);
                               }}
                               className="p-1.5 text-slate-500 hover:text-indigo-600 hover:bg-indigo-50 rounded-md transition-colors cursor-pointer"
-                              title="View Tally-Style Stock Item Ledger & Monthly Drill-down"
+                              title="View Stock Ledger"
                             >
                               <BookOpen className="h-4 w-4" />
                             </button>

@@ -203,7 +203,7 @@ export const StockItemLedgerModal: React.FC<StockItemLedgerModalProps> = ({
   // Filtered transactions
   const filteredTransactions = useMemo(() => {
     if (!ledgerData?.transactions) return [];
-    return ledgerData.transactions.filter(t => {
+    const filtered = ledgerData.transactions.filter(t => {
       // Month filter
       if (selectedMonth !== 'ALL') {
         const tMonth = t.date.slice(0, 7);
@@ -227,7 +227,17 @@ export const StockItemLedgerModal: React.FC<StockItemLedgerModalProps> = ({
       }
       return true;
     });
+    // Display newest first (owner request, Nov 20, 2026): the server computes each
+    // row's runningBalance chronologically, so reversing display order keeps every
+    // row's balance correct while putting the latest vouchers on top.
+    return filtered.reverse();
   }, [ledgerData, selectedMonth, directionFilter, selectedBatchId, searchFilter]);
+
+  // Month-wise summary rows, latest month first (same owner request).
+  const displayedMonthlySummaries = useMemo(
+    () => [...(ledgerData?.monthlySummaries || [])].reverse(),
+    [ledgerData]
+  );
 
   // Export to CSV
   const handleExportCSV = () => {
@@ -545,7 +555,7 @@ export const StockItemLedgerModal: React.FC<StockItemLedgerModalProps> = ({
                 className="px-2.5 py-1.5 text-xs bg-slate-50 border border-slate-200 rounded-lg text-slate-700 focus:outline-hidden focus:ring-1 focus:ring-indigo-500"
               >
                 <option value="ALL">All Months</option>
-                {(ledgerData?.monthlySummaries || []).map(m => (
+                {displayedMonthlySummaries.map(m => (
                   <option key={m.month} value={m.month}>
                     {m.monthLabel}
                   </option>
@@ -643,7 +653,7 @@ export const StockItemLedgerModal: React.FC<StockItemLedgerModalProps> = ({
                       </tr>
                     </thead>
                     <tbody className="divide-y divide-slate-200">
-                      {(ledgerData?.monthlySummaries || []).map((m) => {
+                      {displayedMonthlySummaries.map((m) => {
                         const totalInwardQty = m.purchaseQty + m.returnIn + m.openingStockEntry;
                         const totalOutwardQty = m.salesQty + m.returnOut;
                         const netFlow = totalInwardQty - totalOutwardQty;

@@ -28,7 +28,9 @@ export const Header: React.FC<HeaderProps> = ({
   onNavigate,
 }) => {
   const { user, currentBusiness, accessibleBusinesses, switchBusiness, roles } = useAuth();
-  const dropdownBusinesses=(accessibleBusinesses||[]).filter(b=>!user?.isSuperAdmin||!b.hiddenFromSuperAdmin);
+  // Inactive businesses are hidden from staff entirely (owner rule: inactive stops
+  // staff login and new entries); the Super Administrator still sees them to manage.
+  const dropdownBusinesses=(accessibleBusinesses||[]).filter(b=>(user?.isSuperAdmin||b.status==='ACTIVE')&&(!user?.isSuperAdmin||!b.hiddenFromSuperAdmin));
   const { confirmAction } = useUnsavedChanges();
   const [isBizDropdownOpen, setIsBizDropdownOpen] = useState<boolean>(false);
   const [isSearchOpen, setIsSearchOpen] = useState<boolean>(false);
