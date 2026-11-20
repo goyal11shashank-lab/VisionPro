@@ -1742,13 +1742,14 @@ export const CreatePurchaseInvoicePage: React.FC<Props> = ({
     }
   };
 
-  // Print Shortcut (Ctrl+P)
+  // Save & Print (Ctrl+P)
   const handlePrintShortcut = async () => {
     if (submitting) return;
-    let inv = createdInvoice;
-    if (!inv && !editInvoiceId && !editOrderId) {
-      inv = await handleSaveInvoice(true, false);
-      if (!inv) return;
+    // Save & Print: save first (a new voucher, or an edited one with unsaved changes); print only
+    // after the save succeeded. An already saved, unchanged voucher just prints.
+    if ((!createdInvoice && !editInvoiceId && !editOrderId) || ((editInvoiceId || editOrderId) && isDirty)) {
+      const saved = await handleSaveInvoice(true, false);
+      if (!saved) return;
     }
     setAutoInvokePrint(false);
     setIsPrintPreviewOpen(true);
