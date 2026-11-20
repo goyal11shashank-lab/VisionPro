@@ -553,13 +553,10 @@ router.post('/login', async (req: Request, res: Response): Promise<void> => {
               selectedBusiness = first;
             }
           } else {
-            // Prefer an ACTIVE business: an inactive business no longer accepts
-            // staff logins (owner rule, Nov 20, 2026).
-            const defaultAccess = accessibleBiz.find(b => b.isDefault);
-            const fallback =
-              defaultAccess && defaultAccess.business?.status === 'ACTIVE'
-                ? defaultAccess
-                : accessibleBiz.find(b => b.business?.status === 'ACTIVE') || defaultAccess || accessibleBiz[0];
+            // Owner rule (Nov 20, 2026): a staff member belongs to one business, and when that
+            // business is inactive every one of its staff is blocked. The default business is used
+            // as is; there is no silent fallthrough to another business.
+            const fallback = accessibleBiz.find(b => b.isDefault) || accessibleBiz[0];
             selectedBusiness = fallback?.business;
           }
         }
