@@ -347,4 +347,4 @@ export async function authenticateToken(req: Request, res: Response, next: NextF
       message: error.message || 'Invalid or expired session. Please log in again.',
     });
   }
-                      }
+}
