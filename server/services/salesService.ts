@@ -3273,8 +3273,24 @@ export class SalesService {
     const grandTotal = parseFloat(inv.invoice.grandTotal);
     const outstandingAmount = Math.max(0, grandTotal - paidAmount);
 
+    // Historical posting snapshot for print only. Do not replace this with the
+    // party's present-day balance, which may include later invoices/receipts.
+    const printLedger = await pool.query(
+      `SELECT debit, credit, balance FROM customer_ledgers
+       WHERE business_id = $1 AND party_id = $2 AND reference_id = $3
+         AND reference_type = 'SALES_INVOICE' AND transaction_type = 'SALE'
+       ORDER BY created_at DESC, id DESC LIMIT 1`,
+      [businessId, inv.invoice.partyId, invoiceId]
+    );
+    const postedLedger = printLedger.rows[0];
+    const printBalanceSnapshot = postedLedger ? {
+      previousBalance: round2(Number(postedLedger.balance) - Number(postedLedger.debit) + Number(postedLedger.credit)),
+      balanceAfterBill: Number(postedLedger.balance),
+    } : null;
+
     return {
       ...inv.invoice,
+      printBalanceSnapshot,
       party: inv.party,
       partyName: inv.party?.name || inv.party?.displayName || '',
       partyGstin: inv.party?.gstin || '',
