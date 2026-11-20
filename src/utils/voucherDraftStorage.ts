@@ -4,7 +4,7 @@
  * and voucher identity. Never stores tokens, passwords, or sensitive credentials.
  */
 
-import { VoucherFormState, normalizeVoucherSnapshot } from './voucherDirtyHelper.js';
+import { VoucherFormState, normalizeVoucherSnapshot, hasEnteredVoucherData } from './voucherDirtyHelper.js';
 
 export interface VoucherDraft {
   version: 1;
@@ -39,15 +39,7 @@ export function saveVoucherDraft(
   if (typeof window === 'undefined' || !window.localStorage) return false;
   if (!businessId || !userId) return false;
 
-  const normalized = normalizeVoucherSnapshot(form);
-  // Do not store if completely empty
-  const hasContent =
-    normalized.partyId !== '' ||
-    normalized.referenceNumber !== '' ||
-    normalized.notes !== '' ||
-    normalized.courierCharges > 0 ||
-    normalized.invoiceDiscount > 0 ||
-    normalized.lines.length > 0;
+  const hasContent = hasEnteredVoucherData(form);
 
   if (!hasContent) {
     clearVoucherDraft(businessId, userId, voucherType, voucherId);
@@ -163,4 +155,4 @@ export function pruneExpiredDrafts(): void {
   } catch (err) {
     console.warn('[DRAFT_STORAGE_PRUNE_FAILED]', err);
   }
-}
+      }
