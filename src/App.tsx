@@ -13,6 +13,7 @@ import { BusinessesPage } from './pages/admin/BusinessesPage.js';
 import { UsersPage } from './pages/admin/UsersPage.js';
 import { RolesPage } from './pages/admin/RolesPage.js';
 import { BusinessSettingsPage } from './pages/admin/BusinessSettingsPage.js';
+import { InterfaceSettingsPage } from './pages/admin/InterfaceSettingsPage.js';
 import { AuditLogsPage } from './pages/admin/AuditLogsPage.js';
 import { DealerMainWarehouseAvailabilityPage } from './pages/inventory/DealerMainWarehouseAvailabilityPage.js';
 import { DealerOrdersListPage } from './pages/sales/DealerOrdersListPage.js';
@@ -263,7 +264,35 @@ const AppContent: React.FC = () => {
   const searchParams = new URLSearchParams(queryString || (typeof window !== 'undefined' ? window.location.search : ''));
   const orderIdParam = searchParams.get('orderId');
 
+  // Settings space is Super Administrator only (owner requirement). Enforced here for
+  // direct navigation and again on the server (requireSuperAdmin on settings writes).
+  const SETTINGS_PATHS = new Set([
+    '/settings',
+    '/admin/settings',
+    '/admin/business-settings',
+    '/admin/gst-settings',
+    '/admin/barcode-settings',
+    '/settings/transaction-message',
+    '/admin/transaction-message',
+    '/admin/transaction-message-settings',
+    '/settings/interface',
+    '/admin/interface-settings',
+  ]);
+
   const renderContent = () => {
+    if (SETTINGS_PATHS.has(pathOnly) && !user.isSuperAdmin) {
+      return (
+        <div className="min-h-[60vh] flex items-center justify-center p-6">
+          <div className="max-w-md w-full bg-white rounded-2xl p-6 shadow-xl border border-slate-200 text-center space-y-3">
+            <h2 className="text-lg font-bold text-slate-900">Super Administrator Access Required</h2>
+            <p className="text-xs text-slate-500 leading-relaxed">
+              Settings can only be viewed and changed by the Super Administrator. Please contact the business owner
+              if you need a setting changed.
+            </p>
+          </div>
+        </div>
+      );
+    }
     switch (pathOnly) {
       case '/dealer/onboarding':
         return <div className="p-6 max-w-3xl mx-auto bg-white border rounded-xl space-y-3"><h1 className="text-xl font-bold">Business setup</h1><p>Legacy dealer setup is retired. Existing records and supplier links are preserved. A Super Administrator can manage the Business profile and review supplier links in Businesses. Opening this page does not create accounts, copy items or change historical records.</p><button className="min-h-11 px-4 border rounded-lg" onClick={()=>navigate('/')}>Back to your Business</button></div>;
@@ -302,6 +331,9 @@ const AppContent: React.FC = () => {
       case '/admin/transaction-message':
       case '/admin/transaction-message-settings':
         return <BusinessSettingsPage initialTab="transactionMessage" />;
+      case '/settings/interface':
+      case '/admin/interface-settings':
+        return <InterfaceSettingsPage />;
       case '/admin/audit-logs':
         return <AuditLogsPage />;
 
