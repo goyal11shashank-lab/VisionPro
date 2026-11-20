@@ -15,6 +15,10 @@ export const CashBookPage: React.FC = () => {
   const [entries, setEntries] = useState<Entry[]>([]);
   const [modes, setModes] = useState<Record<string, ModeTotals>>({});
   const [truncated, setTruncated] = useState(false);
+  const [openingConfigured, setOpeningConfigured] = useState(false);
+  const [cashOpeningDate, setCashOpeningDate] = useState<string | null>(null);
+  const [openingBalance, setOpeningBalance] = useState<number | null>(null);
+  const [closingBalance, setClosingBalance] = useState<number | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
 
@@ -28,6 +32,10 @@ export const CashBookPage: React.FC = () => {
         setEntries(res.entries || []);
         setModes(res.modes || {});
         setTruncated(Boolean(res.truncated));
+        setOpeningConfigured(Boolean(res.openingBalanceConfigured));
+        setCashOpeningDate(res.cashOpeningDate || null);
+        setOpeningBalance(typeof res.openingBalance === 'number' ? res.openingBalance : null);
+        setClosingBalance(typeof res.closingBalance === 'number' ? res.closingBalance : null);
       })
       .catch(e => { if (!cancelled) setError(e?.message || 'Could not load cash movement'); })
       .finally(() => { if (!cancelled) setLoading(false); });
@@ -49,9 +57,15 @@ export const CashBookPage: React.FC = () => {
         <p className="text-xs text-slate-600">Posted receipts and payments by mode. Cash and Bank vouchers made with "Paid via" appear here automatically.</p>
       </div>
 
-      <div className="rounded-lg border border-amber-300 bg-amber-50 px-3 py-2 text-xs text-amber-900">
-        <b>Opening balance is not configured.</b> The net below is only the movement recorded in this period. It is not cash in hand and not a bank balance.
-      </div>
+      {openingConfigured ? (
+        <div className="rounded-lg border border-emerald-300 bg-emerald-50 px-3 py-2 text-xs text-emerald-900">
+          <b>Opening balance configured{cashOpeningDate ? ` from ${cashOpeningDate}` : ''}.</b> Opening and closing balances below are for the CASH tab only. Other modes are recorded movement, not balances.
+        </div>
+      ) : (
+        <div className="rounded-lg border border-amber-300 bg-amber-50 px-3 py-2 text-xs text-amber-900">
+          <b>Opening balance is not configured.</b> Set it under Settings &gt; Accounts &amp; Opening Balances. The net below is only the movement recorded in this period. It is not cash in hand and not a bank balance.
+        </div>
+      )}
 
       <div className="flex flex-wrap items-end gap-3 text-xs">
         <label className="flex flex-col gap-1 font-bold text-slate-700">From
@@ -70,10 +84,16 @@ export const CashBookPage: React.FC = () => {
         </div>
       </div>
 
-      <div className="grid grid-cols-3 gap-3 text-sm">
+      <div className={`grid gap-3 text-sm ${openingConfigured && mode === 'CASH' ? 'grid-cols-2 md:grid-cols-5' : 'grid-cols-3'}`}>
+        {openingConfigured && mode === 'CASH' && (
+          <div className="rounded border border-slate-200 bg-white p-3"><div className="text-[11px] font-bold uppercase text-slate-500">Opening cash (as of from date)</div><div className="text-base font-extrabold text-slate-900">₹{fmt(openingBalance ?? 0)}</div></div>
+        )}
         <div className="rounded border border-slate-200 bg-white p-3"><div className="text-[11px] font-bold uppercase text-slate-500">Receipts recorded ({mode})</div><div className="text-base font-extrabold text-emerald-700">₹{fmt(totals.receipts)}</div></div>
         <div className="rounded border border-slate-200 bg-white p-3"><div className="text-[11px] font-bold uppercase text-slate-500">Payments recorded ({mode})</div><div className="text-base font-extrabold text-rose-700">₹{fmt(totals.payments)}</div></div>
-        <div className="rounded border border-slate-200 bg-white p-3"><div className="text-[11px] font-bold uppercase text-slate-500">Net movement in period</div><div className="text-base font-extrabold text-slate-900">₹{fmt(totals.net)}</div><div className="text-[10px] text-slate-500">Not a balance</div></div>
+        <div className="rounded border border-slate-200 bg-white p-3"><div className="text-[11px] font-bold uppercase text-slate-500">Net movement in period</div><div className="text-base font-extrabold text-slate-900">₹{fmt(totals.net)}</div>{!(openingConfigured && mode === 'CASH') && <div className="text-[10px] text-slate-500">Not a balance</div>}</div>
+        {openingConfigured && mode === 'CASH' && (
+          <div className="rounded border border-blue-200 bg-blue-50 p-3"><div className="text-[11px] font-bold uppercase text-blue-600">Closing cash (as of to date)</div><div className="text-base font-extrabold text-blue-800">₹{fmt(closingBalance ?? 0)}</div></div>
+        )}
       </div>
 
       {error && <div className="text-xs text-rose-700">{error}</div>}
