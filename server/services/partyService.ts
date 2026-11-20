@@ -25,6 +25,8 @@ export interface CreatePartyDTO {
   status?: 'ACTIVE' | 'INACTIVE';
   whatsappOptIn?: boolean;
   notes?: string;
+  openingBalance?: number | string;
+  openingBalanceType?: 'Dr' | 'Cr';
 }
 
 export interface UpdatePartyDTO {
@@ -156,6 +158,47 @@ export class PartyService {
       })
       .returning();
 
+    // Post opening balance into the party ledger when provided.
+    // CUSTOMER -> customer_ledgers, SUPPLIER -> supplier_ledgers.
+    // BOTH -> Dr goes to the customer side, Cr goes to the supplier side.
+    // Customer ledger balance is Dr-positive (debit - credit);
+    // supplier ledger balance is Cr-positive (credit - debit).
+    const opening = Math.abs(Number(data.openingBalance) || 0);
+    if (opening > 0) {
+      const drCr = data.openingBalanceType === 'Cr' ? 'Cr' : 'Dr';
+      const useCustomerLedger =
+        newParty.partyType === 'CUSTOMER' || (newParty.partyType === 'BOTH' && drCr === 'Dr');
+      const table = useCustomerLedger ? 'customer_ledgers' : 'supplier_ledgers';
+      let debit = 0;
+      let credit = 0;
+      let balance = 0;
+      if (useCustomerLedger) {
+        if (drCr === 'Dr') { debit = opening; balance = opening; }
+        else { credit = opening; balance = -opening; }
+      } else {
+        if (drCr === 'Cr') { credit = opening; balance = opening; }
+        else { debit = opening; balance = -opening; }
+      }
+      await pool.query(
+        `INSERT INTO ${table} (
+           business_id, party_id, transaction_type, reference_type, reference_id,
+           debit, credit, balance, transaction_date, notes, created_by, created_at
+         ) VALUES (
+           $1, $2, 'OPENING_BALANCE', 'OPENING_BALANCE', NULL,
+           $3, $4, $5, NOW(), $6, $7, NOW()
+         )`,
+        [
+          businessId,
+          newParty.id,
+          debit.toFixed(2),
+          credit.toFixed(2),
+          balance.toFixed(2),
+          `Opening balance brought forward (${drCr})`,
+          userId || null,
+        ]
+      );
+    }
+
     // Record audit trail
     await AuditService.log({
       businessId,
@@ -169,6 +212,8 @@ export class PartyService {
         partyCode: newParty.partyCode,
         name: newParty.name,
         partyType: newParty.partyType,
+        openingBalance: opening > 0 ? opening : undefined,
+        openingBalanceType: opening > 0 ? (data.openingBalanceType === 'Cr' ? 'Cr' : 'Dr') : undefined,
       },
     });
 
