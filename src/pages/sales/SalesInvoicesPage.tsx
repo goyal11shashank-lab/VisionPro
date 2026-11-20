@@ -37,6 +37,7 @@ import { PrintableVoucher } from '../../components/print/PrintableVoucher.js';
 import { exportToExcel, ExcelColumn } from '../../utils/excelExporter.js';
 import { exportToCsv } from '../../utils/csvExporter.js';
 import { cleanNarrationNotes } from '../../utils/narrationHelper.js';
+import { printBusinessView, usesOpticalPrintBrand } from '../../utils/printBranding.js';
 import { WhatsAppStatusBadge } from '../../components/whatsapp/WhatsAppStatusBadge.js';
 import { WhatsAppShareModal } from '../../components/whatsapp/WhatsAppShareModal.js';
 
@@ -2300,11 +2301,13 @@ export const SalesInvoicesPage: React.FC<{
           }}
           title={`Tax Invoice - ${printPreviewInvoice.invoiceNumber || ''}`}
           filename={`Invoice_${printPreviewInvoice.invoiceNumber || 'INV'}`}
+          paperSize={usesOpticalPrintBrand(currentBusiness) ? 'A5' : 'A4'}
           defaultOrientation="portrait"
           autoInvokePrint={autoInvokePrint}
         >
-          {({ documentId }) => (
+          {({ documentId, orientation }) => (
             <PrintableVoucher
+              orientation={orientation}
               id={documentId}
               business={currentBusiness}
               voucher={printPreviewInvoice}
