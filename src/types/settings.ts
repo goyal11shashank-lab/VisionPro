@@ -7,6 +7,10 @@ export interface AppSettings {
     decimalPlaces?: number;
     financialYearBeginning?: string;
   };
+  accounts: {
+    cashOpeningBalance: number; // cash in hand on cashOpeningDate
+    cashOpeningDate: string; // YYYY-MM-DD, '' when not configured
+  };
   party: {
     defaultPaymentTerms: string; // e.g. "Immediate", "15 Days", "30 Days"
     defaultCreditLimit: number;
@@ -218,6 +222,10 @@ export const DEFAULT_APP_SETTINGS: AppSettings = {
     dateFormat: 'DD-MM-YYYY',
     currency: 'INR',
     currencySymbol: '₹',
+  },
+  accounts: {
+    cashOpeningBalance: 0,
+    cashOpeningDate: '',
   },
   party: {
     defaultPaymentTerms: '30 Days',
