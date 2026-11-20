@@ -668,4 +668,4 @@ export class BusinessSettingsService {
     };
     return fallbacks[voucherType] || { prefix: 'VCH-', startNumber: 1, method: 'AUTOMATIC' };
   }
-      }
+}
