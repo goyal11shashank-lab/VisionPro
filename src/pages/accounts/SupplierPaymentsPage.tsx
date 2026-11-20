@@ -157,15 +157,19 @@ export const SupplierPaymentsPage: React.FC = () => {
     if (partyId || q.length < 2 || !currentBusiness) return;
     const timer = setTimeout(async () => {
       try {
-        const res = await fetch(`/api/parties?partyType=SUPPLIER&limit=50&search=${encodeURIComponent(q)}`, {
-          headers: {
-            Authorization: `Bearer ${getStoredToken()}`,
-            'X-Business-Id': currentBusiness.id,
-          },
-        });
-        if (!res.ok) return;
-        const data = await res.json();
-        const found = (data.parties || []).filter((p: any) => p.partyType === 'SUPPLIER' || p.partyType === 'BOTH');
+        const headers = {
+          Authorization: `Bearer ${getStoredToken()}`,
+          'X-Business-Id': currentBusiness.id,
+        };
+        const found: any[] = [];
+        for (const type of ['SUPPLIER', 'BOTH']) {
+          const res = await fetch(`/api/parties?partyType=${type}&limit=50&search=${encodeURIComponent(q)}`, { headers });
+          if (!res.ok) continue;
+          const data = await res.json();
+          for (const p of data.parties || []) {
+            if (p.partyType === 'SUPPLIER' || p.partyType === 'BOTH') found.push(p);
+          }
+        }
         if (found.length === 0) return;
         setSuppliers((prev: any[]) => {
           const seen = new Set(prev.map((c: any) => c.id));
@@ -277,17 +281,30 @@ export const SupplierPaymentsPage: React.FC = () => {
   const fetchSuppliers = async () => {
     if (!currentBusiness) return;
     try {
-      const res = await fetch('/api/parties?partyType=SUPPLIER&limit=500', {
-        headers: {
-          Authorization: `Bearer ${getStoredToken()}`,
-          'X-Business-Id': currentBusiness.id,
-        },
-      });
-      if (res.ok) {
-        const data = await res.json();
-        const sups = (data.parties || []).filter(
-          (p: any) => p.partyType === 'SUPPLIER' || p.partyType === 'BOTH'
-        );
+      // The server returns SUPPLIER and BOTH parties as separate types; a party that is both a
+      // customer and a supplier must be selectable for supplier payments too.
+      const headers = {
+        Authorization: `Bearer ${getStoredToken()}`,
+        'X-Business-Id': currentBusiness.id,
+      };
+      const [resS, resB] = await Promise.all([
+        fetch('/api/parties?partyType=SUPPLIER&limit=200', { headers }),
+        fetch('/api/parties?partyType=BOTH&limit=200', { headers }),
+      ]);
+      if (resS.ok) {
+        const merged: any[] = [];
+        const seen = new Set<string>();
+        for (const r of [resS, resB]) {
+          if (!r.ok) continue;
+          const data = await r.json();
+          for (const p of data.parties || []) {
+            if ((p.partyType === 'SUPPLIER' || p.partyType === 'BOTH') && !seen.has(p.id)) {
+              seen.add(p.id);
+              merged.push(p);
+            }
+          }
+        }
+        const sups = merged;
         setSuppliers(sups);
       }
     } catch (err) {
