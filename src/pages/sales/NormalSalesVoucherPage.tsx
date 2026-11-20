@@ -453,6 +453,7 @@ export const NormalSalesVoucherPage: React.FC<Props> = ({ onNavigate, onSuccess,
               if (payModeMatch && payModeMatch[1]) {
                 setPaymentMode(payModeMatch[1].trim());
               }
+              if (inv.settlementMode) setPaymentMode(inv.settlementMode);
               // Clean Payment Mode, Terms, and Ref out of narration state
               const cleanedNotes = cleanNarrationNotes(inv.notes)
                 .replace(/(?:\|\s*)?Ref:\s*[^|]+/gi, '')
@@ -1415,6 +1416,7 @@ export const NormalSalesVoucherPage: React.FC<Props> = ({ onNavigate, onSuccess,
         courierCharges: courierCharges || 0,
         notes: cleanNarrationNotes(notes) || undefined,
         idempotencyKey: idempotencyKeyRef.current,
+        paymentMode: paymentMode === 'CASH' || paymentMode === 'BANK' ? paymentMode : 'CREDIT',
         lines: nonBlankLines.map(l => ({
           uniqueItemId: l.uniqueItemId,
           quantity: l.quantity,
@@ -1991,6 +1993,8 @@ export const NormalSalesVoucherPage: React.FC<Props> = ({ onNavigate, onSuccess,
             }
             referenceNumber={referenceNumber}
             onReferenceNumberChange={setReferenceNumber}
+            paymentMode={paymentMode}
+            onPaymentModeChange={convertingOrderId ? undefined : setPaymentMode}
             gstMode={gstMode}
             onGstModeChange={setGstMode}
             partyStateValidation={{
