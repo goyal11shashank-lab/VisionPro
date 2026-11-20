@@ -74,4 +74,4 @@ export function createBarcodeLookup(kind: Kind) {
       void flush();
     });
   };
-  }
+    }
