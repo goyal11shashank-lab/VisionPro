@@ -93,6 +93,15 @@ async function main() {
     const twoOwn = await login('multi_two_active', A.id);
     check('I5d multi-access staff may sign in to the default business explicitly', twoOwn.status === 200 && twoOwn.body?.currentBusiness?.id === A.id, twoOwn);
 
+    // 4c. switch-business and /me follow the same rule (default business only), no rows changed.
+    const twoLogin = await login('multi_two_active');
+    const swTwo = await call('/api/auth/switch-business', { method: 'POST', headers: { Authorization: `Bearer ${twoLogin.body?.token}` }, body: JSON.stringify({ targetBusinessId: C.id }) });
+    check('I5e multi-access staff cannot switch to a non-default business', swTwo.status === 403 && swTwo.body?.error === 'STAFF_SINGLE_BUSINESS', swTwo);
+    const meTwo = await me(twoLogin.body?.token);
+    check('I5f /me lists only the default business for that staff', (meTwo.body?.accessibleBusinesses || []).length === 1 && meTwo.body.accessibleBusinesses[0].id === A.id, meTwo.body?.accessibleBusinesses);
+    const rowsAfter = (await pool.query(`SELECT count(*)::int n FROM user_business_access`)).rows[0].n;
+    check('I5g access rows untouched by the rule', rowsAfter === 8, rowsAfter);
+
     // 5. Existing session: token minted while B was ACTIVE must die once B goes INACTIVE.
     await db.update(businesses).set({ status: 'ACTIVE' }).where(eq(businesses.id, B.id));
     const bLive = await login('staff_b');
