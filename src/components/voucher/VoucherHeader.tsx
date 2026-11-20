@@ -42,6 +42,9 @@ interface VoucherHeaderProps {
   onPartyStateChange?: (stateName: string) => void;
   referenceNumber?: string;
   onReferenceNumberChange?: (val: string) => void;
+  /** CREDIT | CASH | BANK. When provided, a "Paid via" selector is shown. */
+  paymentMode?: string;
+  onPaymentModeChange?: (val: string) => void;
   supplierInvoiceDate?: string;
   onSupplierInvoiceDateChange?: (val: string) => void;
   // Barcode quick scan (optional / compatibility)
@@ -85,6 +88,8 @@ export const VoucherHeader: React.FC<VoucherHeaderProps> = ({
   onPartyStateChange,
   referenceNumber = '',
   onReferenceNumberChange,
+  paymentMode,
+  onPaymentModeChange,
   supplierInvoiceDate = '',
   onSupplierInvoiceDateChange,
   submitting,
@@ -532,6 +537,23 @@ export const VoucherHeader: React.FC<VoucherHeaderProps> = ({
                 )}
               </div>
             )}
+          </div>
+        )}
+
+        {onPaymentModeChange && (
+          <div className="md:col-span-2 flex items-center gap-1.5">
+            <span className="text-slate-900 font-extrabold shrink-0 text-[11px] uppercase tracking-tight">Paid via:</span>
+            <select
+              id="voucher-header-paid-via"
+              value={paymentMode || 'CREDIT'}
+              onChange={e => onPaymentModeChange(e.target.value)}
+              title="Credit keeps the bill on the party ledger. Cash or Bank also records the receipt or payment automatically."
+              className="flex-1 min-w-0 py-0.5 px-1 text-xs font-bold text-slate-900 border border-slate-400 rounded bg-white focus:ring-1 focus:ring-blue-600 shadow-2xs"
+            >
+              <option value="CREDIT">Credit</option>
+              <option value="CASH">Cash</option>
+              <option value="BANK">Bank</option>
+            </select>
           </div>
         )}
 

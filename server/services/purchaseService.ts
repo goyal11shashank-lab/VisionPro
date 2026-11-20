@@ -1,4 +1,5 @@
 import { PaymentService } from './paymentService.js';
+import { settleInvoiceInTx, reverseAutoSettlementsInTx, normalizeSettlementMode, findAutoSettlements } from './invoiceSettlementService.js';
 import { db, pool } from '../db/index.js';
 import {
   purchaseOrders,
@@ -73,6 +74,8 @@ export interface CreatePurchaseOrderDTO {
 }
 
 export interface CreatePurchaseInvoiceDTO {
+  /** CREDIT (default) leaves the bill on the supplier ledger; CASH/BANK also records a linked payment for the full total. */
+  paymentMode?: 'CREDIT' | 'CASH' | 'BANK';
   supplierPartyId: string;
   godownId?: string | null;
   purchaseOrderId?: string;
@@ -519,6 +522,12 @@ export class PurchaseService {
       // If immediate posting requested (e.g. during conversion)
       if (data.status === 'POSTED') {
         await this._postPurchaseInvoiceInternal(client, businessId, invoice.id, userId);
+        const settleRes = await client.query(`SELECT grand_total, invoice_date, invoice_number FROM purchase_invoices WHERE id = $1`, [invoice.id]);
+        await settleInvoiceInTx(client, {
+          businessId, kind: 'PURCHASE', invoiceId: invoice.id, partyId: data.supplierPartyId,
+          invoiceNumber: settleRes.rows[0].invoice_number, amount: parseFloat(settleRes.rows[0].grand_total),
+          mode: normalizeSettlementMode(data.paymentMode), date: settleRes.rows[0].invoice_date, userId,
+        });
       }
 
       if (!receiptTransaction) await client.query('COMMIT');
@@ -593,6 +602,8 @@ export class PurchaseService {
           `Cannot modify Purchase Invoice ${existingInv.invoice_number} because active Purchase Return ${activeReturnsRes.rows[0].return_number} exists against it. Please delete or cancel the return first.`
         );
       }
+
+      const priorSettlementMode = await reverseAutoSettlementsInTx(client, businessId, invoiceId, `Voucher ${existingInv.invoice_number} edited`, userId);
 
       // If existing invoice was POSTED, reverse its stock and ledger effects first
       if (existingInv.status === 'POSTED') {
@@ -905,6 +916,12 @@ export class PurchaseService {
         await client.query(`UPDATE purchase_invoices SET status='DRAFT' WHERE business_id=$1 AND id=$2`,[businessId,invoiceId]);
         await this._postPurchaseInvoiceInternal(client,businessId,invoiceId,userId);
         await PaymentService.syncPurchaseInvoicePaymentStatus(client,businessId,invoiceId);
+        const editMode = data.paymentMode !== undefined ? normalizeSettlementMode(data.paymentMode) : (priorSettlementMode ?? 'CREDIT');
+        const totalRes = await client.query(`SELECT grand_total, invoice_date, invoice_number, supplier_party_id FROM purchase_invoices WHERE id = $1`, [invoiceId]);
+        await settleInvoiceInTx(client, {
+          businessId, kind: 'PURCHASE', invoiceId, partyId: totalRes.rows[0].supplier_party_id, invoiceNumber: totalRes.rows[0].invoice_number,
+          amount: parseFloat(totalRes.rows[0].grand_total), mode: editMode, date: totalRes.rows[0].invoice_date, userId,
+        });
       }
 
       await client.query('COMMIT');
@@ -1005,9 +1022,11 @@ export class PurchaseService {
     const paidAmount = allocsRes.rows.reduce((sum, r) => sum + parseFloat(r.allocated_amount), 0);
     const grandTotal = parseFloat(inv.invoice.grandTotal);
     const outstandingAmount = Math.max(0, grandTotal - paidAmount);
+    const settlementMode = normalizeSettlementMode((await findAutoSettlements(pool as any, businessId, invoiceId))[0]?.payment_mode);
 
     return {
       ...inv.invoice,
+      settlementMode,
       supplier: inv.supplier,
       paidAmount,
       outstandingAmount,
@@ -1434,6 +1453,7 @@ export class PurchaseService {
         );
       }
 
+      await reverseAutoSettlementsInTx(client, businessId, invoiceId, 'Voucher cancelled or deleted', userId);
       // Check if any active payment allocations exist for this invoice
       const activeAllocRes = await client.query(
         `SELECT pa.id, p.payment_number, pa.allocated_amount 
@@ -1632,6 +1652,8 @@ export class PurchaseService {
           `Cannot delete Purchase Invoice ${inv.invoice_number}: active Purchase Return ${activeReturnsRes.rows[0].return_number} (${activeReturnsRes.rows[0].status}) exists against it. Please delete or cancel the purchase return first.`
         );
       }
+
+      await reverseAutoSettlementsInTx(client, businessId, invoiceId, 'Voucher cancelled or deleted', userId);
 
       // If POSTED, reverse stock additions and supplier ledger entries
       if (inv.status === 'POSTED') {
