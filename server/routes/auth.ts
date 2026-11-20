@@ -7,6 +7,7 @@ import { verifyPassword, hashPassword } from '../auth/password.js';
 import { generateAuthToken } from '../auth/jwt.js';
 import { authenticateToken } from '../middleware/auth.js';
 import { recordAuditLog } from '../services/auditService.js';
+import { businessUsableByStaff, businessInactiveBody } from '../services/businessStatusPolicy.js';
 import { eq, or, and, inArray } from 'drizzle-orm';
 import { z } from 'zod';
 
@@ -552,10 +553,36 @@ router.post('/login', async (req: Request, res: Response): Promise<void> => {
               selectedBusiness = first;
             }
           } else {
-            const defaultAccess = accessibleBiz.find(b => b.isDefault) || accessibleBiz[0];
-            selectedBusiness = defaultAccess?.business;
+            // Prefer an ACTIVE business: an inactive business no longer accepts
+            // staff logins (owner rule, Nov 20, 2026).
+            const defaultAccess = accessibleBiz.find(b => b.isDefault);
+            const fallback =
+              defaultAccess && defaultAccess.business?.status === 'ACTIVE'
+                ? defaultAccess
+                : accessibleBiz.find(b => b.business?.status === 'ACTIVE') || defaultAccess || accessibleBiz[0];
+            selectedBusiness = fallback?.business;
           }
         }
+      }
+
+      // Owner rule (Nov 20, 2026): inactive business stops staff login outright.
+      // Super Administrator keeps access for management and history.
+      if (!userRecord.isSuperAdmin && selectedBusiness && !businessUsableByStaff(selectedBusiness)) {
+        try {
+          await recordAuditLog({
+            userId: userRecord.id,
+            action: 'LOGIN_BLOCKED_BUSINESS_INACTIVE',
+            module: 'AUTH',
+            entityType: 'Business',
+            entityId: selectedBusiness.id,
+            newValue: { status: selectedBusiness.status },
+            req,
+          });
+        } catch (auditErr: any) {
+          console.warn('[LOGIN_BLOCKED_AUDIT] Failed to record audit log:', auditErr?.message);
+        }
+        res.status(403).json(businessInactiveBody(selectedBusiness));
+        return;
       }
 
       const currentBusinessId = selectedBusiness?.id || null;
