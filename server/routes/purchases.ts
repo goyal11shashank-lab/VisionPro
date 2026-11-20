@@ -307,6 +307,33 @@ router.get(
 );
 
 /**
+ * POST /api/purchases/barcode-lookup-batch  { codes: string[] }
+ * One authenticated round trip for a burst of scans; same permission and lookup as the single route. Read-only.
+ */
+router.post(
+  '/barcode-lookup-batch',
+  requireAnyPermission(['purchase:create', 'purchase:view', 'purchase.create', 'purchase.view']),
+  async (req: Request, res: Response) => {
+    const businessId = req.user!.currentBusinessId;
+    const codes: string[] = Array.isArray(req.body?.codes)
+      ? req.body.codes.filter((c: any) => typeof c === 'string').slice(0, 50)
+      : [];
+    const unique = Array.from(new Set(codes));
+    const results: Record<string, { data?: any; error?: string }> = {};
+    await Promise.all(
+      unique.map(async code => {
+        try {
+          results[code] = { data: await PurchaseService.getBarcodeDetailsForPurchase(businessId, code) };
+        } catch (err: any) {
+          results[code] = { error: err.message || 'Barcode not found' };
+        }
+      })
+    );
+    res.json({ results });
+  }
+);
+
+/**
  * POST /api/purchases/validate-excel-import
  * Validates Excel rows for purchase invoice import:
  * - Checks stock item existence
@@ -486,4 +513,3 @@ router.delete(
 router.get('/:id', requireAnyPermission(['purchase:view', 'purchase.view']), getInvoiceByIdHandler);
 
 export default router;
-
