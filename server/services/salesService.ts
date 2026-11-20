@@ -1,4 +1,5 @@
 import { PaymentService } from './paymentService.js';
+import { settleInvoiceInTx, reverseAutoSettlementsInTx, normalizeSettlementMode, findAutoSettlements } from './invoiceSettlementService.js';
 import { drizzle } from 'drizzle-orm/node-postgres';
 import { db, pool } from '../db/index.js';
 import {
@@ -66,6 +67,8 @@ export interface CreateSalesOrderDTO {
 }
 
 export interface CreateSalesInvoiceDTO {
+  /** CREDIT (default) leaves the bill on the party ledger; CASH/BANK also records a linked receipt for the full total. */
+  paymentMode?: 'CREDIT' | 'CASH' | 'BANK';
   partyId: string;
   godownId?: string | null;
   salesOrderId?: string;
@@ -1826,6 +1829,10 @@ export class SalesService {
       // 3. If target status is POSTED, perform atomic stock deduction and ledger posting
       if (targetStatus === 'POSTED') {
         await this._postDirectInvoiceInternal(client, businessId, invoiceId, userId);
+        await settleInvoiceInTx(client, {
+          businessId, kind: 'SALES', invoiceId, partyId: data.partyId, invoiceNumber,
+          amount: totals.grandTotal, mode: normalizeSettlementMode(data.paymentMode), date: invoiceDate, userId,
+        });
       }
 
       await client.query('COMMIT');
@@ -1921,6 +1928,9 @@ export class SalesService {
           `Cannot modify Sales Invoice ${existingInv.invoice_number} because active Sales Return ${activeReturnsRes.rows[0].return_number} exists against it. Please delete or cancel the return first.`
         );
       }
+
+      // A voucher's own cash/bank settlement is reversed first and re-created for the new total below.
+      const priorSettlementMode = await reverseAutoSettlementsInTx(client, businessId, invoiceId, `Voucher ${existingInv.invoice_number} edited`, userId);
 
       // If existing invoice was POSTED, reverse stock and customer ledger first
       if (existingInv.status === 'POSTED') {
@@ -2154,6 +2164,12 @@ export class SalesService {
       if (targetStatus === 'POSTED') {
         await this._postDirectInvoiceInternal(client, businessId, invoiceId, userId);
         await PaymentService.syncSalesInvoicePaymentStatus(client,businessId,invoiceId);
+        const editMode = data.paymentMode !== undefined ? normalizeSettlementMode(data.paymentMode) : (priorSettlementMode ?? 'CREDIT');
+        const totalRes = await client.query(`SELECT grand_total, invoice_date, invoice_number, party_id FROM sales_invoices WHERE id = $1`, [invoiceId]);
+        await settleInvoiceInTx(client, {
+          businessId, kind: 'SALES', invoiceId, partyId: totalRes.rows[0].party_id, invoiceNumber: totalRes.rows[0].invoice_number,
+          amount: parseFloat(totalRes.rows[0].grand_total), mode: editMode, date: totalRes.rows[0].invoice_date, userId,
+        });
       }
 
       await client.query('COMMIT');
@@ -2870,6 +2886,7 @@ export class SalesService {
         );
       }
 
+      await reverseAutoSettlementsInTx(client, businessId, invoiceId, 'Voucher cancelled or deleted', userId);
       // Check if any active payment allocations exist for this invoice
       const activeAllocRes = await client.query(
         `SELECT pa.id, p.payment_number, pa.allocated_amount 
@@ -3038,6 +3055,7 @@ export class SalesService {
         );
       }
 
+      await reverseAutoSettlementsInTx(client, businessId, invoiceId, 'Voucher cancelled or deleted', userId);
       // Check if any active payment allocations exist for this invoice
       const activeAllocRes = await client.query(
         `SELECT pa.id, p.payment_number, pa.allocated_amount 
@@ -3280,6 +3298,7 @@ export class SalesService {
     const paidAmount = allocsRes.rows.reduce((sum, r) => sum + parseFloat(r.allocated_amount), 0);
     const grandTotal = parseFloat(inv.invoice.grandTotal);
     const outstandingAmount = Math.max(0, grandTotal - paidAmount);
+    const settlementMode = normalizeSettlementMode((await findAutoSettlements(pool as any, businessId, invoiceId))[0]?.payment_mode);
 
     // Historical posting snapshot for print only. Do not replace this with the
     // party's present-day balance, which may include later invoices/receipts.
@@ -3298,6 +3317,7 @@ export class SalesService {
 
     return {
       ...inv.invoice,
+      settlementMode,
       printBalanceSnapshot,
       party: inv.party,
       partyName: inv.party?.name || inv.party?.displayName || '',
