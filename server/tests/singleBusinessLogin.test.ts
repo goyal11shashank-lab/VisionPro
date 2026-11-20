@@ -92,4 +92,4 @@ try {
 } finally {
   await new Promise<void>(r => server.close(() => r()));
   await pool.end();
-                                                                }
+}
