@@ -51,6 +51,10 @@ async function main() {
     const tc = await login('scan_c', C.id);
     const post = (kind: string, tok: string | null, codes: string[]) =>
       call(`/api/${kind}/barcode-lookup-batch`, { method: 'POST', headers: tok ? { Authorization: `Bearer ${tok}` } : {}, body: JSON.stringify({ codes }) });
+    const withParty = await call('/api/sales/barcode-lookup-batch', { method: 'POST', headers: { Authorization: `Bearer ${ta}` }, body: JSON.stringify({ codes: ['SCANB-1'], partyId: '00000000-0000-0000-0000-000000000000' }) });
+    check('sales: partyId adds last sale price field (none for unknown party) and still returns the batch', withParty.status === 200 && withParty.body?.results?.['SCANB-1']?.data?.batch?.barcode === 'SCANB-1' && (withParty.body.results['SCANB-1'].lastSalePrice ?? null) === null, withParty.body);
+    const badParty = await call('/api/sales/barcode-lookup-batch', { method: 'POST', headers: { Authorization: `Bearer ${ta}` }, body: JSON.stringify({ codes: ['SCANB-1'], partyId: 'not-a-uuid' }) });
+    check('sales: malformed partyId does not fail the lookup', badParty.status === 200 && !!badParty.body?.results?.['SCANB-1']?.data, badParty.body);
     for (const kind of ['sales', 'purchases']) {
       const ok = await post(kind, ta, ['scanb-1', 'NOPE-1', 'SCANB-1']);
       check(`${kind}: 200 with per-code results`, ok.status === 200 && !!ok.body?.results, ok);
