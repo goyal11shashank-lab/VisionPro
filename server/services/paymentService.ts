@@ -94,7 +94,10 @@ export class PaymentService {
   static async createPayment(
     businessId: string,
     data: CreatePaymentDto,
-    userId?: string
+    userId?: string,
+    // When given, the caller owns the transaction: no BEGIN/COMMIT/ROLLBACK/release happens here, so the
+    // receipt/payment is atomic with the caller's own writes (e.g. a cash sale and its settlement).
+    externalClient?: PoolClient
   ) {
     if (!data.partyId) throw new Error('Party is required');
     if (!data.paymentType || !['RECEIPT', 'PAYMENT'].includes(data.paymentType)) {
@@ -115,10 +118,11 @@ export class PaymentService {
       }
     }
 
+    const ownsTx = !externalClient;
     let clientReleased = false;
-    const client = await pool.connect();
+    const client = externalClient ?? (await pool.connect());
     try {
-      await client.query('BEGIN');
+      if (ownsTx) await client.query('BEGIN');
 
       // 1. Validate party
       const partyRes = await client.query(
@@ -318,7 +322,7 @@ export class PaymentService {
         );
       }
 
-      await client.query('COMMIT');
+      if (ownsTx) await client.query('COMMIT');
 
       await AuditService.log({
         businessId,
@@ -340,16 +344,17 @@ export class PaymentService {
       if (data.autoPost) {
         // Give this connection back before posting: postPayment takes its own connection, and
         // holding two per request can exhaust the pool and stall every receipt under load.
-        if (!clientReleased) { client.release(); clientReleased = true; }
-        return await this.postPayment(businessId, paymentId, userId);
+        if (!externalClient && !clientReleased) { client.release(); clientReleased = true; }
+        return await this.postPayment(businessId, paymentId, userId, externalClient);
       }
 
+      if (externalClient) return { id: paymentId };
       return await this.getPaymentById(businessId, paymentId);
     } catch (err) {
-      await client.query('ROLLBACK');
+      if (ownsTx) await client.query('ROLLBACK');
       throw err;
     } finally {
-      if (!clientReleased) client.release();
+      if (ownsTx && !clientReleased) client.release();
     }
   }
 
@@ -378,10 +383,11 @@ export class PaymentService {
   /**
    * Posts and finalizes a DRAFT Payment voucher
    */
-  static async postPayment(businessId: string, paymentId: string, userId?: string) {
-    const client = await pool.connect();
+  static async postPayment(businessId: string, paymentId: string, userId?: string, externalClient?: PoolClient) {
+    const ownsTx = !externalClient;
+    const client = externalClient ?? (await pool.connect());
     try {
-      await client.query('BEGIN');
+      if (ownsTx) await client.query('BEGIN');
 
       // 1. Lock payment
       const payRes = await client.query(
@@ -581,7 +587,7 @@ export class PaymentService {
       }
 
       await this.syncLatestLedgerBalance(client, businessId, partyId, paymentType);
-      await client.query('COMMIT');
+      if (ownsTx) await client.query('COMMIT');
 
       await AuditService.log({
         businessId,
@@ -597,12 +603,13 @@ export class PaymentService {
         },
       });
 
+      if (externalClient) return { id: paymentId };
       return await this.getPaymentById(businessId, paymentId);
     } catch (err) {
-      await client.query('ROLLBACK');
+      if (ownsTx) await client.query('ROLLBACK');
       throw err;
     } finally {
-      client.release();
+      if (ownsTx) client.release();
     }
   }
 
@@ -941,11 +948,13 @@ export class PaymentService {
     businessId: string,
     paymentId: string,
     reason?: string,
-    userId?: string
+    userId?: string,
+    externalClient?: PoolClient
   ) {
-    const client = await pool.connect();
+    const ownsTx = !externalClient;
+    const client = externalClient ?? (await pool.connect());
     try {
-      await client.query('BEGIN');
+      if (ownsTx) await client.query('BEGIN');
 
       // 1. Lock payment
       const payRes = await client.query(
@@ -1069,7 +1078,7 @@ export class PaymentService {
       );
 
       await this.syncLatestLedgerBalance(client, businessId, partyId, paymentType);
-      await client.query('COMMIT');
+      if (ownsTx) await client.query('COMMIT');
 
       await AuditService.log({
         businessId,
@@ -1085,12 +1094,13 @@ export class PaymentService {
         },
       });
 
+      if (externalClient) return { id: paymentId };
       return await this.getPaymentById(businessId, paymentId);
     } catch (err) {
-      await client.query('ROLLBACK');
+      if (ownsTx) await client.query('ROLLBACK');
       throw err;
     } finally {
-      client.release();
+      if (ownsTx) client.release();
     }
   }
 
@@ -2953,4 +2963,4 @@ export class PaymentService {
       await this.syncPurchaseInvoicePaymentStatus(null, businessId, row.id);
     }
   }
-      }
+    }
