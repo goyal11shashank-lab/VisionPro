@@ -1,6 +1,6 @@
 import { apiRequest } from '../api/client';
 
-type LookupResult = { d: any } | { err: Error };
+type LookupResult = { d: any; price?: number | null } | { err: Error };
 type Kind = 'sales' | 'purchases';
 
 const TTL_MS = 15000;
@@ -24,31 +24,32 @@ function activeBusiness(): string {
  * Read-only.
  */
 export function createBarcodeLookup(kind: Kind) {
-  const cache = new Map<string, { at: number; d: any }>();
+  const cache = new Map<string, { at: number; d: any; price?: number | null }>();
   let cacheBiz = activeBusiness();
-  let queue: { code: string; resolve: (r: LookupResult) => void }[] = [];
+  let queue: { code: string; party: string; resolve: (r: LookupResult) => void }[] = [];
   let inFlight = false;
 
   const flush = async () => {
     if (inFlight || queue.length === 0) return;
     inFlight = true;
-    const batch = queue;
-    queue = [];
+    const party = queue[0].party;
+    const batch = queue.filter(q => q.party === party);
+    queue = queue.filter(q => q.party !== party);
     const biz = activeBusiness();
     try {
       const codes = Array.from(new Set(batch.map(b => b.code)));
-      const res = await apiRequest<{ results: Record<string, { data?: any; error?: string }> }>(
+      const res = await apiRequest<{ results: Record<string, { data?: any; error?: string; lastSalePrice?: number | null }> }>(
         `/api/${kind}/barcode-lookup-batch`,
-        { method: 'POST', body: JSON.stringify({ codes }) }
+        { method: 'POST', body: JSON.stringify(party ? { codes, partyId: party } : { codes }) }
       );
       for (const b of batch) {
         const r = res.results?.[b.code];
         if (r?.data) {
           if (activeBusiness() === biz) {
             if (cache.size >= MAX_CACHE) cache.clear();
-            cache.set(biz + '|' + b.code.toLowerCase(), { at: Date.now(), d: r.data });
+            cache.set(biz + '|' + party + '|' + b.code.toLowerCase(), { at: Date.now(), d: r.data, price: r.lastSalePrice });
           }
-          b.resolve({ d: r.data });
+          b.resolve({ d: r.data, price: r.lastSalePrice });
         } else {
           b.resolve({ err: new Error(r?.error || `No optical batch found with barcode '${b.code}'`) });
         }
@@ -61,17 +62,18 @@ export function createBarcodeLookup(kind: Kind) {
     }
   };
 
-  return (code: string): Promise<LookupResult> => {
+  return (code: string, partyId?: string | null): Promise<LookupResult> => {
+    const party = partyId || '';
     const biz = activeBusiness();
     if (biz !== cacheBiz) {
       cache.clear();
       cacheBiz = biz;
     }
-    const hit = cache.get(biz + '|' + code.toLowerCase());
-    if (hit && Date.now() - hit.at < TTL_MS) return Promise.resolve({ d: hit.d });
+    const hit = cache.get(biz + '|' + party + '|' + code.toLowerCase());
+    if (hit && Date.now() - hit.at < TTL_MS) return Promise.resolve({ d: hit.d, price: hit.price });
     return new Promise(resolve => {
-      queue.push({ code, resolve });
+      queue.push({ code, party, resolve });
       void flush();
     });
   };
-    }
+}
