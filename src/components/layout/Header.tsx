@@ -155,6 +155,16 @@ export const Header: React.FC<HeaderProps> = ({
               </span>
               <Lock className="w-3 h-3 text-amber-500 shrink-0" />
             </div>
+          ) : (!user?.isSuperAdmin && dropdownBusinesses.length <= 1) ? (
+            <div
+              id="business-identity-badge"
+              className="flex items-center gap-1.5 sm:gap-2 px-2.5 sm:px-3 py-1.5 rounded-lg border border-slate-200 bg-slate-50 text-xs font-semibold text-slate-700 select-none"
+            >
+              <Building2 className="w-3.5 h-3.5 text-blue-600 shrink-0" />
+              <span className="max-w-[78px] sm:max-w-[170px] truncate">
+                {currentBusiness?.name || dropdownBusinesses[0]?.name || ''}
+              </span>
+            </div>
           ) : (
             <div className="relative">
               <button
