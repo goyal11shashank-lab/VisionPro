@@ -115,6 +115,7 @@ export class PaymentService {
       }
     }
 
+    let clientReleased = false;
     const client = await pool.connect();
     try {
       await client.query('BEGIN');
@@ -337,6 +338,9 @@ export class PaymentService {
 
       // Auto-post if requested
       if (data.autoPost) {
+        // Give this connection back before posting: postPayment takes its own connection, and
+        // holding two per request can exhaust the pool and stall every receipt under load.
+        if (!clientReleased) { client.release(); clientReleased = true; }
         return await this.postPayment(businessId, paymentId, userId);
       }
 
@@ -345,8 +349,30 @@ export class PaymentService {
       await client.query('ROLLBACK');
       throw err;
     } finally {
-      client.release();
+      if (!clientReleased) client.release();
     }
+  }
+
+  /** Serializes ledger mutations for one party so concurrent vouchers cannot overwrite each other's balance. */
+  static async lockPartyLedger(client: PoolClient, businessId: string, partyId: string) {
+    await client.query(`SELECT pg_advisory_xact_lock(hashtext($1))`, [`party-ledger:${businessId}:${partyId}`]);
+  }
+
+  /**
+   * Keeps the denormalized running balance on the party's most recent ledger row equal to the
+   * authoritative total (sum of debits and credits). The statement and reconciliation use the sums;
+   * dashboard and search read this stored balance. Editing, cancelling or deleting a voucher, or a
+   * backdated voucher, could otherwise leave it stale.
+   */
+  static async syncLatestLedgerBalance(client: PoolClient, businessId: string, partyId: string, paymentType: string) {
+    const isReceipt = paymentType === 'RECEIPT';
+    const table = isReceipt ? 'customer_ledgers' : 'supplier_ledgers';
+    const net = isReceipt ? 'COALESCE(SUM(debit),0) - COALESCE(SUM(credit),0)' : 'COALESCE(SUM(credit),0) - COALESCE(SUM(debit),0)';
+    await client.query(
+      `UPDATE ${table} SET balance = (SELECT ${net} FROM ${table} WHERE business_id = $1 AND party_id = $2)
+       WHERE id = (SELECT id FROM ${table} WHERE business_id = $1 AND party_id = $2 ORDER BY created_at DESC, id DESC LIMIT 1)`,
+      [businessId, partyId]
+    );
   }
 
   /**
@@ -376,6 +402,7 @@ export class PaymentService {
 
       const amountNum = parseFloat(payment.amount);
       const partyId = payment.party_id;
+      await this.lockPartyLedger(client, businessId, partyId);
       const paymentType = payment.payment_type;
 
       // 2. Fetch and re-validate all active allocations for this payment
@@ -553,6 +580,7 @@ export class PaymentService {
         }
       }
 
+      await this.syncLatestLedgerBalance(client, businessId, partyId, paymentType);
       await client.query('COMMIT');
 
       await AuditService.log({
@@ -939,6 +967,7 @@ export class PaymentService {
       const wasPosted = payment.status === 'POSTED';
       const amountNum = parseFloat(payment.amount);
       const partyId = payment.party_id;
+      await this.lockPartyLedger(client, businessId, partyId);
       const paymentType = payment.payment_type;
 
       // 2. Cancel payment allocations
@@ -1039,6 +1068,7 @@ export class PaymentService {
         [`[CANCELLED: ${reason || 'Cancelled by user'}]`, userId || null, paymentId]
       );
 
+      await this.syncLatestLedgerBalance(client, businessId, partyId, paymentType);
       await client.query('COMMIT');
 
       await AuditService.log({
@@ -1097,6 +1127,9 @@ export class PaymentService {
       const wasPosted = existing.status === 'POSTED';
       const paymentType = existing.payment_type;
       const partyId = data.partyId || existing.party_id;
+      for (const pid of Array.from(new Set([existing.party_id, partyId])).sort()) {
+        await this.lockPartyLedger(client, businessId, pid as string);
+      }
       const paymentMode = data.paymentMode || existing.payment_mode;
       const paymentDate = data.paymentDate ? new Date(data.paymentDate) : existing.payment_date;
       const amount = data.amount !== undefined ? round2(Number(data.amount)) : parseFloat(existing.amount);
@@ -1378,6 +1411,8 @@ export class PaymentService {
         }
       }
 
+      await this.syncLatestLedgerBalance(client, businessId, partyId, paymentType);
+      if (existing.party_id !== partyId) await this.syncLatestLedgerBalance(client, businessId, existing.party_id, paymentType);
       await client.query('COMMIT');
 
       await AuditService.log({
@@ -1436,6 +1471,7 @@ export class PaymentService {
       const payment = payRes.rows[0];
       const wasPosted = payment.status === 'POSTED';
       const paymentType = payment.payment_type;
+      await this.lockPartyLedger(client, businessId, payment.party_id);
 
       // 1. Fetch allocated documents to sync their statuses later
       const allocsRes = await client.query(
@@ -1483,6 +1519,7 @@ export class PaymentService {
         [businessId, paymentId]
       );
 
+      await this.syncLatestLedgerBalance(client, businessId, payment.party_id, paymentType);
       await client.query('COMMIT');
 
       await AuditService.log({
@@ -2916,4 +2953,4 @@ export class PaymentService {
       await this.syncPurchaseInvoicePaymentStatus(null, businessId, row.id);
     }
   }
-                                                       }
+      }

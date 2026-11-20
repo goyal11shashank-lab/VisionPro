@@ -540,6 +540,20 @@ router.post('/login', async (req: Request, res: Response): Promise<void> => {
           .where(eq(userBusinessAccess.userId, userRecord.id));
 
         accessibleBiz=restrictBusinessChoices(accessibleBiz,canonicalBusinessId);
+        // Owner rule (Nov 20, 2026): one staff member, one business. Staff who still hold several
+        // access rows sign in to their default business only; picking another one at login is refused.
+        // Access rows are not changed here; the multi-access accounts need an owner decision.
+        if (!userRecord.isSuperAdmin && businessId && accessibleBiz.length > 1) {
+          const own = accessibleBiz.find(b => b.isDefault) || accessibleBiz[0];
+          if (own && own.businessId !== businessId) {
+            res.status(403).json({
+              success: false,
+              error: 'STAFF_SINGLE_BUSINESS',
+              message: 'This login belongs to one business only. Sign in without choosing another business.',
+            });
+            return;
+          }
+        }
         selectedBusiness = accessibleBiz.find(b => b.businessId === businessId)?.business;
 
         if (!selectedBusiness) {
@@ -553,13 +567,10 @@ router.post('/login', async (req: Request, res: Response): Promise<void> => {
               selectedBusiness = first;
             }
           } else {
-            // Prefer an ACTIVE business: an inactive business no longer accepts
-            // staff logins (owner rule, Nov 20, 2026).
-            const defaultAccess = accessibleBiz.find(b => b.isDefault);
-            const fallback =
-              defaultAccess && defaultAccess.business?.status === 'ACTIVE'
-                ? defaultAccess
-                : accessibleBiz.find(b => b.business?.status === 'ACTIVE') || defaultAccess || accessibleBiz[0];
+            // Owner rule (Nov 20, 2026): a staff member belongs to one business, and when that
+            // business is inactive every one of its staff is blocked. The default business is used
+            // as is; there is no silent fallthrough to another business.
+            const fallback = accessibleBiz.find(b => b.isDefault) || accessibleBiz[0];
             selectedBusiness = fallback?.business;
           }
         }

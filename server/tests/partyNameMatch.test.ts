@@ -1,0 +1,11 @@
+import assert from 'node:assert/strict';
+import { resolveUniquePartyByName } from '../../src/lib/partyNameMatch.js';
+const ps = [{ id: '1', name: 'Sham Trading' }, { id: '2', name: 'Vimal  Optical' }, { id: '3', name: 'Twin' }, { id: '4', name: 'twin' }, { id: '5', name: 'Sham Trading Co' }];
+assert.equal(resolveUniquePartyByName(ps, 'sham trading')?.id, '1');
+assert.equal(resolveUniquePartyByName(ps, '  SHAM   TRADING ')?.id, '1');
+assert.equal(resolveUniquePartyByName(ps, 'Vimal Optical')?.id, '2');
+assert.equal(resolveUniquePartyByName(ps, 'Sham'), null);
+assert.equal(resolveUniquePartyByName(ps, 'Twin'), null);
+assert.equal(resolveUniquePartyByName(ps, ''), null);
+assert.equal(resolveUniquePartyByName([], 'x'), null);
+console.log('partyNameMatch 7/7 PASS');
