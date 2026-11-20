@@ -1,3 +1,4 @@
+import { staffOwnBusinessId, STAFF_SINGLE_BUSINESS_BODY } from '../services/staffBusinessPolicy.js';
 import {hiddenFromSuperAdmin} from '../services/businessVisibilityService.js';
 import { canonicalBusinessFor, restrictBusinessChoices } from '../services/canonicalLoginService.js';
 import { Router, Request, Response } from 'express';
@@ -540,19 +541,12 @@ router.post('/login', async (req: Request, res: Response): Promise<void> => {
           .where(eq(userBusinessAccess.userId, userRecord.id));
 
         accessibleBiz=restrictBusinessChoices(accessibleBiz,canonicalBusinessId);
-        // Owner rule (Nov 20, 2026): one staff member, one business. Staff who still hold several
-        // access rows sign in to their default business only; picking another one at login is refused.
-        // Access rows are not changed here; the multi-access accounts need an owner decision.
-        if (!userRecord.isSuperAdmin && businessId && accessibleBiz.length > 1) {
-          const own = accessibleBiz.find(b => b.isDefault) || accessibleBiz[0];
-          if (own && own.businessId !== businessId) {
-            res.status(403).json({
-              success: false,
-              error: 'STAFF_SINGLE_BUSINESS',
-              message: 'This login belongs to one business only. Sign in without choosing another business.',
-            });
-            return;
-          }
+        // Owner rule (Nov 20, 2026): one staff member, one business. Multi-access staff sign in to
+        // the business flagged as their default only; picking another one at login is refused.
+        const ownBizId = userRecord.isSuperAdmin ? null : staffOwnBusinessId(accessibleBiz);
+        if (ownBizId && businessId && businessId !== ownBizId) {
+          res.status(403).json(STAFF_SINGLE_BUSINESS_BODY);
+          return;
         }
         selectedBusiness = accessibleBiz.find(b => b.businessId === businessId)?.business;
 
@@ -791,6 +785,10 @@ router.get('/me', authenticateToken, async (req: Request, res: Response): Promis
   }
 
   accessibleBiz=restrictBusinessChoices(accessibleBiz,await canonicalBusinessFor(req.user));
+  if (!req.user.isSuperAdmin && !req.user.assignedGodownId) {
+    const ownBizId = staffOwnBusinessId(accessibleBiz);
+    if (ownBizId) accessibleBiz = accessibleBiz.filter(b => b.businessId === ownBizId);
+  }
 
   res.json({
     user: {
@@ -861,6 +859,16 @@ router.post('/switch-business', authenticateToken, async (req: Request, res: Res
 
       if (!access) {
         res.status(403).json({ error: 'You do not have access to this business.' });
+        return;
+      }
+
+      const allRows = await db
+        .select({ businessId: userBusinessAccess.businessId, isDefault: userBusinessAccess.isDefault })
+        .from(userBusinessAccess)
+        .where(eq(userBusinessAccess.userId, req.user!.id));
+      const ownBizId = staffOwnBusinessId(allRows);
+      if (ownBizId && targetBusinessId !== ownBizId) {
+        res.status(403).json(STAFF_SINGLE_BUSINESS_BODY);
         return;
       }
     }
