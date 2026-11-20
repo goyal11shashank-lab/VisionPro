@@ -548,6 +548,8 @@ router.post('/login', async (req: Request, res: Response): Promise<void> => {
           res.status(403).json(STAFF_SINGLE_BUSINESS_BODY);
           return;
         }
+        // Legacy login with several access rows: only its default business is offered (no row is changed).
+        if (ownBizId) accessibleBiz = accessibleBiz.filter(b => b.businessId === ownBizId);
         selectedBusiness = accessibleBiz.find(b => b.businessId === businessId)?.business;
 
         // A staff login that names a business it does not belong to is refused, never moved to another one.
