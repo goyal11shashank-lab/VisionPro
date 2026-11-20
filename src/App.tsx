@@ -1,4 +1,6 @@
 import {AssignedB2bHistoryPage} from './pages/purchases/AssignedB2bHistoryPage.js';
+import { settingsAccessDenied } from './lib/settingsAccess.js';
+import SettingsAccessDenied from './components/auth/SettingsAccessDenied.js';
 import {AssignedFinancialHistoryPage} from './pages/accounts/AssignedFinancialHistoryPage.js';
 import { AssignedStockHistoryPage } from './pages/inventory/AssignedStockHistoryPage.js';
 import { BusinessStockAvailabilityPage } from './pages/inventory/BusinessStockAvailabilityPage.js';
@@ -266,32 +268,9 @@ const AppContent: React.FC = () => {
 
   // Settings space is Super Administrator only (owner requirement). Enforced here for
   // direct navigation and again on the server (requireSuperAdmin on settings writes).
-  const SETTINGS_PATHS = new Set([
-    '/settings',
-    '/admin/settings',
-    '/admin/business-settings',
-    '/admin/gst-settings',
-    '/admin/barcode-settings',
-    '/settings/transaction-message',
-    '/admin/transaction-message',
-    '/admin/transaction-message-settings',
-    '/settings/interface',
-    '/admin/interface-settings',
-  ]);
-
   const renderContent = () => {
-    if (SETTINGS_PATHS.has(pathOnly) && !user.isSuperAdmin) {
-      return (
-        <div className="min-h-[60vh] flex items-center justify-center p-6">
-          <div className="max-w-md w-full bg-white rounded-2xl p-6 shadow-xl border border-slate-200 text-center space-y-3">
-            <h2 className="text-lg font-bold text-slate-900">Super Administrator Access Required</h2>
-            <p className="text-xs text-slate-500 leading-relaxed">
-              Settings can only be viewed and changed by the Super Administrator. Please contact the business owner
-              if you need a setting changed.
-            </p>
-          </div>
-        </div>
-      );
+    if (settingsAccessDenied(pathOnly, user)) {
+      return <SettingsAccessDenied />;
     }
     switch (pathOnly) {
       case '/dealer/onboarding':
