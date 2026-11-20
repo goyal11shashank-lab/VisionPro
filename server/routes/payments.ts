@@ -2,6 +2,7 @@ import { Router, Request, Response } from 'express';
 import { authenticateToken } from '../middleware/auth.js';
 import { requireAnyPermission } from '../middleware/permission.js';
 import { PaymentService } from '../services/paymentService.js';
+import { pool } from '../db/index.js';
 
 const router = Router();
 
@@ -339,6 +340,60 @@ router.get(
     } catch (err: any) {
       console.error('[GET /api/payments Error]', err);
       res.status(400).json({ error: 'FETCH_PAYMENTS_FAILED', message: err.message });
+    }
+  }
+);
+
+/**
+ * GET /api/payments/cash-movement?from=YYYY-MM-DD&to=YYYY-MM-DD
+ * Recorded POSTED receipts and payments by payment mode, with per-mode totals.
+ * This is recorded movement only. There is no opening balance, so the net is NOT cash in hand or a bank balance.
+ * Modes are never merged: CASH, BANK, UPI, CHEQUE and OTHER each get their own list and totals.
+ */
+router.get(
+  '/cash-movement',
+  requireAnyPermission(['accounts:view', 'accounts.view', 'payment.receipt.view', 'payment.supplier.view']),
+  async (req: Request, res: Response) => {
+    try {
+      const businessId = req.user!.currentBusinessId;
+      const isDate = (v: any) => typeof v === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(v);
+      const from = isDate(req.query.from) ? (req.query.from as string) : null;
+      const to = isDate(req.query.to) ? (req.query.to as string) : null;
+      const rows = (await pool.query(
+        `SELECT p.id, p.payment_number AS "paymentNumber", p.payment_date AS "paymentDate", p.payment_type AS "paymentType",
+                p.payment_mode AS "paymentMode", p.amount, p.reference_number AS "referenceNumber", p.notes, pr.name AS "partyName"
+           FROM payments p JOIN parties pr ON pr.id = p.party_id
+          WHERE p.business_id = $1 AND p.status = 'POSTED'
+            AND ($2::date IS NULL OR p.payment_date >= $2::date)
+            AND ($3::date IS NULL OR p.payment_date < ($3::date + INTERVAL '1 day'))
+          ORDER BY p.payment_date DESC, p.payment_number DESC
+          LIMIT 1000`,
+        [businessId, from, to]
+      )).rows;
+      const modes: Record<string, { receipts: number; payments: number; net: number; count: number }> = {};
+      for (const r of rows) {
+        const m = String(r.paymentMode || 'OTHER').toUpperCase();
+        const t = (modes[m] ||= { receipts: 0, payments: 0, net: 0, count: 0 });
+        const a = parseFloat(r.amount) || 0;
+        if (r.paymentType === 'RECEIPT') t.receipts += a; else t.payments += a;
+        t.count++;
+      }
+      for (const m of Object.keys(modes)) {
+        modes[m].receipts = Math.round(modes[m].receipts * 100) / 100;
+        modes[m].payments = Math.round(modes[m].payments * 100) / 100;
+        modes[m].net = Math.round((modes[m].receipts - modes[m].payments) * 100) / 100;
+      }
+      res.json({
+        success: true,
+        openingBalanceConfigured: false,
+        caveat: 'Recorded movement only. No opening balance is configured, so the net is not cash in hand or a bank balance.',
+        truncated: rows.length >= 1000,
+        modes,
+        entries: rows,
+      });
+    } catch (err: any) {
+      console.error('[GET /api/payments/cash-movement Error]', err);
+      res.status(400).json({ error: 'FETCH_CASH_MOVEMENT_FAILED', message: err.message });
     }
   }
 );
