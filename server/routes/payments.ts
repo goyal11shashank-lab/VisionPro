@@ -2,6 +2,7 @@ import { Router, Request, Response } from 'express';
 import { authenticateToken } from '../middleware/auth.js';
 import { requireAnyPermission } from '../middleware/permission.js';
 import { PaymentService } from '../services/paymentService.js';
+import { BusinessSettingsService } from '../services/businessSettingsService.js';
 import { pool } from '../db/index.js';
 
 const router = Router();
@@ -383,10 +384,48 @@ router.get(
         modes[m].payments = Math.round(modes[m].payments * 100) / 100;
         modes[m].net = Math.round((modes[m].receipts - modes[m].payments) * 100) / 100;
       }
+      // Cash opening balance (CASH mode only), configured in Settings > Accounts.
+      // Opening as of `from` = configured opening + all POSTED CASH movement
+      // from the configured opening date up to `from` (exclusive).
+      const { settings } = await BusinessSettingsService.getSettings(businessId);
+      const rawOpening = Number(settings.accounts?.cashOpeningBalance ?? 0);
+      const cashOpening = Number.isFinite(rawOpening) ? rawOpening : 0;
+      const rawDate = settings.accounts?.cashOpeningDate;
+      const cashOpeningDate =
+        typeof rawDate === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(rawDate) ? rawDate : null;
+      const openingBalanceConfigured = cashOpeningDate !== null;
+
+      let openingBalance: number | null = null;
+      let closingBalance: number | null = null;
+      if (openingBalanceConfigured) {
+        const pre = (await pool.query(
+          `SELECT payment_type AS "paymentType", COALESCE(SUM(amount), 0) AS total
+             FROM payments
+            WHERE business_id = $1 AND status = 'POSTED'
+              AND UPPER(payment_mode) = 'CASH'
+              AND payment_date >= $2::date
+              AND payment_date < $3::date
+            GROUP BY payment_type`,
+          [businessId, cashOpeningDate, from ?? cashOpeningDate]
+        )).rows;
+        let preNet = 0;
+        for (const r of pre) {
+          const a = parseFloat(r.total) || 0;
+          preNet += r.paymentType === 'RECEIPT' ? a : -a;
+        }
+        openingBalance = Math.round((cashOpening + preNet) * 100) / 100;
+        closingBalance = Math.round((openingBalance + (modes['CASH']?.net ?? 0)) * 100) / 100;
+      }
+
       res.json({
         success: true,
-        openingBalanceConfigured: false,
-        caveat: 'Recorded movement only. No opening balance is configured, so the net is not cash in hand or a bank balance.',
+        openingBalanceConfigured,
+        cashOpeningDate,
+        openingBalance,
+        closingBalance,
+        caveat: openingBalanceConfigured
+          ? 'Opening and closing balances are shown for CASH mode only. Other modes are recorded movement only.'
+          : 'Recorded movement only. No opening balance is configured, so the net is not cash in hand or a bank balance.',
         truncated: rows.length >= 1000,
         modes,
         entries: rows,
