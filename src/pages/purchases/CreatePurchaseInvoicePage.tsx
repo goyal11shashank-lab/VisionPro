@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useMemo, useCallback, useRef } from 'react';
+import { createBarcodeLookup } from '../../lib/barcodeLookupQueue';
 import {
   FileSpreadsheet,
   ArrowLeft,
@@ -1193,14 +1194,12 @@ export const CreatePurchaseInvoicePage: React.FC<Props> = ({
   const [scanCount, setScanCount] = useState(0);
   const [scanStatus, setScanStatus] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
 
+  const scanLookupRef = useRef(createBarcodeLookup('purchases'));
   const handleVoucherScan = (raw: string) => {
     const code = raw.trim();
     if (!code) return;
     setScanPending(n => n + 1);
-    const lookup = apiRequest<any>(`/api/purchases/barcode-lookup/${encodeURIComponent(code)}`).then(
-      d => ({ d }),
-      (err: any) => ({ err })
-    );
+    const lookup = scanLookupRef.current(code);
     scanChainRef.current = scanChainRef.current.then(async () => {
       try {
         const res: any = await lookup;
