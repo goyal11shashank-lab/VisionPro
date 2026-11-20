@@ -18,7 +18,13 @@ export const LoginPage: React.FC = () => {
   const [identifier, setIdentifier] = useState<string>('');
   const [password, setPassword] = useState<string>('');
   const [showPassword, setShowPassword] = useState<boolean>(false);
-  const [error, setError] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(() => {
+    try {
+      const n = sessionStorage.getItem('erp_session_notice');
+      if (n) sessionStorage.removeItem('erp_session_notice');
+      return n;
+    } catch { return null; }
+  });
   const [isSubmitting, setIsSubmitting] = useState<boolean>(false);
 
   // First-Admin Bootstrap State
