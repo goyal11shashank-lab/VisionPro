@@ -1081,6 +1081,8 @@ export const NormalSalesVoucherPage: React.FC<Props> = ({ onNavigate, onSuccess,
           : 0;
         const result = applyScannedBatch(linesRef.current, res.d, rate, {
           originalQty: (batchId: string) => scanOriginalQtyRef.current.get(batchId) || 0,
+          // Same switch the server uses when the voucher is saved, so a scan is never accepted here and refused there.
+          allowNegative: settings?.inventory?.allowNegativeStock !== false,
           categoryCode: res.d?.uniqueItem ? getOpticalCategory(res.d.uniqueItem) : undefined,
         });
         if (result.ok) {
