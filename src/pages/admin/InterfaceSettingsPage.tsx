@@ -4,6 +4,22 @@ import { useBusinessSettings } from '../../context/BusinessSettingsContext.js';
 
 /**
  * Interface & Printing settings.
+  * Super Admin only (route guard in App.tsx and requireSuperAdmin on the server).
+   * Controls the owner-requested UI behaviours; all are display/behaviour toggles,
+    * never data changes.
+     */
+export const InterfaceSettingsPage: React.FC = () => {
+    const { settings, updateSettings, saving, error, refreshSettings } = useBusinessSettings();
+    const [savedNote, setSavedNote] = useState<string | null>(null);
+  
+    const rightClickRowActions = settings?.ui?.rightClickRowActions ?? true;
+    const hideStockItemMasterColumns = settings?.ui?.hideStockItemMasterColumns ?? true;
+    const a5Orientation = (settings?.print?.defaultOrientation ?? 'PORTRAIT').toUpperCase() === import React, { useState } from 'react';
+import { MousePointerClick, Columns3, Printer, ShieldCheck, RefreshCw } from 'lucide-react';
+import { useBusinessSettings } from '../../context/BusinessSettingsContext.js';
+
+/**
+ * Interface & Printing settings.
  * Super Admin only (route guard in App.tsx and requireSuperAdmin on the server).
  * Controls the owner-requested UI behaviours; all are display/behaviour toggles,
  * never data changes.
