@@ -16,6 +16,8 @@ import { apiRequest } from '../../api/client';
 import { VoucherHeader } from '../../components/voucher/VoucherHeader';
 import { VoucherItemGrid } from '../../components/voucher/VoucherItemGrid';
 import { VoucherFooter } from '../../components/voucher/VoucherFooter';
+import { BarcodeScanBox } from '../../components/voucher/BarcodeScanBox';
+import { applyScannedBatch } from '../../lib/voucherBarcodeScan.js';
 import { OpticalBatchModal } from '../../components/voucher/OpticalBatchModal';
 import { StockItemChangeModal } from '../../components/voucher/StockItemChangeModal';
 import {
@@ -1011,6 +1013,76 @@ export const NormalSalesVoucherPage: React.FC<Props> = ({ onNavigate, onSuccess,
     }, 60);
   };
 
+  // Continuous barcode scanning: every scan looks up its batch right away (in parallel) and is
+  // applied to the lines in scan order. Nothing is saved; stock and database are not touched.
+  const linesRef = useRef<VoucherLineItem[]>(lines);
+  linesRef.current = lines;
+  const scanChainRef = useRef<Promise<void>>(Promise.resolve());
+  const scanPriceRef = useRef<Map<string, Promise<number>>>(new Map());
+  const [scanPending, setScanPending] = useState(0);
+  const [scanCount, setScanCount] = useState(0);
+  const [scanStatus, setScanStatus] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
+
+  const scanRateFor = (uItem: any): Promise<number> => {
+    const key = `${selectedPartyId || ''}:${uItem.id}`;
+    const hit = scanPriceRef.current.get(key);
+    if (hit) return hit;
+    const p = (async () => {
+      let rate = uItem.mrp
+        ? parseFloat(uItem.mrp)
+        : uItem.standardSellingPrice
+        ? parseFloat(uItem.standardSellingPrice)
+        : 450;
+      if (selectedPartyId) {
+        try {
+          const priceData = await apiRequest<any>(`/api/sales/pricing/${selectedPartyId}/${uItem.id}`);
+          if (priceData && priceData.lastSalePrice !== null && priceData.lastSalePrice !== undefined) {
+            rate = parseFloat(priceData.lastSalePrice);
+          }
+        } catch {
+          // keep the item's default rate
+        }
+      }
+      return rate;
+    })();
+    scanPriceRef.current.set(key, p);
+    return p;
+  };
+
+  const handleVoucherScan = (raw: string) => {
+    const code = raw.trim();
+    if (!code) return;
+    setScanPending(n => n + 1);
+    const lookup = apiRequest<any>(`/api/sales/barcode-lookup/${encodeURIComponent(code)}`).then(
+      d => ({ d }),
+      (err: any) => ({ err })
+    );
+    scanChainRef.current = scanChainRef.current.then(async () => {
+      try {
+        const res: any = await lookup;
+        if (res.err) {
+          setScanStatus({ type: 'error', text: `${code}: ${res.err.message || 'barcode not found'}` });
+          return;
+        }
+        const rate = res.d?.uniqueItem ? await scanRateFor(res.d.uniqueItem) : 0;
+        const result = applyScannedBatch(linesRef.current, res.d, rate, {
+          allowOverStock: !!editInvoiceId,
+          categoryCode: res.d?.uniqueItem ? getOpticalCategory(res.d.uniqueItem) : undefined,
+        });
+        if (result.ok) {
+          linesRef.current = result.lines;
+          setLines(result.lines);
+          setScanCount(n => n + 1);
+        }
+        setScanStatus({ type: result.ok ? 'success' : 'error', text: result.message });
+      } catch (err: any) {
+        setScanStatus({ type: 'error', text: `${code}: ${err?.message || 'scan failed'}` });
+      } finally {
+        setScanPending(n => Math.max(0, n - 1));
+      }
+    });
+  };
+
   // Barcode Lookup Fast Entry
   const handleBarcodeLookup = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -1433,13 +1505,14 @@ export const NormalSalesVoucherPage: React.FC<Props> = ({ onNavigate, onSuccess,
     }
   };
 
-  // Print Shortcut (Ctrl+P)
+  // Save & Print (Ctrl+P)
   const handlePrintShortcut = async () => {
     if (submitting) return;
-    let inv = createdInvoice;
-    if (!inv && !editInvoiceId) {
-      inv = await handleSaveVoucher('POSTED', false);
-      if (!inv) return;
+    // Save & Print: save first (a new voucher, or an edited one with unsaved changes); print only
+    // after the save succeeded. An already saved, unchanged voucher just prints.
+    if ((!createdInvoice && !editInvoiceId) || (editInvoiceId && isDirty)) {
+      const saved = await handleSaveVoucher('POSTED', false);
+      if (!saved) return;
     }
     const previewBeforePrint = settings?.print?.previewBeforePrint ?? true;
     setAutoInvokePrint(!previewBeforePrint);
@@ -1980,6 +2053,14 @@ export const NormalSalesVoucherPage: React.FC<Props> = ({ onNavigate, onSuccess,
             onGstModeChange={setGstMode}
             narration={notes}
             onNarrationChange={setNotes}
+            scanBox={
+              <BarcodeScanBox
+                onScan={handleVoucherScan}
+                pending={scanPending}
+                scannedCount={scanCount}
+                status={scanStatus}
+              />
+            }
             discount={invoiceDiscount}
             onDiscountChange={setInvoiceDiscount}
             gstRate={invoiceGstRate}
