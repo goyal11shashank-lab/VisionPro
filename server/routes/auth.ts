@@ -550,6 +550,12 @@ router.post('/login', async (req: Request, res: Response): Promise<void> => {
         }
         selectedBusiness = accessibleBiz.find(b => b.businessId === businessId)?.business;
 
+        // A staff login that names a business it does not belong to is refused, never moved to another one.
+        if (!selectedBusiness && businessId && !userRecord.isSuperAdmin) {
+          res.status(403).json(STAFF_SINGLE_BUSINESS_BODY);
+          return;
+        }
+
         if (!selectedBusiness) {
           if (userRecord.isSuperAdmin) {
             if (businessId) {
