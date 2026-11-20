@@ -1064,7 +1064,7 @@ export const NormalSalesVoucherPage: React.FC<Props> = ({ onNavigate, onSuccess,
     const code = raw.trim();
     if (!code) return;
     setScanPending(n => n + 1);
-    const lookup = scanLookupRef.current(code);
+    const lookup = scanLookupRef.current(code, selectedPartyId);
     scanChainRef.current = scanChainRef.current.then(async () => {
       try {
         const res: any = await lookup;
@@ -1072,7 +1072,13 @@ export const NormalSalesVoucherPage: React.FC<Props> = ({ onNavigate, onSuccess,
           setScanStatus({ type: 'error', text: `${code}: ${res.err.message || 'barcode not found'}` });
           return;
         }
-        const rate = res.d?.uniqueItem ? await scanRateFor(res.d.uniqueItem) : 0;
+        const rate = res.d?.uniqueItem
+          ? res.price !== undefined
+            ? res.price !== null
+              ? Number(res.price)
+              : parseFloat(res.d.uniqueItem.mrp || res.d.uniqueItem.standardSellingPrice || '450')
+            : await scanRateFor(res.d.uniqueItem)
+          : 0;
         const result = applyScannedBatch(linesRef.current, res.d, rate, {
           originalQty: (batchId: string) => scanOriginalQtyRef.current.get(batchId) || 0,
           categoryCode: res.d?.uniqueItem ? getOpticalCategory(res.d.uniqueItem) : undefined,
@@ -1519,14 +1525,17 @@ export const NormalSalesVoucherPage: React.FC<Props> = ({ onNavigate, onSuccess,
     // Save & Print: save first (a new voucher, or an edited one with unsaved changes); print only
     // after the save succeeded. An already saved, unchanged voucher just prints.
     if ((!createdInvoice && !editInvoiceId) || (editInvoiceId && isDirty)) {
-      const saved = await handleSaveVoucher('POSTED', false);
+      const saved = await handleSaveVoucher('POSTED', !editInvoiceId);
       if (!saved) return;
     }
+    // New invoices: once the print preview/dialog is closed, open a fresh invoice page.
+    resetAfterPrintRef.current = !editInvoiceId;
     const previewBeforePrint = settings?.print?.previewBeforePrint ?? true;
     setAutoInvokePrint(!previewBeforePrint);
     setIsPrintPreviewOpen(true);
   };
 
+  const resetAfterPrintRef = useRef(false);
   const saveAndNewRef = useRef(handleSaveAndNew);
   saveAndNewRef.current = handleSaveAndNew;
   const printShortcutRef = useRef(handlePrintShortcut);
@@ -1865,7 +1874,9 @@ export const NormalSalesVoucherPage: React.FC<Props> = ({ onNavigate, onSuccess,
       // Hotkeys for voucher actions
       if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 's') {
         e.preventDefault();
-        handleSaveVoucher('POSTED', false);
+        // New invoice: Ctrl+S is Save & New. Editing a saved invoice keeps a plain update.
+        if (editInvoiceId) handleSaveVoucher('POSTED', false);
+        else saveAndNewRef.current();
       } else if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'a') {
         e.preventDefault();
         saveAndNewRef.current();
@@ -2093,7 +2104,7 @@ export const NormalSalesVoucherPage: React.FC<Props> = ({ onNavigate, onSuccess,
             canDelete={canDelete}
             canCancel={canCancel}
             submitting={submitting}
-            onSave={() => handleSaveVoucher('POSTED', false)}
+            onSave={editInvoiceId ? () => handleSaveVoucher('POSTED', false) : undefined}
             onSaveAndNew={handleSaveAndNew}
             onDelete={() => setShowDeleteConfirm(true)}
             onCancelVoucher={() => setShowCancelConfirm(true)}
@@ -2451,7 +2462,13 @@ export const NormalSalesVoucherPage: React.FC<Props> = ({ onNavigate, onSuccess,
       {isPrintPreviewOpen && (
         <PrintPreviewModal
           isOpen={isPrintPreviewOpen}
-          onClose={() => setIsPrintPreviewOpen(false)}
+          onClose={() => {
+            setIsPrintPreviewOpen(false);
+            if (resetAfterPrintRef.current) {
+              resetAfterPrintRef.current = false;
+              handleResetForm();
+            }
+          }}
           title={`Tax Invoice - ${(createdInvoice || getPrintableInvoice()).invoiceNumber || ''}`}
           filename={`Invoice_${(createdInvoice || getPrintableInvoice()).invoiceNumber || 'INV'}`}
           paperSize={usesOpticalPrintBrand(currentBusiness) ? 'A5' : 'A4'}
