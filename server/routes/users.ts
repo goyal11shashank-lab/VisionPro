@@ -326,6 +326,12 @@ router.post('/', authenticateToken, requirePermission('admin:manage_users'), asy
       return;
     }
 
+    // Owner rule: one staff login belongs to exactly one business. Super Admin accounts are exempt.
+    if (!isSuperAdmin && new Set(finalAssignments.map(a => a.businessId)).size > 1) {
+      res.status(400).json({ error: 'A staff login can belong to one business only. Create a separate login for each business.' });
+      return;
+    }
+
     // TENANT BOUNDARY: non-Super Admin actors may only grant access to businesses
     // they themselves are authorized for. This blocks cross-tenant user provisioning
     // (e.g. a Dealer manager creating users inside the Main Warehouse or a peer Dealer).
@@ -570,6 +576,12 @@ router.put('/:id/business-access', authenticateToken, requirePermission('admin:m
       return;
     }
     const targetUser = userRes.rows[0];
+
+    // Owner rule: one staff login belongs to exactly one business. Super Admin accounts are exempt.
+    if (!targetUser.is_super_admin && new Set(assignments.map(a => a.businessId)).size > 1) {
+      res.status(400).json({ error: 'A staff login can belong to one business only. Create a separate login for each business.' });
+      return;
+    }
 
     // TENANT BOUNDARY: non-Super Admin actors may only manage members of their current business,
     // may never rewrite access for Super Administrator accounts, and may only grant access to
