@@ -1,4 +1,4 @@
-import { resolveUniquePartyByName } from '../../lib/partyNameMatch.js';
+import { resolveConfirmedPartyByName, type ServerNameCheck } from '../../lib/partyNameMatch.js';
 import { localDateInput } from '../../utils/localDateInput.js';
 import { normalizePaymentVoucher, normalizeUnpaidInvoices } from '../../utils/paymentResponse.js';
 import React, { useState, useEffect, useMemo } from 'react';
@@ -150,11 +150,13 @@ export const SupplierPaymentsPage: React.FC = () => {
     setPartyId(item.id);
   };
 
+  const [nameCheck, setNameCheck] = useState<ServerNameCheck<any> | null>(null);
   // The server caps a party list at 200 rows (newest first). Search the server for typed text so a
   // valid party outside the first page can still be found and linked by name.
   useEffect(() => {
     const q = contextualSearch.trim();
     if (partyId || q.length < 2 || !currentBusiness) return;
+    let cancelled = false;
     const timer = setTimeout(async () => {
       try {
         const headers = {
@@ -162,14 +164,18 @@ export const SupplierPaymentsPage: React.FC = () => {
           'X-Business-Id': currentBusiness.id,
         };
         const found: any[] = [];
+        let complete = true;
         for (const type of ['SUPPLIER', 'BOTH']) {
           const res = await fetch(`/api/parties?partyType=${type}&limit=50&search=${encodeURIComponent(q)}`, { headers });
-          if (!res.ok) continue;
+          if (!res.ok) { complete = false; continue; }
           const data = await res.json();
+          if (!(Number(data.total) <= (data.parties || []).length)) complete = false;
           for (const p of data.parties || []) {
             if (p.partyType === 'SUPPLIER' || p.partyType === 'BOTH') found.push(p);
           }
         }
+        if (cancelled) return;
+        setNameCheck({ query: q, complete, parties: found });
         if (found.length === 0) return;
         setSuppliers((prev: any[]) => {
           const seen = new Set(prev.map((c: any) => c.id));
@@ -180,15 +186,15 @@ export const SupplierPaymentsPage: React.FC = () => {
         console.error(err);
       }
     }, 300);
-    return () => clearTimeout(timer);
+    return () => { cancelled = true; clearTimeout(timer); };
   }, [contextualSearch, partyId, currentBusiness]);
 
   // Typing a party's exact name links that party directly (no invoice is picked automatically).
   useEffect(() => {
     if (partyId) return;
-    const hit = resolveUniquePartyByName(suppliers, contextualSearch);
+    const hit = resolveConfirmedPartyByName(suppliers, contextualSearch, nameCheck);
     if (hit) setPartyId(hit.id);
-  }, [contextualSearch, suppliers, partyId]);
+  }, [contextualSearch, suppliers, partyId, nameCheck]);
 
   // Keyboard navigation for side panel in Create Modal
   useEffect(() => {
@@ -936,9 +942,9 @@ export const SupplierPaymentsPage: React.FC = () => {
                       </span>
                     </label>
                     {selectedSupplier ? (
-                      <div className="p-2.5 bg-blue-50/80 border border-blue-300 rounded-xl flex items-center justify-between">
-                        <div className="min-w-0 pr-2">
-                          <div className="text-xs font-bold text-slate-900 truncate">
+                      <div className="p-2.5 bg-blue-50/80 border border-blue-300 rounded-xl flex flex-col gap-2">
+                        <div className="min-w-0">
+                          <div className="text-xs font-bold text-slate-900 break-words">
                             {selectedSupplier.name}
                           </div>
                           <div className="text-[11px] text-slate-500 truncate flex items-center gap-1.5">
@@ -947,7 +953,7 @@ export const SupplierPaymentsPage: React.FC = () => {
                             {selectedSupplier.gstin && <span>• GST: {selectedSupplier.gstin}</span>}
                           </div>
                         </div>
-                        <div className="flex items-center gap-1.5 shrink-0">
+                        <div className="flex items-center justify-between gap-1.5 flex-wrap">
                           {Number(selectedSupplier.balance ?? selectedSupplier.currentBalance ?? 0) !== 0 && (
                             <span className="px-1.5 py-0.5 rounded text-[10px] font-mono font-bold bg-white text-blue-800 border border-blue-200">
                               ₹{Math.abs(Number(selectedSupplier.balance ?? selectedSupplier.currentBalance ?? 0)).toLocaleString('en-IN', { minimumFractionDigits: 2 })}{' '}
