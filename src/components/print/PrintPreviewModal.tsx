@@ -50,11 +50,7 @@ export const PrintPreviewModal: React.FC<PrintPreviewModalProps> = ({
   children,
 }) => {
   useEscapeKey(isOpen, onClose);
-  // A5 half-sheets print onto A4 paper: landscape A5 is exactly the top half of an A4
-  // sheet at 100% scale, so A5 jobs start in landscape (still user-toggleable).
-  const [orientation, setOrientation] = useState<'portrait' | 'landscape'>(
-    paperSize === 'A5' ? 'landscape' : defaultOrientation
-  );
+  const [orientation, setOrientation] = useState<'portrait' | 'landscape'>(defaultOrientation);
   const [zoom, setZoom] = useState<number>(100);
   const [isExportingPdf, setIsExportingPdf] = useState(false);
   const [isPrinting, setIsPrinting] = useState(false);
